@@ -696,6 +696,7 @@
 #include "profileSPD/ProfileSPDLinSOE.h"
 #include "profileSPD/ProfileSPDLinSubstrSolver.h"
 #include "sparseGEN/SparseGenColLinSOE.h"
+#include "amgx/AmgXGenLinSOE.h"
 #include "DomainDecompositionAnalysis.h"
 
 // load patterns
@@ -3149,6 +3150,11 @@ FEM_ObjectBrokerAllClasses::getNewLinearSOE(int classTagSOE)
 	  theSOE = new SparseGenColLinSOE();
 	  return theSOE;
 
+#ifdef _AMGX
+  case LinSOE_TAGS_AmgXGenLinSOE:
+    theSOE = new AmgXGenLinSOE();
+    return theSOE;
+#endif
 
 #ifdef _PARALLEL_PROCESSING
 
