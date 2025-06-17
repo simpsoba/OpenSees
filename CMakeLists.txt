@@ -463,7 +463,7 @@ target_link_libraries(OPS_Numerics INTERFACE
        ${TETGEN_LIBRARIES}
        ${TRIANGLE_LIBRARIES}
        ${AMD_LIBRARIES}
-       ${ITPACK_LIBRARIES}
+       ${AMD_LIBRARIES}
        ${LAPACK_LIBRARIES}
        ${EIGENAPI_LIBRARIES}
 )
