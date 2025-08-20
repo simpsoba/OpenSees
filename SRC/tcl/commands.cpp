@@ -358,13 +358,11 @@ extern void OPS_SetReliabilityDomain(ReliabilityDomain *);
 #include <PetscSparseSeqSolver.h>
 #endif
 
+// Cuda Solvers
+#ifdef _CUDA
 #ifdef _AMGX
-#include <AmgXGenLinSOE.h>
-#include <AmgXGenLinSolver.h>
-
-// Typedefs for the templated AmgXGenLinSolver classes
-typedef AmgXGenLinSolver<double> AmgXGenLinSolverDouble;
-typedef AmgXGenLinSolver<float> AmgXGenLinSolverFloat;
+#include <AmgXLinSolver.h>
+#endif
 #endif
 
 #include <SparseGenRowLinSOE.h>
@@ -384,11 +382,6 @@ typedef AmgXGenLinSolver<float> AmgXGenLinSolverFloat;
 #include <SymBandEigenSolver.h>
 #include <FullGenEigenSOE.h>
 #include <FullGenEigenSolver.h>
-
-#ifdef _CUDA
-#include <BandGenLinSOE_Single.h>
-#include <BandGenLinLapackSolver_Single.h>
-#endif
 
 
 // graph
@@ -3002,12 +2995,20 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
   } 
 
 #ifdef _CUDA
-  else if ((strcmp(argv[1],"BandGeneral_Single") == 0) || (strcmp(argv[1],"BandGEN_Single") == 0)
-      || (strcmp(argv[1],"BandGen_Single") == 0)){
-    BandGenLinLapackSolver_Single    *theSolver = new BandGenLinLapackSolver_Single();
-    theSOE = new BandGenLinSOE_Single(*theSolver);      
+  // else if ((strcmp(argv[1],"BandGeneral_Single") == 0) || (strcmp(argv[1],"BandGEN_Single") == 0)
+  //     || (strcmp(argv[1],"BandGen_Single") == 0)){
+  //   BandGenLinLapackSolver_Single    *theSolver = new BandGenLinLapackSolver_Single();
+  //   theSOE = new BandGenLinSOE_Single(*theSolver);      
+  // }
+
+#ifdef _AMGX
+  else if (strcmp(argv[1],"AmgX") == 0 || strcmp(argv[1],"Amgx") == 0 
+    || strcmp(argv[1],"AMGX") == 0 || strcmp(argv[1],"amgx") == 0) {
+
+  theSOE = (LinearSOE*)OPS_AmgXLinSolver();
   }
-#endif
+#endif // _AMGX
+#endif // _CUDA
 
   // BAND SPD SOE & SOLVER
   else if (strcmp(argv[1],"BandSPD") == 0) {
@@ -3537,206 +3538,6 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
   }
 
 
-#endif
-
-#ifdef _AMGX
-  else if (strcmp(argv[1],"AmgX") == 0 || strcmp(argv[1],"Amgx") == 0 
-           || strcmp(argv[1],"AMGX") == 0 || strcmp(argv[1],"amgx") == 0) {
-    
-    if (argc % 2 != 0 && strlen(argv[2]) != 0) {
-      opserr << "WARNING: Incorrect number of arguments for AmgXGenLinSolver. ";
-      opserr << "User provided system AmgX ";
-      opserr << "with the following arguments: " << endln;
-      for (int i = 2; i < argc; i++) {
-        opserr << argv[i] << " ";
-      }
-      opserr << endln;
-      opserr << "Expected: system AmgX <-configFile configFile> ";
-      opserr << "<-configOptions configOptions> <-mode mode> ";
-      opserr << "<-usePinnedMemory usePinnedMemory> ";
-      opserr << "<-verbose verbose> ";
-      opserr << "<-blockSize blockSize> ";
-      opserr << "<-callback callbackStream|callbackFile>" << endln;
-
-      opserr << "WARNING: Alternatively, use the default constructor: ";
-      opserr << "system AmgX <-solver solver> <-preconditioner preconditioner> ";
-      opserr << "<-smoother smoother> <-maxIters max_iters> ";
-      opserr << "<-absTolerance abs_tolerance> <-relTolerance rel_tolerance> ";
-      opserr << "<-monitorResidual monitor_residual> <-blockSize blockSize>" << endln;
-
-      return TCL_ERROR;
-    }
-
-    // Parameters for constructor with config file and options
-    std::string configFileStr = ""; 
-    std::string configOptionsStr = ""; 
-    std::string modeStr = "dDDI";
-    bool usePinnedMemory = true;
-    bool verbose = false;
-    OPS_Stream* callbackStream = (OPS_Stream*)&opserr;
-    FileStream callbackFile;
-    int blockSize = 1;
-    bool paddingEnabled = true;
-
-    // Parameters for constructor with default config
-    std::string solverStr = "PCG";
-    std::string preconditionerStr = "AMG";
-    std::string smootherStr = "BLOCK_JACOBI";
-    int maxIters = 1000;
-    double absTolerance = 1e-12;
-    double relTolerance = 1e-6;
-    int monitorResidual = 1;
-
-    int currentArg = 2;
-    while (currentArg < argc) {
-      if (argc > 2) {
-        if (strcmp(argv[currentArg],"-configFile") == 0) {
-          configFileStr = argv[currentArg+1];
-          currentArg += 2;
-        } else if (strcmp(argv[currentArg],"-configOptions") == 0) {
-          configOptionsStr = argv[currentArg+1];
-          currentArg += 2;
-        } else if (strcmp(argv[currentArg],"-mode") == 0) {
-          if (strcmp(argv[currentArg+1],"dDDI") != 0 && strcmp(argv[currentArg+1],"dFFI") != 0) {
-            opserr << "WARNING: AmgXGenLinSolver: Invalid mode (" 
-                   << argv[currentArg+1] << "). Only dDDI and dFFI are supported.\n";
-            return TCL_ERROR;
-          }
-          modeStr = argv[currentArg+1];
-          currentArg += 2;
-        } else if (strcmp(argv[currentArg],"-usePinnedMemory") == 0) {
-          int flag = 1;
-          if (Tcl_GetInt(interp, argv[currentArg+1], &flag) != TCL_OK) {
-            opserr << "WARNING: AmgXGenLinSolver: Invalid value for usePinnedMemory. Expected 0 or 1\n";
-            return TCL_ERROR;
-          }
-          usePinnedMemory = (flag == 1);
-          currentArg += 2;
-        } else if (strcmp(argv[currentArg],"-verbose") == 0) {
-          int flag = 0;
-          if (Tcl_GetInt(interp, argv[currentArg+1], &flag) != TCL_OK) {
-            opserr << "WARNING: AmgXGenLinSolver: Invalid value for verbose. Expected 0 or 1\n";
-            return TCL_ERROR;
-          }
-          verbose = (flag == 1);
-          currentArg += 2;
-        } else if (strcmp(argv[currentArg],"-blockSize") == 0) {
-          if (Tcl_GetInt(interp, argv[currentArg+1], &blockSize) != TCL_OK) {
-            opserr << "WARNING: AmgXGenLinSolver: Invalid blockSize. Expected integer\n";
-            return TCL_ERROR;
-          }
-          if (blockSize < 0) {
-            opserr << "WARNING: AmgXGenLinSolver: blockSize cannot be negative\n";
-            return TCL_ERROR;
-          }
-          currentArg += 2;
-        } else if (strcmp(argv[currentArg],"-callback") == 0) {
-          if (strcmp(argv[currentArg+1],"default") == 0 || strcmp(argv[currentArg+1],"opserr") == 0) {
-            callbackStream = (OPS_Stream*)&opserr;
-          } else if (strcmp(argv[currentArg+1],"none") == 0 || strcmp(argv[currentArg+1],"null") == 0) {
-            callbackStream = nullptr;
-          } else {
-            // Assume it is a file name
-            if (callbackFile.setFile(argv[currentArg+1]) != 0) {
-              opserr << "WARNING: AmgXGenLinSolver: Failed to open callback file: " << argv[currentArg+1] << endln;
-              return TCL_ERROR;
-            }
-            callbackStream = &callbackFile;
-          }
-          currentArg += 2;
-        } else if (strcmp(argv[currentArg],"-solver") == 0) {
-          solverStr = argv[currentArg+1];
-          currentArg += 2;
-        } else if (strcmp(argv[currentArg],"-preconditioner") == 0) {
-          preconditionerStr = argv[currentArg+1];
-          currentArg += 2;
-        } else if (strcmp(argv[currentArg],"-smoother") == 0) {
-          smootherStr = argv[currentArg+1];
-          currentArg += 2;
-        } else if (strcmp(argv[currentArg],"-maxIters") == 0) {
-          if (Tcl_GetInt(interp, argv[currentArg+1], &maxIters) != TCL_OK) {
-            opserr << "WARNING: AmgXGenLinSolver: Invalid value for maxIters. Expected integer\n";
-            return TCL_ERROR;
-          }
-          currentArg += 2;
-        } else if (strcmp(argv[currentArg],"-absTolerance") == 0) {
-          if (Tcl_GetDouble(interp, argv[currentArg+1], &absTolerance) != TCL_OK) {
-            opserr << "WARNING: AmgXGenLinSolver: Invalid value for absTolerance. Expected double\n";
-            return TCL_ERROR;
-          }
-          currentArg += 2;
-        } else if (strcmp(argv[currentArg],"-relTolerance") == 0) {
-          if (Tcl_GetDouble(interp, argv[currentArg+1], &relTolerance) != TCL_OK) {
-            opserr << "WARNING: AmgXGenLinSolver: Invalid value for relTolerance. Expected double\n";
-            return TCL_ERROR;
-          }
-          currentArg += 2;
-        } else if (strcmp(argv[currentArg],"-monitorResidual") == 0) {
-          if (Tcl_GetInt(interp, argv[currentArg+1], &monitorResidual) != TCL_OK) {
-            opserr << "WARNING: AmgXGenLinSolver: Invalid value for monitorResidual. Expected integer\n";
-            return TCL_ERROR;
-          }
-          currentArg += 2;
-        } else if (strlen(argv[currentArg]) == 0) {
-          currentArg++;
-        } else {
-          opserr << "WARNING: AmgXGenLinSolver: Unknown option " << argv[currentArg] << endln;
-          opserr << "Valid options are: " << endln;
-          opserr << "Constructor with config file and options: ";
-          opserr << "-configFile, -configOptions, -mode, ";
-          opserr << "-usePinnedMemory, -verbose, -blockSize, -callback" << endln;
-          opserr << "Constructor with default config: ";
-          opserr << "-solver, -preconditioner, -smoother, -maxIters, ";
-          opserr << "-absTolerance, -relTolerance, -monitorResidual, ";
-          opserr << "-usePinnedMemory, -verbose, -blockSize" << endln;
-          return TCL_ERROR;
-        }
-      } else {
-        currentArg++;
-      }
-    }
-
-    // Force specific block size for JACOBI_L1
-    if ((preconditionerStr == "JACOBI_L1" || smootherStr == "JACOBI_L1") && blockSize == 0) {
-      if (blockSize == 0) {
-        blockSize = 1;
-      } else {
-        opserr << "WARNING: AmgXGenLinSolver: JACOBI_L1 smoother/preconditioner only supports blockSize = 1. ";
-        opserr << "Try using -blockSize 1 or changing -smoother or -preconditioner to BLOCK_JACOBI instead." << endln;
-        return TCL_ERROR;
-      }
-    }
-
-    LinearSOESolver *theSolver;
-    if (configFileStr.empty() && configOptionsStr.empty()) {
-      // Constructor with default config
-      if (modeStr == "dDDI") {
-        theSolver = new AmgXGenLinSolverDouble(
-            solverStr.c_str(), preconditionerStr.c_str(), smootherStr.c_str(), 
-            maxIters, absTolerance, relTolerance, monitorResidual, 
-            usePinnedMemory, verbose
-        );
-      } else {
-        theSolver = new AmgXGenLinSolverFloat(
-            solverStr.c_str(), preconditionerStr.c_str(), smootherStr.c_str(), 
-            maxIters, absTolerance, relTolerance, monitorResidual, 
-            usePinnedMemory, verbose
-        );
-      }
-    } else {
-      // Constructor with config file and options
-      if (modeStr == "dDDI") {
-        theSolver = new AmgXGenLinSolverDouble(
-            configFileStr.c_str(), configOptionsStr.c_str(), usePinnedMemory, verbose, callbackStream
-        );
-      } else {
-        theSolver = new AmgXGenLinSolverFloat(
-            configFileStr.c_str(), configOptionsStr.c_str(), usePinnedMemory, verbose, callbackStream
-        );
-      }
-    }
-    theSOE = new AmgXGenLinSOE(*theSolver, blockSize, paddingEnabled, verbose);
-  }
 #endif
 
 #ifdef _MUMPS

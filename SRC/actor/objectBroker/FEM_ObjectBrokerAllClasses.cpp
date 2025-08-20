@@ -738,9 +738,9 @@
 #include "SparseGenColLinSOE.h"
 #endif
 
-#ifdef _AMGX
-#include "AmgXGenLinSOE.h"
-#endif
+#ifdef _CUDA
+#include "CudaBcsrLinSOE.h"
+#endif // _CUDA
 
 #ifdef _MUMPS
 #include "MumpsSOE.h"
@@ -3152,11 +3152,15 @@ FEM_ObjectBrokerAllClasses::getNewLinearSOE(int classTagSOE)
 	  theSOE = new SparseGenColLinSOE();
 	  return theSOE;
 
-#ifdef _AMGX
-  case LinSOE_TAGS_AmgXGenLinSOE:
-    theSOE = new AmgXGenLinSOE();
+// CUDA LinearSOE
+#ifdef _CUDA
+  case LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE:
+    theSOE = new CudaBcsrLinSOE<double>();
     return theSOE;
-#endif
+  case LinSOE_TAGS_CudaBcsrLinSOE_FLOAT:
+    theSOE = new CudaBcsrLinSOE<float>();
+    return theSOE;
+#endif // _CUDA
 
 #ifdef _PARALLEL_PROCESSING
 
