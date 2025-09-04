@@ -531,13 +531,19 @@ if(NOT EXISTS "${CMAKE_BINARY_DIR}/conanbuildinfo.cmake")
   target_link_libraries(OPS_InterpTcl PRIVATE ${TCL_LIBRARIES})
 endif()
 
-# Add AMGX support to the Tcl and generic interpreter modules
+
+# Add CUDA and AMGX support to the Tcl and generic interpreter modules
 if(HAVE_CUDA)
+  target_compile_definitions(OPS_INTERPRETER PUBLIC ${CUDA_FLAG})
+  target_compile_definitions(OPS_InterpTcl PUBLIC ${CUDA_FLAG})
+  target_compile_definitions(OPS_SysOfEqn PUBLIC ${CUDA_FLAG})
   if(DEFINED AMGX_NO_MPI_DIR)
     target_compile_definitions(OPS_INTERPRETER PUBLIC ${AMGX_FLAG})
     target_compile_definitions(OPS_InterpTcl PUBLIC ${AMGX_FLAG})
+    target_compile_definitions(OPS_SysOfEqn PUBLIC ${AMGX_FLAG})
     target_include_directories(OPS_INTERPRETER PUBLIC ${AMGX_INCLUDE_DIR})
     target_include_directories(OPS_InterpTcl PUBLIC ${AMGX_INCLUDE_DIR})
+    target_include_directories(OPS_SysOfEqn PUBLIC ${AMGX_INCLUDE_DIR})
   endif()
 endif()
 
@@ -825,6 +831,12 @@ if(HAVE_CUDA)
   if(DEFINED AMGX_NO_MPI_DIR)
     target_include_directories(OpenSeesPy PUBLIC ${AMGX_INCLUDE_DIR})
     target_compile_definitions(OpenSeesPy PUBLIC ${AMGX_FLAG})
+    # Add CUDA sources directly to ensure proper symbol resolution in shared library
+    target_sources(OpenSeesPy PRIVATE 
+        ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCuda/CudaGenBcsrLinSOE.cu
+        ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCuda/CudaGenBcsrLinSolver.cu
+        ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCuda/AmgXLinSolver.cu
+    )
     target_link_libraries(OpenSeesPy ${AMGX_LIBRARIES})
   endif()
   target_compile_definitions(OpenSeesPy PUBLIC ${CUDA_FLAG})

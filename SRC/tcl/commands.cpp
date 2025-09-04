@@ -359,6 +359,7 @@ extern void OPS_SetReliabilityDomain(ReliabilityDomain *);
 #endif
 
 // Cuda Solvers
+extern void *OPS_AmgXLinSolver(void);
 #ifdef _CUDA
 #ifdef _AMGX
 #include <AmgXLinSolver.h>

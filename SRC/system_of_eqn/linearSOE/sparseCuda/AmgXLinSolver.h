@@ -69,13 +69,19 @@ class AmgXLinSolver : public CudaGenBcsrLinSolver
 {
 public:
     // Constructor with default config
-    AmgXLinSolver(const std::string solver = "PCG", const std::string preconditioner = "JACOBI_L1", 
-        std::string smoother = "JACOBI_L1", int max_iters = 1000, double abs_tolerance = 1e-12, 
-        double rel_tolerance = 1e-6, int monitor_residual = 1, bool verbose = false);
+    AmgXLinSolver(
+        const std::string solver = "PCG", const std::string preconditioner = "JACOBI_L1", 
+        const std::string smoother = "JACOBI_L1", 
+        int max_iters = 1000, double abs_tol = 1e-12, double rel_tol = 1e-6, 
+        int monitor_residual = 1, bool verbose = false
+    );
     
     // Constructor with config file and options
-    AmgXLinSolver(const char *configFile = nullptr, const char *configOptions = nullptr,
-        bool verbose = false, OPS_Stream* callbackStream = (OPS_Stream*)&opserr);
+    AmgXLinSolver(
+        const char *configFile = nullptr, const char *configOptions = nullptr,
+        const char *mode = "dDDI", bool verbose = false, 
+        OPS_Stream* callbackStream = (OPS_Stream*)&opserr
+    );
     
     // Destructor
     ~AmgXLinSolver();
@@ -101,6 +107,7 @@ private:
     // AMGX initializer (to be used by constructors only)
     void _init(const char *configFile = nullptr, 
                const char *configOptions = nullptr, 
+               const char *mode = "dDDI",
                OPS_Stream* callbackStream = (OPS_Stream*)&opserr);
 
     #ifdef _AMGX

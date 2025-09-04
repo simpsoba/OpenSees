@@ -504,11 +504,9 @@ void* OPS_SymSparseLinSolver();
 void* OPS_FullGenLinLapackSolver();
 
 // CUDA Solvers
-#ifdef _CUDA
 #ifdef _AMGX
 void* OPS_AmgXLinSolver();
 #endif // _AMGX
-#endif // _CUDA
 
 void* OPS_PlainNumberer();
 

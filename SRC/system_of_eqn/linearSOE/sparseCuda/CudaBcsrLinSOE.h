@@ -56,16 +56,16 @@
 class CudaGenBcsrLinSolver;
 
 template<typename DataType>
-class CudaGenBcsrLinSOETag;
+class CudaBcsrLinSOETag;
 
 template<>
-class CudaGenBcsrLinSOETag<double> {
+class CudaBcsrLinSOETag<double> {
     public:
         static constexpr int value = LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE;
 };
 
 template<>
-class CudaGenBcsrLinSOETag<float> {
+class CudaBcsrLinSOETag<float> {
     public:
         static constexpr int value = LinSOE_TAGS_CudaBcsrLinSOE_FLOAT;
 };
@@ -81,15 +81,16 @@ class CudaBcsrLinSOE : public CudaGenBcsrLinSOE
             bool paddingEnabled = true,
             bool verbose = false
         )
-        : CudaGenBcsrLinSOE(CudaGenBcsrLinSOETag<DataType>::value, theSolver, blockSize, paddingEnabled, verbose),
+        : CudaGenBcsrLinSOE(CudaBcsrLinSOETag<DataType>::value, theSolver, blockSize, paddingEnabled, verbose),
           m_deviceAValues(), m_deviceX(), m_deviceB()
         {
-            /* Nothing to do here */
+            // Now that the derived class is fully constructed, we can safely call setLinearSOE
+            theSolver.setLinearSOE(*this);
         }
         
         // Default constructor
         CudaBcsrLinSOE()
-        : CudaGenBcsrLinSOE(CudaGenBcsrLinSOETag<DataType>::value),
+        : CudaGenBcsrLinSOE(CudaBcsrLinSOETag<DataType>::value),
           m_deviceAValues(), m_deviceX(), m_deviceB()
         {
             /* Nothing to do here */
@@ -109,49 +110,49 @@ class CudaBcsrLinSOE : public CudaGenBcsrLinSOE
         // Required methods for CudaGenBcsrLinSOE subclasses
         const void* getDeviceAValues(void) const noexcept override { 
             #ifdef _CUDA
-            return m_deviceAValues.data().get(); 
+            return m_deviceAValues.empty() ? nullptr : m_deviceAValues.data().get(); 
             #else
-            return m_deviceAValues.data(); 
+            return m_deviceAValues.empty() ? nullptr : m_deviceAValues.data(); 
             #endif
         }
         
         void* getDeviceAValues(void) noexcept override { 
             #ifdef _CUDA
-            return m_deviceAValues.data().get(); 
+            return m_deviceAValues.empty() ? nullptr : m_deviceAValues.data().get(); 
             #else
-            return m_deviceAValues.data(); 
+            return m_deviceAValues.empty() ? nullptr : m_deviceAValues.data(); 
             #endif
         }
         
         const void* getDeviceX(void) const noexcept override { 
             #ifdef _CUDA
-            return m_deviceX.data().get(); 
+            return m_deviceX.empty() ? nullptr : m_deviceX.data().get(); 
             #else
-            return m_deviceX.data(); 
+            return m_deviceX.empty() ? nullptr : m_deviceX.data(); 
             #endif
         }
         
         void* getDeviceX(void) noexcept override { 
             #ifdef _CUDA
-            return m_deviceX.data().get(); 
+            return m_deviceX.empty() ? nullptr : m_deviceX.data().get(); 
             #else
-            return m_deviceX.data(); 
+            return m_deviceX.empty() ? nullptr : m_deviceX.data(); 
             #endif
         }
         
         const void* getDeviceB(void) const noexcept override { 
             #ifdef _CUDA
-            return m_deviceB.data().get(); 
+            return m_deviceB.empty() ? nullptr : m_deviceB.data().get(); 
             #else
-            return m_deviceB.data(); 
+            return m_deviceB.empty() ? nullptr : m_deviceB.data(); 
             #endif
         }
-
+        
         void* getDeviceB(void) noexcept override { 
             #ifdef _CUDA
-            return m_deviceB.data().get(); 
+            return m_deviceB.empty() ? nullptr : m_deviceB.data().get(); 
             #else
-            return m_deviceB.data(); 
+            return m_deviceB.empty() ? nullptr : m_deviceB.data(); 
             #endif
         }
         
@@ -162,18 +163,7 @@ class CudaBcsrLinSOE : public CudaGenBcsrLinSOE
         // Host-device data transfer methods
         inline void uploadVectorsToDevice(void) override {
             #ifdef _CUDA
-            // Create temporary host vector with the correct device type
-            thrust::host_vector<DataType> temp(this->CudaGenBcsrLinSOE::m_hostB.size());
-            // Convert from double → DataType on host
-            thrust::transform(
-                thrust::host,
-                this->CudaGenBcsrLinSOE::m_hostB.begin(),
-                this->CudaGenBcsrLinSOE::m_hostB.end(),
-                temp.begin(),
-                [](double val){ return static_cast<DataType>(val); }
-            );
-            // Copy to device
-            m_deviceB = temp;
+            m_deviceB = this->CudaGenBcsrLinSOE::m_hostB;
             m_deviceX.resize(this->CudaGenBcsrLinSOE::m_hostX.size());
             #else
             m_deviceB.resize(this->CudaGenBcsrLinSOE::m_hostB.size());
@@ -189,19 +179,7 @@ class CudaBcsrLinSOE : public CudaGenBcsrLinSOE
         
         inline void downloadSolutionFromDevice(void) override {
             #ifdef _CUDA
-            // Create temporary host vector with the correct device type
-            thrust::host_vector<DataType> temp(m_deviceX.size());
-            // Copy to host
-            temp = m_deviceX;
-            // Convert from DataType → double on host
-            this->CudaGenBcsrLinSOE::m_hostX.resize(temp.size());
-            thrust::transform(
-                thrust::host,
-                temp.begin(), 
-                temp.end(), 
-                this->CudaGenBcsrLinSOE::m_hostX.begin(), 
-                [](DataType val){ return static_cast<double>(val); } // convert to device type
-            );
+            this->CudaGenBcsrLinSOE::m_hostX = m_deviceX;
             #else
             this->CudaGenBcsrLinSOE::m_hostX.resize(m_deviceX.size());
             std::transform(
@@ -219,18 +197,7 @@ class CudaBcsrLinSOE : public CudaGenBcsrLinSOE
         
         inline void uploadAValuesToDevice(void) override {
             #ifdef _CUDA
-            // Create temporary host vector with the correct device type
-            thrust::host_vector<DataType> temp(this->CudaGenBcsrLinSOE::m_hostAValues.size());
-            // Convert from double → DataType on host
-            thrust::transform(
-                thrust::host,
-                this->CudaGenBcsrLinSOE::m_hostAValues.begin(),
-                this->CudaGenBcsrLinSOE::m_hostAValues.end(),
-                temp.begin(),
-                [](double val){ return static_cast<DataType>(val); }
-            );
-            // Copy to device
-            m_deviceAValues = temp;
+            m_deviceAValues = this->CudaGenBcsrLinSOE::m_hostAValues;
             #else
             m_deviceAValues.resize(this->CudaGenBcsrLinSOE::m_hostAValues.size());
             std::transform(

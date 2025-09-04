@@ -64,6 +64,15 @@ AMGX_resources_handle AmgXLinSolver::m_Resources = nullptr;
 
 OPS_Stream* AmgXLinSolver::m_CallbackStream = (OPS_Stream*)&opserr;
 
+// Static member function implementations
+void AmgXLinSolver::setCallbackStream(OPS_Stream* output) {
+    m_CallbackStream = output;
+}
+
+OPS_Stream* AmgXLinSolver::getCallbackStream() {
+    return m_CallbackStream;
+}
+
 /* AMGX callbacks */
 #ifdef __cplusplus
 extern "C" {
@@ -84,7 +93,7 @@ void AmgXCallback(const char* msg, int length) {
 
 /* Anonymous namespace for helper functions */
 namespace {
-    void reportAmgXSolveStats(int numIterations, double initialResidualNorm, double finalResidualNorm) {
+    [[maybe_unused]] void reportAmgXSolveStats(int numIterations, double initialResidualNorm, double finalResidualNorm) {
         opserr << "INFO: AmgXLinSolver::reportAmgXSolveStats() - " << endln;
         opserr << "Number of iterations = " << numIterations << endln;
         opserr << "Initial residual norm = " << initialResidualNorm << endln;
@@ -96,7 +105,7 @@ namespace {
         }
     }
 
-    std::string getDefaultConfigOptions(std::string solver = "PCG", 
+    [[maybe_unused]] std::string getDefaultConfigOptions(std::string solver = "PCG", 
                                         std::string preconditioner = "JACOBI_L1", 
                                         std::string smoother = "JACOBI_L1",
                                         int max_iters = 1000,
@@ -196,24 +205,25 @@ AmgXLinSolver::AmgXLinSolver(
         solver, preconditioner, smoother, max_iters, 
         abs_tolerance, rel_tolerance, monitor_residual);
     const char* nullConfigFile = nullptr;
-    _init(nullConfigFile, configOptions.c_str());
+    const char* mode = "dDDI";
+    _init(nullConfigFile, configOptions.c_str(), mode);
     #endif // _AMGX
 }
 
 AmgXLinSolver::AmgXLinSolver( 
     const char *configFile, const char *configOptions, 
-    bool verbose, OPS_Stream* callbackStream)
+    const char *mode, bool verbose, OPS_Stream* callbackStream)
     :CudaGenBcsrLinSolver(SOLVER_TAGS_AmgXLinSolver), 
     m_verbose(verbose)
 {
     #ifdef _AMGX
-    _init(configFile, configOptions, callbackStream);
+    _init(configFile, configOptions, mode, callbackStream);
     #endif // _AMGX
 }
 
 
 void AmgXLinSolver::_init(const char *configFile, const char *configOptions, 
-                        OPS_Stream* callbackStream) 
+                        const char *mode, OPS_Stream* callbackStream) 
 {
     #ifdef _AMGX
     /* Initialize AMGX library - only done once across all instances */
@@ -242,7 +252,7 @@ void AmgXLinSolver::_init(const char *configFile, const char *configOptions,
     const std::vector<std::string> scopes = {
         "default", "main", "default_sub_solver"
     };
-    const std::vector<std::string> params = {
+    std::vector<std::string> params = {
         "use_scalar_norm=1" // Use scalar norm for the L2 norm
     };
     /* Verbosity parameters */
@@ -276,10 +286,15 @@ void AmgXLinSolver::_init(const char *configFile, const char *configOptions,
     }
 
     /* Set AmgX mode */
-    if (is_double) {
+    if (strcmp(mode, "dDDI") == 0) {
         m_Mode = AMGX_mode_dDDI; // device, double matrix, double vector, int index
-    } else {
+    } else if (strcmp(mode, "dFFI") == 0) {
         m_Mode = AMGX_mode_dFFI; // device, float matrix, float vector, int index
+    } else {
+        opserr << "WARNING: AmgXLinSolver::_init() - "
+               << "Invalid mode. Only dDDI and dFFI are supported. "
+               << "Setting mode to dDDI" << endln;
+        m_Mode = AMGX_mode_dDDI; // device, double matrix, double vector, int index
     }
 
     /* Create solver, matrix, rhs and solution vectors */
@@ -290,6 +305,7 @@ void AmgXLinSolver::_init(const char *configFile, const char *configOptions,
 
     m_ActiveSolverInstances++;
     #endif // _AMGX
+
     return;
 }
 
@@ -336,6 +352,7 @@ int AmgXLinSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE) {
         return -1;
     }
     #endif // _AMGX
+
     return 0;
 }
 
@@ -349,30 +366,57 @@ int AmgXLinSolver::solve() {
     }
 
     // Extract info from the SOE
-    MatrixStatus matrixStatus = theSOE->getMatrixStatus();
+    CudaGenBcsrLinSOE::MatrixStatus matrixStatus = theSOE->getMatrixStatus();
     int numRowBlocks = theSOE->getNumRowBlocks();
     int numNonZeroBlocks = theSOE->getNumNonZeroBlocks();
     int numNonZeroValues = theSOE->getNumNonZeroValues();
     int blockSize = theSOE->getBlockSize();
     int* rowPtrs = theSOE->getDeviceRowPtrs();
     int* colIndices = theSOE->getDeviceColIndices();
+    
+    // Check if device pointers are valid
+    if (!rowPtrs) {
+        opserr << "ERROR: AmgXLinSolver::solve() - getDeviceRowPtrs() returned nullptr" << endln;
+        return -1;
+    }
+    if (!colIndices) {
+        opserr << "ERROR: AmgXLinSolver::solve() - getDeviceColIndices() returned nullptr" << endln;
+        return -1;
+    }
     void* values = theSOE->getDeviceAValues();
     void* x = theSOE->getDeviceX();
     void* b = theSOE->getDeviceB();
+    
+    if (!values) {
+        opserr << "ERROR: AmgXLinSolver::solve() - getDeviceAValues() returned nullptr" << endln;
+        return -1;
+    }
+    if (!x) {
+        opserr << "ERROR: AmgXLinSolver::solve() - getDeviceX() returned nullptr" << endln;
+        return -1;
+    }
+    if (!b) {
+        opserr << "ERROR: AmgXLinSolver::solve() - getDeviceB() returned nullptr" << endln;
+        return -1;
+    }
 
     // Upload the matrix data to the GPU
-    if (matrixStatus == MatrixStatus::STRUCTURE_CHANGED) {
+    if (matrixStatus == CudaGenBcsrLinSOE::MatrixStatus::STRUCTURE_CHANGED) {
         AMGX_matrix_upload_all(
             m_Matrix, numRowBlocks, numNonZeroBlocks, 
             blockSize, blockSize, rowPtrs,
             colIndices, values, nullptr
         );
-    } else if (matrixStatus == MatrixStatus::COEFFICIENTS_CHANGED) {
+        // Setup the solver with the new matrix structure
+        AMGX_solver_setup(m_Solver, m_Matrix);
+    } else if (matrixStatus == CudaGenBcsrLinSOE::MatrixStatus::COEFFICIENTS_CHANGED) {
         AMGX_matrix_replace_coefficients(
             m_Matrix, numRowBlocks, numNonZeroBlocks,
             values, nullptr
         );
-    } else { /* pass */ }
+        // Setup the solver with the updated matrix coefficients
+        AMGX_solver_setup(m_Solver, m_Matrix);
+    }
 
     // Upload the rhs data to the GPU
     AMGX_vector_upload(m_RHS, numRowBlocks, blockSize, b);
@@ -407,6 +451,7 @@ int AmgXLinSolver::solve() {
         reportAmgXSolveStats(this->getNumIterations(), initialResidualNorm, finalResidualNorm);
     }
     #endif // _AMGX
+
     return 0;
 }
 
@@ -453,8 +498,8 @@ double AmgXLinSolver::getResidualNorm() {
 
 struct AmgXGeneralConfig;
 struct AmgXSimpleConfig;
-std::unique_ptr<AmgXLinSolver> createAmgXSolver(const AmgXGeneralConfig& config);
-std::unique_ptr<AmgXLinSolver> createAmgXSolver(const AmgXSimpleConfig& config);
+CudaGenBcsrLinSolver* createAmgXSolver(const AmgXGeneralConfig& config);
+CudaGenBcsrLinSolver* createAmgXSolver(const AmgXSimpleConfig& config);
 
 // Configuration structures for input parsing
 struct AmgXGeneralConfig {
@@ -723,17 +768,18 @@ void AmgXParameterParser::printSimpleUsageInfo() {
 }
 
 // Factory functions for creating solvers and SOEs
-std::unique_ptr<AmgXLinSolver> createAmgXSolver(const AmgXGeneralConfig& config) {
-    return std::make_unique<AmgXLinSolver>(
+CudaGenBcsrLinSolver* createAmgXSolver(const AmgXGeneralConfig& config) {
+    return new AmgXLinSolver(
         config.configFile.c_str(), 
         config.configOptions.c_str(), 
+        config.mode.c_str(),
         config.verbose, 
         config.callbackStream
     );
 }
 
-std::unique_ptr<AmgXLinSolver> createAmgXSolver(const AmgXSimpleConfig& config) {
-    return std::make_unique<AmgXLinSolver>(
+CudaGenBcsrLinSolver* createAmgXSolver(const AmgXSimpleConfig& config) {
+    return new AmgXLinSolver(
         config.solver.c_str(), 
         config.preconditioner.c_str(), 
         config.smoother.c_str(), 
@@ -774,7 +820,7 @@ void* OPS_AmgXLinSolver()
                 if (callbackFile.setFile(generalConfig.callbackFilename.c_str()) != 0) {
                     opserr << "WARNING: OPS_AmgXLinSolver() - "
                            << "Failed to open callback file: " 
-                           << generalConfig.callbackFilename << endln;
+                           << generalConfig.callbackFilename.c_str() << endln;
                     return nullptr;
                 }
                 generalConfig.callbackStream = &callbackFile;
@@ -812,11 +858,15 @@ void* OPS_AmgXLinSolver()
         // Create solver and SOE
         auto solver = createAmgXSolver(simpleConfig);
         if (simpleConfig.mode == "dDDI") {
-            return createSOE<double>(solver.get(), simpleConfig.blockSize, 
-                                   simpleConfig.paddingEnabled, simpleConfig.verbose);
+            return new CudaBcsrLinSOE<double>(*solver, 
+                                             simpleConfig.blockSize, 
+                                             simpleConfig.paddingEnabled, 
+                                             simpleConfig.verbose);
         } else {
-            return createSOE<float>(solver.get(), simpleConfig.blockSize, 
-                                  simpleConfig.paddingEnabled, simpleConfig.verbose);
+            return new CudaBcsrLinSOE<float>(*solver, 
+                                            simpleConfig.blockSize, 
+                                            simpleConfig.paddingEnabled, 
+                                            simpleConfig.verbose);
         }
     }
     

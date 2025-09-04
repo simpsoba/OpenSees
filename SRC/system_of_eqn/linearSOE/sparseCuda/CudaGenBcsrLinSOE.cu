@@ -161,7 +161,7 @@ CudaGenBcsrLinSOE::CudaGenBcsrLinSOE(int classTag, CudaGenBcsrLinSolver &theSolv
     m_paddingEnabled(paddingEnabled),
     m_verbose(verbose)
 {   
-    theSolver.setLinearSOE(*this);
+    // Note: theSolver.setLinearSOE(*this) should be called in derived class constructor
 }
 
 CudaGenBcsrLinSOE::CudaGenBcsrLinSOE(int classTag): LinearSOE(classTag), 
@@ -256,6 +256,7 @@ int CudaGenBcsrLinSOE::buildStandardCSR(Graph &theGraph)
     m_hostAValues.resize(nnz, 0.0);
     m_hostB.resize(size, 0.0);
     m_hostX.resize(size, 0.0);
+
 
     return 0;
 }
@@ -410,14 +411,23 @@ int CudaGenBcsrLinSOE::setSize(Graph &theGraph)
     // Update matrix status
     m_matrixStatus = MatrixStatus::STRUCTURE_CHANGED;
 
-    // invoke setSize() on the Solver
+
+    // Get the solver
     LinearSOESolver *the_Solver = this->getSolver();
+    if (the_Solver == nullptr) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::setSize() - "
+               << "No solver set" << endln;
+        return -1;
+    }
+
+    // invoke setSize() on the Solver
     int solverOK = the_Solver->setSize();
     if (solverOK < 0) {
         opserr << "WARNING: CudaGenBcsrLinSOE::setSize() - "
                << "Solver failed setSize()" << endln;
         return solverOK;
     }
+
     return 0;
 }
 
@@ -566,6 +576,27 @@ int CudaGenBcsrLinSOE::addA(const Matrix &m, const ID &id, double fact)
     return 0;
 }
 
+int CudaGenBcsrLinSOE::addA(const Matrix &m)
+{
+    // This method adds the entire matrix to the system
+    // We need to create an ID with all the DOFs and call the main addA method
+    const int numRows = m.noRows();
+    const int numCols = m.noCols();
+    
+    if (numRows != numCols || numRows != getNumEqn()) {
+        opserr << "CudaGenBcsrLinSOE::addA(Matrix) - matrix size mismatch\n";
+        return -1;
+    }
+    
+    // Create ID with all DOFs (0 to numRows-1)
+    ID allDOFs(numRows);
+    for (int i = 0; i < numRows; i++) {
+        allDOFs(i) = i;
+    }
+    
+    return addA(m, allDOFs, 1.0);
+}
+
 int CudaGenBcsrLinSOE::addB(const Vector &v, const ID &id, double fact)
 {
     // Check for a quick return
@@ -627,7 +658,9 @@ int CudaGenBcsrLinSOE::setB(const Vector &v, double fact)
     // Set vector elements
     if (fact == 1.0) {
         #ifdef _CUDA
-        thrust::copy_n(thrust::host, &v(0), size, m_hostB.begin());
+        // Cast away const-ness to access non-const operator() that returns reference
+        Vector& nonConstV = const_cast<Vector&>(v);
+        thrust::copy_n(thrust::host, &nonConstV(0), size, m_hostB.begin());
         #else
         for (int i = 0; i < size; i++) {
             m_hostB[i] = v(i);
@@ -635,11 +668,13 @@ int CudaGenBcsrLinSOE::setB(const Vector &v, double fact)
         #endif
     } else if (fact == -1.0) {
         #ifdef _CUDA
+        // Cast away const-ness to access non-const operator() that returns reference
+        Vector& nonConstV = const_cast<Vector&>(v);
         thrust::transform(
             thrust::host, // execution policy
-            &v(0), &v(0) + size, // input range
+            &nonConstV(0), &nonConstV(0) + size, // input range
             m_hostB.begin(), // output range
-            ::cuda::std::negate<double>() // unary operation
+            thrust::negate<double>() // unary operation
         );
         #else
         for (int i = 0; i < size; i++) {
@@ -648,12 +683,14 @@ int CudaGenBcsrLinSOE::setB(const Vector &v, double fact)
         #endif
     } else {
         #ifdef _CUDA
+        // Cast away const-ness to access non-const operator() that returns reference
+        Vector& nonConstV = const_cast<Vector&>(v);
         thrust::transform(
             thrust::host, // execution policy
-            &v(0), &v(0) + size, // input1 range
+            &nonConstV(0), &nonConstV(0) + size, // input1 range
             thrust::make_constant_iterator(fact), // input2 range
             m_hostB.begin(), // output range
-            ::cuda::std::multiplies<double>() // binary operation
+            thrust::multiplies<double>() // binary operation
         );
         #else
         for (int i = 0; i < size; i++) {
@@ -739,9 +776,9 @@ int CudaGenBcsrLinSOE::fillPaddedDiagonals(double value, bool autoCompute) {
     const size_t blockOffset = m_hostAValues.size() - m_blockSize * m_blockSize;
     const size_t startRow = m_X.Size() % m_blockSize;
 
-    if (startRow <= 0 || blockOffset < 0) {
+    if (startRow == 0) {
         opserr << "WARNING: CudaGenBcsrLinSOE::fillPaddedDiagonals() - "
-               << "Invalid block offset or start row" << endln;
+               << "Invalid start row" << endln;
         return -1;
     }
 
@@ -797,7 +834,7 @@ int CudaGenBcsrLinSOE::solve(void)
     } else if (m_matrixStatus == MatrixStatus::COEFFICIENTS_CHANGED) {
         uploadAValuesToDevice();
     } else { /* pass */ }
-
+    
     // Get the cuda solver
     CudaGenBcsrLinSolver* theCudaSolver = getCudaGenBcsrLinSolver();
     
@@ -865,7 +902,7 @@ int CudaGenBcsrLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
                     for (int j = 0; j < m_blockSize; j++) {
                         const int col = blockCol * m_blockSize + j + baseIndex;
                         const double val = theBlock[i * m_blockSize + j];
-                        output << row << " " << val << "\n";
+                        output << row << " " << col << " " << val << "\n";
                         nnz_written++;
                     }
                 }
@@ -975,7 +1012,7 @@ CudaGenBcsrLinSOE::MatrixStatus CudaGenBcsrLinSOE::getMatrixStatus(void) const
 const int* CudaGenBcsrLinSOE::getDeviceRowPtrs(void) const
 {
     #ifdef _CUDA
-    return m_deviceCsrIndices.data().get();
+    return m_deviceCsrIndices.empty() ? nullptr : m_deviceCsrIndices.data().get();
     #else
     return nullptr;
     #endif
@@ -984,7 +1021,7 @@ const int* CudaGenBcsrLinSOE::getDeviceRowPtrs(void) const
 int* CudaGenBcsrLinSOE::getDeviceRowPtrs(void)
 {
     #ifdef _CUDA
-    return m_deviceCsrIndices.data().get();
+    return m_deviceCsrIndices.empty() ? nullptr : m_deviceCsrIndices.data().get();
     #else
     return nullptr;
     #endif
@@ -993,7 +1030,7 @@ int* CudaGenBcsrLinSOE::getDeviceRowPtrs(void)
 const int* CudaGenBcsrLinSOE::getDeviceColIndices(void) const
 {
     #ifdef _CUDA
-    return m_deviceCsrIndices.data().get() + getNumRowBlocks() + 1;
+    return m_deviceCsrIndices.empty() ? nullptr : m_deviceCsrIndices.data().get() + getNumRowBlocks() + 1;
     #else
     return nullptr;
     #endif
@@ -1002,7 +1039,7 @@ const int* CudaGenBcsrLinSOE::getDeviceColIndices(void) const
 int* CudaGenBcsrLinSOE::getDeviceColIndices(void)
 {
     #ifdef _CUDA
-    return m_deviceCsrIndices.data().get() + getNumRowBlocks() + 1;
+    return m_deviceCsrIndices.empty() ? nullptr : m_deviceCsrIndices.data().get() + getNumRowBlocks() + 1;
     #else
     return nullptr;
     #endif

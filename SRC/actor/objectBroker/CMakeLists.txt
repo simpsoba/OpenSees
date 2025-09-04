@@ -8,6 +8,7 @@
 target_sources(OPS_ObjectBroker
     PRIVATE
       FEM_ObjectBroker.cpp
+      FEM_ObjectBrokerCuda.cu
     PUBLIC
       FEM_ObjectBroker.h
 )

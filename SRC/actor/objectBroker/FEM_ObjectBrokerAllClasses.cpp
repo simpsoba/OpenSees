@@ -738,9 +738,7 @@
 #include "SparseGenColLinSOE.h"
 #endif
 
-#ifdef _CUDA
-#include "CudaBcsrLinSOE.h"
-#endif // _CUDA
+// CUDA includes moved to separate CUDA file to avoid Thrust compilation issues
 
 #ifdef _MUMPS
 #include "MumpsSOE.h"
@@ -3154,12 +3152,11 @@ FEM_ObjectBrokerAllClasses::getNewLinearSOE(int classTagSOE)
 
 // CUDA LinearSOE
 #ifdef _CUDA
-  case LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE:
-    theSOE = new CudaBcsrLinSOE<double>();
-    return theSOE;
-  case LinSOE_TAGS_CudaBcsrLinSOE_FLOAT:
-    theSOE = new CudaBcsrLinSOE<float>();
-    return theSOE;
+    case LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE:
+    case LinSOE_TAGS_CudaBcsrLinSOE_FLOAT:
+        theSOE = createCudaLinearSOE(classTagSOE);
+        if (theSOE != nullptr) return theSOE;
+        break;
 #endif // _CUDA
 
 #ifdef _PARALLEL_PROCESSING
@@ -3211,6 +3208,9 @@ FEM_ObjectBrokerAllClasses::getNewLinearSOE(int classTagSOE)
 	  
       
     }
+    
+    // This should never be reached, but added to satisfy compiler
+    return theSOE;
 }
 
 

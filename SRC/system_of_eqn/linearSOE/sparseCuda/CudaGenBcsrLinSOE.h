@@ -68,6 +68,7 @@ public:
     int getNumEqn(void) const override;
     int setSize(Graph &theGraph) override;
     int addA(const Matrix &, const ID &, double fact = 1.0) override;
+    int addA(const Matrix &) override;
     int addB(const Vector &, const ID &, double fact = 1.0) override;
     int setB(const Vector &, double fact = 1.0) override;
     void zeroA(void) override;
@@ -114,11 +115,11 @@ public:
     // Required methods for subclasses
     // These are used by the CudaGenBcsrLinSolver to access the data
     virtual const void* getDeviceAValues(void) const = 0;
-    virtual void* getDeviceAValues(void);
+    virtual void* getDeviceAValues(void) = 0;
     virtual const void* getDeviceX(void) const = 0;
-    virtual void* getDeviceX(void);
+    virtual void* getDeviceX(void) = 0;
     virtual const void* getDeviceB(void) const = 0;
-    virtual void* getDeviceB(void);
+    virtual void* getDeviceB(void) = 0;
     virtual bool isDoublePrecision() const = 0;
 
     // Host-device data transfer methods

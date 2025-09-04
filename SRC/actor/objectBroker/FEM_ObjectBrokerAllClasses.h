@@ -130,6 +130,9 @@ class FEM_ObjectBrokerAllClasses : public FEM_ObjectBroker
     DomainSolver *lastDomainSolver;
 };
 
+// Forward declaration for CUDA helper function
+LinearSOE* createCudaLinearSOE(int classTagSOE);
+
 #endif
 
 
