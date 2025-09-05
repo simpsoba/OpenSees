@@ -793,7 +793,17 @@ CudaGenBcsrLinSolver* createAmgXSolver(const AmgXSimpleConfig& config) {
 
 void* OPS_AmgXLinSolver()
 {
-    // Check argument count
+    // Handle case with no arguments - use default configuration
+    if (OPS_GetNumRemainingInputArgs() == 0) {
+        AmgXSimpleConfig simpleConfig; // Use default values
+        auto solver = createAmgXSolver(simpleConfig);
+        return new CudaBcsrLinSOE<double>(*solver, 
+                                         simpleConfig.blockSize, 
+                                         simpleConfig.paddingEnabled, 
+                                         simpleConfig.verbose);
+    }
+    
+    // Check argument count for cases with arguments
     if (OPS_GetNumRemainingInputArgs() % 2 != 0) {
         opserr << "WARNING: OPS_AmgXLinSolver() - "
                << "Incorrect number of arguments for AmgXLinSolver. " << endln;

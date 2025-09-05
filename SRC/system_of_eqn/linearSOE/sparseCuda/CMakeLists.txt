@@ -6,10 +6,6 @@
 #==============================================================================
 
 target_sources(OPS_SysOfEqn
-    PRIVATE
-        CudaGenBcsrLinSOE.cu
-        CudaGenBcsrLinSolver.cu
-        AmgXLinSolver.cu
     PUBLIC
         CudaGenBcsrLinSOE.h
         CudaGenBcsrLinSolver.h

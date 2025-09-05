@@ -3006,6 +3006,7 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
   else if (strcmp(argv[1],"AmgX") == 0 || strcmp(argv[1],"Amgx") == 0 
     || strcmp(argv[1],"AMGX") == 0 || strcmp(argv[1],"amgx") == 0) {
 
+  OPS_ResetInputNoBuilder(clientData, interp, 2, argc, argv, &theDomain);
   theSOE = (LinearSOE*)OPS_AmgXLinSolver();
   }
 #endif // _AMGX

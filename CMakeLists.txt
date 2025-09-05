@@ -452,6 +452,25 @@ endif()
 
 message(STATUS "SCALAPACK_LIBRARIES=${SCALAPACK_LIBRARIES}")
 
+# Helper function to configure CUDA and AMGX for targets
+function(configure_cuda_for_target target_name)
+  if(HAVE_CUDA)
+    target_compile_definitions(${target_name} PUBLIC ${CUDA_FLAG})
+    target_link_libraries(${target_name} ${CUDA_LIBRARIES})
+    
+    # Link to OPS_Cuda for CUDA functionality (contains the CUDA sources)
+    if(NOT ${target_name} STREQUAL "OPS_Cuda")
+      target_link_libraries(${target_name} OPS_Cuda)
+    endif()
+    
+    if(DEFINED AMGX_NO_MPI_DIR)
+      target_include_directories(${target_name} PUBLIC ${AMGX_INCLUDE_DIR})
+      target_compile_definitions(${target_name} PUBLIC ${AMGX_FLAG})
+      target_link_libraries(${target_name} ${AMGX_LIBRARIES})
+    endif()
+  endif()
+endfunction()
+
 #get_cmake_property(_variableNames VARIABLES)
 #list (SORT _variableNames)
 #foreach (_variableName ${_variableNames})
@@ -531,21 +550,9 @@ if(NOT EXISTS "${CMAKE_BINARY_DIR}/conanbuildinfo.cmake")
   target_link_libraries(OPS_InterpTcl PRIVATE ${TCL_LIBRARIES})
 endif()
 
-
-# Add CUDA and AMGX support to the Tcl and generic interpreter modules
-if(HAVE_CUDA)
-  target_compile_definitions(OPS_INTERPRETER PUBLIC ${CUDA_FLAG})
-  target_compile_definitions(OPS_InterpTcl PUBLIC ${CUDA_FLAG})
-  target_compile_definitions(OPS_SysOfEqn PUBLIC ${CUDA_FLAG})
-  if(DEFINED AMGX_NO_MPI_DIR)
-    target_compile_definitions(OPS_INTERPRETER PUBLIC ${AMGX_FLAG})
-    target_compile_definitions(OPS_InterpTcl PUBLIC ${AMGX_FLAG})
-    target_compile_definitions(OPS_SysOfEqn PUBLIC ${AMGX_FLAG})
-    target_include_directories(OPS_INTERPRETER PUBLIC ${AMGX_INCLUDE_DIR})
-    target_include_directories(OPS_InterpTcl PUBLIC ${AMGX_INCLUDE_DIR})
-    target_include_directories(OPS_SysOfEqn PUBLIC ${AMGX_INCLUDE_DIR})
-  endif()
-endif()
+# Configure CUDA for interpreter modules (to detect the appropriate OPS_* commands)
+configure_cuda_for_target(OPS_INTERPRETER)
+configure_cuda_for_target(OPS_InterpTcl)
 
 #
 # OpenSees G3 Library - a slimmed down OpenSees
@@ -614,6 +621,23 @@ target_link_libraries(OpenSeesLIB
     OPS_Utilities
 )
 
+# CUDA support as OPS_ sublibrary
+if(HAVE_CUDA)
+  add_library(OPS_Cuda OBJECT
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCuda/CudaGenBcsrLinSOE.cu
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCuda/CudaGenBcsrLinSolver.cu
+  )
+  
+  # Configure CUDA for the OPS_Cuda library
+  configure_cuda_for_target(OPS_Cuda)
+  
+  # Add AMGX-specific sources if AMGX is available
+  if(DEFINED AMGX_NO_MPI_DIR)
+    target_sources(OPS_Cuda PRIVATE
+      ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCuda/AmgXLinSolver.cu
+    )
+  endif()
+endif()
 
 # ########################################################################
 #
@@ -627,33 +651,17 @@ target_link_libraries(OpenSeesLIB
 # OpenSees Tcl Interpreter
 #
 
-if(HAVE_CUDA)
-  get_target_property(_cusparse_loc CUDA::cusparse IMPORTED_LOCATION)
-  message(STATUS "CUDA::cusparse found at: ${_cusparse_loc}")
-
-  get_target_property(_cusolver_loc CUDA::cusolver IMPORTED_LOCATION)
-  message(STATUS "CUDA::cusolver found at: ${_cusolver_loc}")
-  
-  get_target_property(_cudart_loc CUDA::cudart IMPORTED_LOCATION)
-  message(STATUS "CUDA::cudart found at: ${_cudart_loc}")
-endif()
-
 add_executable(OpenSees EXCLUDE_FROM_ALL
   ${OPS_SRC_DIR}/tcl/tclAppInit.cpp
   ${OPS_SRC_DIR}/tcl/tclMain.cpp
   ${OPS_SRC_DIR}/tcl/commands.cpp
   ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerAllClasses.cpp
+  ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerCuda.cu
 )
 
-if(HAVE_CUDA)
-  if(DEFINED AMGX_NO_MPI_DIR)
-    target_include_directories(OpenSees PUBLIC ${AMGX_INCLUDE_DIR})
-    target_compile_definitions(OpenSees PUBLIC ${AMGX_FLAG})
-    target_link_libraries(OpenSees ${AMGX_LIBRARIES})
-  endif()
-  target_compile_definitions(OpenSees PUBLIC ${CUDA_FLAG})
-  target_link_libraries(OpenSees ${CUDA_LIBRARIES})
-endif()
+# Configure CUDA for OpenSees
+configure_cuda_for_target(OpenSees)
+
 
 if(NOT EXISTS "${CMAKE_BINARY_DIR}/conanbuildinfo.cmake")
   target_include_directories(OpenSees PUBLIC ${TCL_INCLUDE_PATH})
@@ -702,6 +710,7 @@ if(MPI_FOUND)
       ${OPS_SRC_DIR}/domain/domain/partitioned/PartitionedDomainEleIter.cpp
       ${OPS_SRC_DIR}/domain/domain/partitioned/PartitionedDomainSubIter.cpp
       ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerAllClasses.cpp
+      ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerCuda.cu
       ${OPS_SRC_DIR}/actor/machineBroker/MPI_MachineBroker.cpp
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/diagonal/MPIDiagonalSOE.cpp
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/diagonal/MPIDiagonalSolver.cpp
@@ -748,6 +757,9 @@ if(MPI_FOUND)
        ${MPI_CXX_LINK_FLAGS}
     )
 
+    # Configure CUDA for OpenSeesSP
+    configure_cuda_for_target(OpenSeesSP)
+
 endif()
 
 
@@ -766,6 +778,7 @@ if(MPI_FOUND)
       ${OPS_SRC_DIR}/domain/domain/partitioned/PartitionedDomainSubIter.cpp
       ${OPS_SRC_DIR}/actor/machineBroker/MPI_MachineBroker.cpp
       ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerAllClasses.cpp
+      ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerCuda.cu
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/diagonal/MPIDiagonalSOE.cpp
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/diagonal/MPIDiagonalSolver.cpp
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/mumps/MumpsSOE.cpp
@@ -810,7 +823,9 @@ if(MPI_FOUND)
        ${MPI_Fortran_LIBRARIES}
        ${MPI_CXX_LINK_FLAGS}
     )
-
+    
+    # Configure CUDA for OpenSeesMP
+    configure_cuda_for_target(OpenSeesMP)
 endif()
 
 
@@ -821,28 +836,15 @@ endif()
 add_library(OpenSeesPy SHARED EXCLUDE_FROM_ALL
     ${OPS_SRC_DIR}/interpreter/PythonModule.cpp
     ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerAllClasses.cpp
+    ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerCuda.cu
 )
 
 set_target_properties(OpenSeesPy PROPERTIES PREFIX "")
 
 target_include_directories(OpenSeesPy PUBLIC ${Python_INCLUDE_DIRS})
 
-if(HAVE_CUDA)
-  if(DEFINED AMGX_NO_MPI_DIR)
-    target_include_directories(OpenSeesPy PUBLIC ${AMGX_INCLUDE_DIR})
-    target_compile_definitions(OpenSeesPy PUBLIC ${AMGX_FLAG})
-    # Add CUDA sources directly to ensure proper symbol resolution in shared library
-    target_sources(OpenSeesPy PRIVATE 
-        ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCuda/CudaGenBcsrLinSOE.cu
-        ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCuda/CudaGenBcsrLinSolver.cu
-        ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCuda/AmgXLinSolver.cu
-    )
-    target_link_libraries(OpenSeesPy ${AMGX_LIBRARIES})
-  endif()
-  target_compile_definitions(OpenSeesPy PUBLIC ${CUDA_FLAG})
-  target_link_libraries(OpenSeesPy ${CUDA_LIBRARIES})
-endif()
-
+# Configure CUDA for OpenSeesPy
+configure_cuda_for_target(OpenSeesPy)
 target_link_libraries(OpenSeesPy
    OpenSeesLIB
    OPS_Reliability
@@ -852,7 +854,6 @@ target_link_libraries(OpenSeesPy
    ${CONAN_LIBS}
    ${Python_LIBRARIES}
 )
-
 
 #
 # INSTALL
