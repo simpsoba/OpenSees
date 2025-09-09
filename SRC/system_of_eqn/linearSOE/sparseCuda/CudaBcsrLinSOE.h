@@ -35,6 +35,7 @@
 #include <CudaGenBcsrLinSOE.h>
 #include <CudaGenBcsrLinSolver.h>
 
+#include <memory>
 #ifdef _CUDA
 // Thrust includes
 #include <thrust/device_vector.h>
@@ -43,7 +44,6 @@
 #include <thrust/execution_policy.h>
 // #include <thrust/mr/allocator.h>
 // #include <thrust/mr/device_memory_resource.h>
-#include <memory>
 #else
 #include <vector>
 #include <algorithm>
