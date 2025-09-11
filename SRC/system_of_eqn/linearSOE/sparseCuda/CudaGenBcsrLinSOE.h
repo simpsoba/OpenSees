@@ -64,6 +64,23 @@ public:
 
     ~CudaGenBcsrLinSOE();
     
+    // Factory methods - no templates exposed to users
+    static CudaGenBcsrLinSOE* createDouble(
+        CudaGenBcsrLinSolver &theSolver, 
+        int blockSize = DEFAULT_BLOCK_SIZE, 
+        bool paddingEnabled = true,
+        bool verbose = false
+    );
+    
+    static CudaGenBcsrLinSOE* createFloat(
+        CudaGenBcsrLinSolver &theSolver,
+        int blockSize = DEFAULT_BLOCK_SIZE, 
+        bool paddingEnabled = true,
+        bool verbose = false
+    );
+    
+    static CudaGenBcsrLinSOE* createFromClassTag(int classTag);
+    
     // Core LinearSOE interface methods
     int getNumEqn(void) const override;
     int setSize(Graph &theGraph) override;

@@ -35,7 +35,6 @@
 
 // Solve core classes
 #include <CudaGenBcsrLinSOE.h>
-#include <CudaBcsrLinSOE.h>
 #include <AmgXLinSolver.h>
 
 // for parsing command line arguments
@@ -797,10 +796,10 @@ void* OPS_AmgXLinSolver()
     if (OPS_GetNumRemainingInputArgs() == 0) {
         AmgXSimpleConfig simpleConfig; // Use default values
         auto solver = createAmgXSolver(simpleConfig);
-        return new CudaBcsrLinSOE<double>(*solver, 
-                                         simpleConfig.blockSize, 
-                                         simpleConfig.paddingEnabled, 
-                                         simpleConfig.verbose);
+        return CudaGenBcsrLinSOE::createDouble(*solver, 
+                                               simpleConfig.blockSize, 
+                                               simpleConfig.paddingEnabled, 
+                                               simpleConfig.verbose);
     }
     
     // Check argument count for cases with arguments
@@ -842,11 +841,11 @@ void* OPS_AmgXLinSolver()
             // Create solver and SOE
             auto solver = createAmgXSolver(generalConfig);
             if (generalConfig.mode == "dDDI") {
-                return new CudaBcsrLinSOE<double>(*solver, generalConfig.blockSize, 
-                                       generalConfig.paddingEnabled, generalConfig.verbose);
+                return CudaGenBcsrLinSOE::createDouble(*solver, generalConfig.blockSize, 
+                                                      generalConfig.paddingEnabled, generalConfig.verbose);
             } else {
-                return new CudaBcsrLinSOE<float>(*solver, generalConfig.blockSize, 
-                                      generalConfig.paddingEnabled, generalConfig.verbose);
+                return CudaGenBcsrLinSOE::createFloat(*solver, generalConfig.blockSize, 
+                                                     generalConfig.paddingEnabled, generalConfig.verbose);
             }
         }
     }
@@ -868,15 +867,15 @@ void* OPS_AmgXLinSolver()
         // Create solver and SOE
         auto solver = createAmgXSolver(simpleConfig);
         if (simpleConfig.mode == "dDDI") {
-            return new CudaBcsrLinSOE<double>(*solver, 
-                                             simpleConfig.blockSize, 
-                                             simpleConfig.paddingEnabled, 
-                                             simpleConfig.verbose);
+            return CudaGenBcsrLinSOE::createDouble(*solver, 
+                                                  simpleConfig.blockSize, 
+                                                  simpleConfig.paddingEnabled, 
+                                                  simpleConfig.verbose);
         } else {
-            return new CudaBcsrLinSOE<float>(*solver, 
-                                            simpleConfig.blockSize, 
-                                            simpleConfig.paddingEnabled, 
-                                            simpleConfig.verbose);
+            return CudaGenBcsrLinSOE::createFloat(*solver, 
+                                                 simpleConfig.blockSize, 
+                                                 simpleConfig.paddingEnabled, 
+                                                 simpleConfig.verbose);
         }
     }
     

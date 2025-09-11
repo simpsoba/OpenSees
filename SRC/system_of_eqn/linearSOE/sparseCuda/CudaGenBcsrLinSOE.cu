@@ -48,6 +48,10 @@
 #include <algorithm>
 
 #ifdef _CUDA
+#include "CudaGenBcsrLinSOEImpl.h"
+#endif
+
+#ifdef _CUDA
 // Thrust includes
 #include <thrust/copy.h>
 #include <thrust/fill.h>
@@ -1059,4 +1063,66 @@ CudaGenBcsrLinSolver* CudaGenBcsrLinSOE::getCudaGenBcsrLinSolver(void)
 {
     return dynamic_cast<CudaGenBcsrLinSolver*>(this->LinearSOE::getSolver());
 }
+
+// Factory method implementations
+#ifdef _CUDA
+CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createDouble(
+    CudaGenBcsrLinSolver &theSolver, 
+    int blockSize, 
+    bool paddingEnabled,
+    bool verbose
+) {
+    return new CudaGenBcsrLinSOEImpl<double>(
+        theSolver, blockSize, paddingEnabled, verbose
+    );
+}
+
+CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloat(
+    CudaGenBcsrLinSolver &theSolver,
+    int blockSize, 
+    bool paddingEnabled,
+    bool verbose
+) {
+    return new CudaGenBcsrLinSOEImpl<float>(
+        theSolver, blockSize, paddingEnabled, verbose
+    );
+}
+
+CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFromClassTag(int classTag) {
+    switch(classTag) {
+        case LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE:
+            return new CudaGenBcsrLinSOEImpl<double>();
+        case LinSOE_TAGS_CudaBcsrLinSOE_FLOAT:
+            return new CudaGenBcsrLinSOEImpl<float>();
+        default:
+            return nullptr;
+    }
+}
+#else
+// Non-CUDA fallbacks
+CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createDouble(
+    CudaGenBcsrLinSolver &theSolver, 
+    int blockSize, 
+    bool paddingEnabled,
+    bool verbose
+) {
+    opserr << "WARNING: CudaGenBcsrLinSOE::createDouble() - CUDA not available, cannot create SOE\n";
+    return nullptr;
+}
+
+CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloat(
+    CudaGenBcsrLinSolver &theSolver,
+    int blockSize, 
+    bool paddingEnabled,
+    bool verbose
+) {
+    opserr << "WARNING: CudaGenBcsrLinSOE::createFloat() - CUDA not available, cannot create SOE\n";
+    return nullptr;
+}
+
+CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFromClassTag(int classTag) {
+    opserr << "WARNING: CudaGenBcsrLinSOE::createFromClassTag() - CUDA not available, cannot create SOE\n";
+    return nullptr;
+}
+#endif
 

@@ -32,21 +32,15 @@
 #include "LinearSOE.h"
 
 #ifdef _CUDA
-#include "CudaBcsrLinSOE.h"
+#include "CudaGenBcsrLinSOE.h"
 #endif // _CUDA
 
 // Helper function for CUDA LinearSOE creation
 LinearSOE* createCudaLinearSOE(int classTagSOE)
 {
-    switch(classTagSOE) {
-        // CUDA LinearSOE
 #ifdef _CUDA
-        case LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE:
-            return new CudaBcsrLinSOE<double>();
-        case LinSOE_TAGS_CudaBcsrLinSOE_FLOAT:
-            return new CudaBcsrLinSOE<float>();
-#endif // _CUDA
-        default:
-            return nullptr;
-    }
+    return CudaGenBcsrLinSOE::createFromClassTag(classTagSOE);
+#else
+    return nullptr;
+#endif
 }

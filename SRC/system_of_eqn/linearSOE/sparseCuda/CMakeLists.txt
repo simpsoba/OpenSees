@@ -9,7 +9,6 @@ target_sources(OPS_SysOfEqn
     PUBLIC
         CudaGenBcsrLinSOE.h
         CudaGenBcsrLinSolver.h
-        CudaBcsrLinSOE.h
         AmgXLinSolver.h
 )
 
