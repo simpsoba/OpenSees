@@ -34,8 +34,6 @@
 // OpenSees includes
 #include <CudaGenBcsrLinSOE.h>
 #include <CudaGenBcsrLinSolver.h>
-
-#include <memory>
 #ifdef _CUDA
 // Thrust includes
 #include <thrust/device_vector.h>
@@ -53,6 +51,9 @@
 // Forward declarations
 class CudaGenBcsrLinSolver;
 
+// This template class provides the actual implementation for different data types.
+// It inherits from CudaGenBcsrLinSOE and implements all the pure virtual methods.
+// The template parameter DataType allows us to specialize for double and float without code duplication.
 template<typename DataType>
 class CudaGenBcsrLinSOEImpl : public CudaGenBcsrLinSOE
 {
@@ -91,6 +92,8 @@ public:
     CudaGenBcsrLinSOEImpl& operator=(CudaGenBcsrLinSOEImpl&&) = default;
 
     // Required methods for CudaGenBcsrLinSOE subclasses
+    // These methods provide type-erased access to device data.
+    // The void* return type allows the solver to work with any data type without knowing the specifics.
     const void* getDeviceAValues(void) const noexcept override { 
         #ifdef _CUDA
         return m_deviceAValues.empty() ? nullptr : m_deviceAValues.data().get(); 
@@ -139,11 +142,12 @@ public:
         #endif
     }
     
+    // This method allows the solver to know the data type of the SOE at runtime.
     bool isDoublePrecision(void) const noexcept override { 
         return std::is_same<DataType, double>::value; 
     }
     
-    // Host-device data transfer methods
+    // Host (double)-device (DataType) data transfer methods
     inline void uploadVectorsToDevice(void) override {
         #ifdef _CUDA
         m_deviceB = this->CudaGenBcsrLinSOE::m_hostB;

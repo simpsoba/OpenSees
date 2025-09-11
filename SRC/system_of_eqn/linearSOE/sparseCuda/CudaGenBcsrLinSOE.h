@@ -27,6 +27,10 @@
 // CudaGenBcsrLinSOE. It stores the sparse matrix A in a fashion
 // required by the CudaGenBcsrLinSolver object.
 //
+// This is the ONLY public interface users should interact with.
+// We use type erasure to hide the template implementation details from users.
+// The actual template code lives in CudaGenBcsrLinSOEImpl.h, which users never see.
+//
 
 #ifndef CudaGenBcsrLinSOE_h
 #define CudaGenBcsrLinSOE_h
@@ -79,7 +83,8 @@ public:
         bool verbose = false
     );
     
-    static CudaGenBcsrLinSOE* createFromClassTag(int classTag);
+    // This method is used by the object broker to create instances from class tags.
+    static LinearSOE* createCudaLinearSOE(int classTagSOE);
     
     // Core LinearSOE interface methods
     int getNumEqn(void) const override;
@@ -130,7 +135,8 @@ public:
     friend class CudaGenBcsrLinSolver;
     
     // Required methods for subclasses
-    // These are used by the CudaGenBcsrLinSolver to access the data
+    // These are pure virtual methods that provide type-erased access to device data without exposing the template nature.
+    // The solver can call these methods without knowing the specific data type (double/float).
     virtual const void* getDeviceAValues(void) const = 0;
     virtual void* getDeviceAValues(void) = 0;
     virtual const void* getDeviceX(void) const = 0;

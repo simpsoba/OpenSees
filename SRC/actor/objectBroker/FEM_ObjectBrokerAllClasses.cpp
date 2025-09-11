@@ -690,6 +690,10 @@
 // system of eqn header files
 #include "LinearSOE.h"
 #include "DomainSolver.h"
+
+#ifdef _CUDA
+#include "sparseCuda/CudaGenBcsrLinSOE.h"
+#endif
 #include "fullGEN/FullGenLinSOE.h"
 #include "bandGEN/BandGenLinSOE.h"
 #include "bandSPD/BandSPDLinSOE.h"
@@ -3154,7 +3158,7 @@ FEM_ObjectBrokerAllClasses::getNewLinearSOE(int classTagSOE)
 #ifdef _CUDA
     case LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE:
     case LinSOE_TAGS_CudaBcsrLinSOE_FLOAT:
-        theSOE = createCudaLinearSOE(classTagSOE);
+        theSOE = CudaGenBcsrLinSOE::createCudaLinearSOE(classTagSOE);
         if (theSOE != nullptr) return theSOE;
         break;
 #endif // _CUDA

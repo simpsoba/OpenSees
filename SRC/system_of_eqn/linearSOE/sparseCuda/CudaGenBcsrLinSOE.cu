@@ -32,6 +32,7 @@
 // OpenSees includes
 #include <CudaGenBcsrLinSOE.h>
 #include <CudaGenBcsrLinSolver.h>
+#include <LinearSOE.h>
 #include <Matrix.h>
 #include <Graph.h>
 #include <Vertex.h>
@@ -1088,7 +1089,7 @@ CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloat(
     );
 }
 
-CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFromClassTag(int classTag) {
+LinearSOE* CudaGenBcsrLinSOE::createCudaLinearSOE(int classTag) {
     switch(classTag) {
         case LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE:
             return new CudaGenBcsrLinSOEImpl<double>();
@@ -1120,7 +1121,7 @@ CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloat(
     return nullptr;
 }
 
-CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFromClassTag(int classTag) {
+LinearSOE* CudaGenBcsrLinSOE::createCudaLinearSOE(int classTag) {
     opserr << "WARNING: CudaGenBcsrLinSOE::createFromClassTag() - CUDA not available, cannot create SOE\n";
     return nullptr;
 }

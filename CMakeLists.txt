@@ -656,7 +656,6 @@ add_executable(OpenSees EXCLUDE_FROM_ALL
   ${OPS_SRC_DIR}/tcl/tclMain.cpp
   ${OPS_SRC_DIR}/tcl/commands.cpp
   ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerAllClasses.cpp
-  ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerCuda.cu
 )
 
 # Configure CUDA for OpenSees
@@ -710,7 +709,6 @@ if(MPI_FOUND)
       ${OPS_SRC_DIR}/domain/domain/partitioned/PartitionedDomainEleIter.cpp
       ${OPS_SRC_DIR}/domain/domain/partitioned/PartitionedDomainSubIter.cpp
       ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerAllClasses.cpp
-      ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerCuda.cu
       ${OPS_SRC_DIR}/actor/machineBroker/MPI_MachineBroker.cpp
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/diagonal/MPIDiagonalSOE.cpp
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/diagonal/MPIDiagonalSolver.cpp
@@ -778,7 +776,6 @@ if(MPI_FOUND)
       ${OPS_SRC_DIR}/domain/domain/partitioned/PartitionedDomainSubIter.cpp
       ${OPS_SRC_DIR}/actor/machineBroker/MPI_MachineBroker.cpp
       ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerAllClasses.cpp
-      ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerCuda.cu
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/diagonal/MPIDiagonalSOE.cpp
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/diagonal/MPIDiagonalSolver.cpp
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/mumps/MumpsSOE.cpp
@@ -836,7 +833,6 @@ endif()
 add_library(OpenSeesPy SHARED EXCLUDE_FROM_ALL
     ${OPS_SRC_DIR}/interpreter/PythonModule.cpp
     ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerAllClasses.cpp
-    ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerCuda.cu
 )
 
 set_target_properties(OpenSeesPy PROPERTIES PREFIX "")
