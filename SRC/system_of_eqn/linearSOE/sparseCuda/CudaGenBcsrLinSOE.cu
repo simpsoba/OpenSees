@@ -60,6 +60,14 @@
 #include <thrust/functional.h>
 #include <thrust/execution_policy.h>
 #include <thrust/iterator/constant_iterator.h>
+#include <thrust/memory.h>
+
+// Bring thrust::raw_pointer_cast into scope for CUDA builds
+using thrust::raw_pointer_cast;
+#else
+// Define a passthrough raw_pointer_cast for non-CUDA builds
+template<typename T>
+inline T* raw_pointer_cast(T* ptr) { return ptr; }
 #endif
 
 namespace {
@@ -219,8 +227,8 @@ int CudaGenBcsrLinSOE::buildStandardCSR(Graph &theGraph)
 
     // Reserve space for row pointers and column indices of matrix A in CSR format
     m_hostCsrIndices.resize(size + 1 + nnz);
-    int *ArowPtr = m_hostCsrIndices.data();
-    int *AcolIdx = m_hostCsrIndices.data() + size + 1;
+    int *ArowPtr = raw_pointer_cast(m_hostCsrIndices.data());
+    int *AcolIdx = raw_pointer_cast(m_hostCsrIndices.data()) + size + 1;
 
     // Fill in rowPtr and colIdx
     ArowPtr[0] = 0; // Start of first row
@@ -317,8 +325,8 @@ int CudaGenBcsrLinSOE::buildBlockCSR(Graph &theGraph)
 
     // Reserve space for row pointers and column indices of matrix A in block CSR format
     m_hostCsrIndices.resize(numBlockRows + 1 + nnzBlock);
-    int *ArowPtr = m_hostCsrIndices.data();
-    int *AcolIdx = m_hostCsrIndices.data() + numBlockRows + 1;
+    int *ArowPtr = raw_pointer_cast(m_hostCsrIndices.data());
+    int *AcolIdx = raw_pointer_cast(m_hostCsrIndices.data()) + numBlockRows + 1;
 
     // Helper vectors used to build the block CSR format
     std::vector<int> mask(numBlockCols, -1);
@@ -410,8 +418,8 @@ int CudaGenBcsrLinSOE::setSize(Graph &theGraph)
     }
 
     // Create OpenSees vectors wrapping the host vectors
-    m_B.setData(m_hostB.data(), originalSize);
-    m_X.setData(m_hostX.data(), originalSize);
+    m_B.setData(raw_pointer_cast(m_hostB.data()), originalSize);
+    m_X.setData(raw_pointer_cast(m_hostX.data()), originalSize);
     
     // Update matrix status
     m_matrixStatus = MatrixStatus::STRUCTURE_CHANGED;
@@ -453,8 +461,8 @@ int CudaGenBcsrLinSOE::addAMatrixElement(int globalRow, int globalCol, double va
 int CudaGenBcsrLinSOE::addAMatrixElementBlock(int globalRow, int globalCol, double value)
 {
     const int numBlockRows = m_hostB.size() / m_blockSize;
-    const int *ArowPtr = m_hostCsrIndices.data();
-    const int *AcolIdx = m_hostCsrIndices.data() + numBlockRows + 1;
+    const int *ArowPtr = raw_pointer_cast(m_hostCsrIndices.data());
+    const int *AcolIdx = raw_pointer_cast(m_hostCsrIndices.data()) + numBlockRows + 1;
     
     const int blockRow = globalRow / m_blockSize;
     const int localRow = globalRow % m_blockSize;
@@ -484,8 +492,8 @@ int CudaGenBcsrLinSOE::addAMatrixElementBlock(int globalRow, int globalCol, doub
 int CudaGenBcsrLinSOE::addAMatrixElementStandard(int globalRow, int globalCol, double value)
 {
     int size = m_hostB.size();
-    const int *ArowPtr = m_hostCsrIndices.data();
-    const int *AcolIdx = m_hostCsrIndices.data() + size + 1;
+    const int *ArowPtr = raw_pointer_cast(m_hostCsrIndices.data());
+    const int *AcolIdx = raw_pointer_cast(m_hostCsrIndices.data()) + size + 1;
     // Find the column index in m_AColIdxBlock where m_AColIdxBlock[k] == globalCol 
     // and k is in [m_ARowPtrBlock[globalRow], m_ARowPtrBlock[globalRow + 1])
     const int startRowPtr = ArowPtr[globalRow];
@@ -892,8 +900,9 @@ int CudaGenBcsrLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
 
     // Write the sparse matrix entries
     int nnz_written = 0;
-    const int *ArowPtr = m_hostCsrIndices.data();
-    const int *AcolIdx = m_hostCsrIndices.data() + numBlockRows + 1;
+    const int *ArowPtr = raw_pointer_cast(m_hostCsrIndices.data());
+    const int *AcolIdx = raw_pointer_cast(m_hostCsrIndices.data()) + numBlockRows + 1;
+    const double* AValues = raw_pointer_cast(m_hostAValues.data());
     if (m_blockSize > 1) { // Block CSR format
         for (int blockRow = 0; blockRow < numBlockRows; blockRow++) {
             const int rowStart = ArowPtr[blockRow];
@@ -901,7 +910,7 @@ int CudaGenBcsrLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
             for (int blockIdx = rowStart; blockIdx < rowEnd; blockIdx++) {
                 const int blockCol = AcolIdx[blockIdx];
                 const int blockOffset = blockIdx * m_blockSize * m_blockSize;
-                const double* theBlock = m_hostAValues.data() + blockOffset;
+                const double* theBlock = AValues + blockOffset;
                 for (int i = 0; i < m_blockSize; i++) {
                     const int row = blockRow * m_blockSize + i + baseIndex;
                     for (int j = 0; j < m_blockSize; j++) {

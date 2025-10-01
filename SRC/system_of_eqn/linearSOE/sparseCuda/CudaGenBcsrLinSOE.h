@@ -44,12 +44,25 @@
 // Thrust includes
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
+#include <thrust/mr/memory_resource.h>
+#include <thrust/mr/allocator.h>
 #else
 #include <vector>
 #endif
 
 // Forward declarations
 class CudaGenBcsrLinSolver;
+
+#ifdef _CUDA
+// Pinned memory allocators for improved host-device transfer performance
+using pinned_mr = thrust::universal_host_pinned_memory_resource;
+
+template <typename T>
+using pinned_allocator = thrust::mr::stateless_resource_allocator<T, pinned_mr>;
+
+template <typename T>
+using pinned_host_vector = thrust::host_vector<T, pinned_allocator<T>>;
+#endif
 
 class CudaGenBcsrLinSOE : public LinearSOE
 {
@@ -162,13 +175,13 @@ protected:
     Vector m_X, m_B; // for interfacing with OpenSees, wraps padded vectors
     
     #ifdef _CUDA
-    // Thrust containers for internal data
-    thrust::host_vector<double> m_hostX, m_hostB, m_hostAValues;
+    // Thrust containers for internal data (using pinned memory for faster host-device transfers)
+    pinned_host_vector<double> m_hostX, m_hostB, m_hostAValues;
     // Subclasses must provide their own device data vectors
     // thrust::device_vector<DataType> m_deviceX, m_deviceB, m_deviceAValues;
     
-    // Thrust containers for index data
-    thrust::host_vector<int> m_hostCsrIndices;
+    // Thrust containers for index data (using pinned memory)
+    pinned_host_vector<int> m_hostCsrIndices;
     thrust::device_vector<int> m_deviceCsrIndices;
     #else
     std::vector<double> m_hostX, m_hostB, m_hostAValues;

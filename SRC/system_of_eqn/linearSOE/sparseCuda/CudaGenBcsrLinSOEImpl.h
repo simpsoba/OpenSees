@@ -40,9 +40,17 @@
 #include <thrust/host_vector.h>
 #include <thrust/transform.h>
 #include <thrust/execution_policy.h>
+#include <thrust/memory.h>
+
+// Bring thrust::raw_pointer_cast into scope for CUDA builds
+using thrust::raw_pointer_cast;
 #else
 #include <vector>
 #include <algorithm>
+
+// Define a passthrough raw_pointer_cast for non-CUDA builds
+template<typename T>
+inline T* raw_pointer_cast(T* ptr) { return ptr; }
 #endif
 
 // C++ includes
@@ -177,7 +185,7 @@ public:
         );
         #endif
         this->CudaGenBcsrLinSOE::m_X.setData(
-            this->CudaGenBcsrLinSOE::m_hostX.data(), 
+            raw_pointer_cast(this->CudaGenBcsrLinSOE::m_hostX.data()), 
             this->CudaGenBcsrLinSOE::m_X.Size()
         );
     }
