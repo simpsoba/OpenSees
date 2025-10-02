@@ -1,0 +1,101 @@
+/* ****************************************************************** **
+**    OpenSees - Open System for Earthquake Engineering Simulation    **
+**          Pacific Earthquake Engineering Research Center            **
+**                                                                    **
+**                                                                    **
+** (C) Copyright 1999, The Regents of the University of California    **
+** All Rights Reserved.                                               **
+**                                                                    **
+** Commercial use of this program without express permission of the   **
+** University of California, Berkeley, is strictly prohibited.  See   **
+** file 'COPYRIGHT'  in main directory for information on usage and   **
+** redistribution,  and for a DISCLAIMER OF ALL WARRANTIES.           **
+**                                                                    **
+** Developed by:                                                      **
+**   Frank McKenna (fmckenna@ce.berkeley.edu)                         **
+**   Gregory L. Fenves (fenves@ce.berkeley.edu)                       **
+**   Filip C. Filippou (filippou@ce.berkeley.edu)                     **
+**                                                                    **
+** ****************************************************************** */                                                                        
+                                                                        
+// $Source: OpenSees/SRC/system_of_eqn/linearSOE/sparseCuda/AmgXLinSolver.h
+//
+// Written: gaaraujo 
+// Created: 10/2025
+//
+// Description: This file contains the class definition for CuDSSLinSolver.
+// An CuDSSLinSolver object can be constructed to solve a CudaGenBcsrLinSOE
+// object. It obtains the solution by making calls to the
+// CuDSS library developed by NVIDIA.
+//
+// The CuDSS library provides a high-performance GPU-accelerated direct solver
+// for sparse linear systems of the form AX = B. The cuDSS functionality allows 
+// flexibility in matrix properties and solver configuration, as well as 
+// execution parameters like CUDA streams.
+//
+// This solver will only be available if OpenSees is compiled with CUDSS
+// support enabled (i.e., with the compile flag -D_CUDSS). This wrapper 
+// is implemented for single-CPU and single-GPU systems only. 
+//
+
+#ifndef CuDSSLinSolver_h
+#define CuDSSLinSolver_h
+
+// OpenSees includes
+#include <CudaGenBcsrLinSolver.h>
+#include <OPS_Stream.h>
+
+// C++ includes
+#include <string>
+
+// cuDSS includes
+#ifdef _CUDSS
+#include <cudss.h>
+#endif // _CUDSS
+
+class CuDSSLinSolver : public CudaGenBcsrLinSolver
+{
+public:
+    // Constructor with default parameters
+    CuDSSLinSolver(
+        std::string dataType = "double",
+        bool verbose = false
+    );
+    
+    // Destructor
+    ~CuDSSLinSolver();
+    
+    // Solver methods
+    int solve(void) override;
+    int setSize(void) override;
+    int setLinearSOE(CudaGenBcsrLinSOE &theSOE) override;
+    
+protected:
+
+private:
+    // Verbosity flag
+    bool m_verbose;
+
+    // cuDSS initializer (to be used by constructors only)
+    void _init(std::string dataType);
+
+    #ifdef _CUDSS
+    // Static members
+    static bool m_CuDSSInitialized;
+    static int m_ActiveSolverInstances;
+    static cudssHandle_t m_Handle;      ///< library handle
+    static cudaStream_t m_cudaStream;    ///< CUDA stream
+    
+    // cuDSS objects
+    cudssConfig_t m_Config;      ///< solver configuration
+    cudssData_t m_Data;          ///< solver data
+    cudssMatrix_t m_Matrix;      ///< matrix data
+    cudssMatrix_t m_RHS;         ///< right-hand side data
+    cudssMatrix_t m_Solution;    ///< solution data
+    
+    // Precision
+    cudaDataType_t m_ValueType; ///< SOE value type
+    cudaDataType_t m_IndexType; ///< SOE index type
+    #endif // _CUDSS
+};
+#endif
