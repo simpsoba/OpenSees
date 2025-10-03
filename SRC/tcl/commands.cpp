@@ -360,9 +360,13 @@ extern void OPS_SetReliabilityDomain(ReliabilityDomain *);
 
 // Cuda Solvers
 extern void *OPS_AmgXLinSolver(void);
+extern void *OPS_CuDSSLinSolver(void);
 #ifdef _CUDA
 #ifdef _AMGX
 #include <AmgXLinSolver.h>
+#endif
+#ifdef _CUDSS
+#include <CuDSSLinSolver.h>
 #endif
 #endif
 
@@ -3010,6 +3014,14 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
   theSOE = (LinearSOE*)OPS_AmgXLinSolver();
   }
 #endif // _AMGX
+#ifdef _CUDSS
+  else if (strcmp(argv[1],"CuDSS") == 0 || strcmp(argv[1],"cuDSS") == 0 
+    || strcmp(argv[1],"CUDSS") == 0 || strcmp(argv[1],"cudss") == 0) {
+
+  OPS_ResetInputNoBuilder(clientData, interp, 2, argc, argv, &theDomain);
+  theSOE = (LinearSOE*)OPS_CuDSSLinSolver();
+  }
+#endif // _CUDSS
 #endif // _CUDA
 
   // BAND SPD SOE & SOLVER

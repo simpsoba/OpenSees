@@ -1487,6 +1487,11 @@ int OPS_System()
                 || strcmp(type,"AMGX") == 0 || strcmp(type,"Amgx") == 0) {
         theSOE = (LinearSOE*)OPS_AmgXLinSolver();
 #endif // _AMGX
+#ifdef _CUDSS
+    } else if (strcmp(type,"CuDSS") == 0 || strcmp(type,"cudss") == 0 
+                || strcmp(type,"CUDSS") == 0 || strcmp(type,"cuDSS") == 0) {
+        theSOE = (LinearSOE*)OPS_CuDSSLinSolver();
+#endif // _CUDSS
 #endif // _CUDA
 
     } else if (strcmp(type,"FullGeneral") == 0) {

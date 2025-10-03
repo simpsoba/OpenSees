@@ -105,10 +105,10 @@ private:
     
     
     // AMGX initializer (to be used by constructors only)
-    void _init(const char *configFile = nullptr, 
-               const char *configOptions = nullptr, 
-               const char *mode = "dDDI",
-               OPS_Stream* callbackStream = (OPS_Stream*)&opserr);
+    void init(const char *configFile = nullptr, 
+              const char *configOptions = nullptr, 
+              const char *mode = "dDDI",
+              OPS_Stream* callbackStream = (OPS_Stream*)&opserr);
 
     #ifdef _AMGX
     // Static members for global state

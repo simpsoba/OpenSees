@@ -49,12 +49,15 @@
 #include <iomanip>
 #include <vector>
 #include <string>
+#include <cstring>
 #include <cmath>
 
 #ifdef _CUDSS
 // Static member initialization
 bool CuDSSLinSolver::m_CuDSSInitialized = false;
 int CuDSSLinSolver::m_ActiveSolverInstances = 0;
+cudssHandle_t CuDSSLinSolver::m_Handle = nullptr;
+cudaStream_t CuDSSLinSolver::m_cudaStream = nullptr;
 #endif // _CUDSS
 
 /* Anonymous namespace for helper functions */
@@ -63,7 +66,7 @@ namespace {
     void cudaCheckError(cudaError_t error, const char* message, bool throwError = true)
     {
         if (error != cudaSuccess) {
-            char* errorString = cudaGetErrorString(error);
+            const char* errorString = cudaGetErrorString(error);
             if (throwError) {
                 throw std::runtime_error(
                 "CUDA API returned error " + 
@@ -96,11 +99,11 @@ CuDSSLinSolver::CuDSSLinSolver(std::string dataType, bool verbose)
     m_verbose(verbose)
 {
     #ifdef _CUDSS
-    _init(dataType);
+    init(dataType);
     #endif // _CUDSS
 }
 
-void CuDSSLinSolver::_init(std::string dataType)
+void CuDSSLinSolver::init(std::string dataType)
 {
     #ifdef _CUDSS
     if (!m_CuDSSInitialized) {
@@ -109,7 +112,7 @@ void CuDSSLinSolver::_init(std::string dataType)
         cudaCheckError(cudaStreamCreate(&m_cudaStream), "create CUDA stream");
 
         /* Create the cuDSS handle */
-        cuDSSCheckError(cudssCreateHandle(&m_Handle), "create cuDSS handle");
+        cuDSSCheckError(cudssCreate(&m_Handle), "create cuDSS handle");
         
         /* Set the CUDA stream */
         cuDSSCheckError(cudssSetStream(m_Handle, m_cudaStream), "set CUDA stream");
@@ -124,7 +127,7 @@ void CuDSSLinSolver::_init(std::string dataType)
     
     // (optional) Modifying solver settings, e.g., reordering algorithm
     cudssAlgType_t reorderAlgorithm = CUDSS_ALG_DEFAULT;
-    cudssConfigSet(m_Config, CUDSS_REORDERING_ALG, &reorderAlgorithm, sizeof(cudssAlgType_t));
+    cudssConfigSet(m_Config, CUDSS_CONFIG_REORDERING_ALG, &reorderAlgorithm, sizeof(cudssAlgType_t));
 
     m_Matrix = nullptr;
     m_RHS = nullptr;
@@ -176,8 +179,8 @@ CuDSSLinSolver::~CuDSSLinSolver()
 
 int CuDSSLinSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE) {
     #ifdef _CUDSS
-    bool bothDouble = theSOE.isDoublePrecision() && m_DataType == CUDA_R_64F;
-    bool bothFloat = !theSOE.isDoublePrecision() && m_DataType == CUDA_R_32F;
+    bool bothDouble = theSOE.isDoublePrecision() && m_ValueType == CUDA_R_64F;
+    bool bothFloat = !theSOE.isDoublePrecision() && m_ValueType == CUDA_R_32F;
     if (bothDouble || bothFloat) {
         return this->CudaGenBcsrLinSolver::setLinearSOE(theSOE);
     } else {
@@ -202,93 +205,65 @@ int CuDSSLinSolver::solve(void) {
     // Extract info from the SOE
     CudaGenBcsrLinSOE::MatrixStatus matrixStatus = theSOE->getMatrixStatus();
     int numRows = theSOE->getNumRowBlocks();
-    int numCols = numRows;
-    int numNZ = theSOE->getNumNonZeroValues();
-    int blockSize = theSOE->getBlockSize();
-    int* rowPtrs = theSOE->getDeviceRowPtrs();
-    int* colIndices = theSOE->getDeviceColIndices();
+    void* AValues = theSOE->getDeviceAValues();
+    void* xValues = theSOE->getDeviceX();
+    void* bValues = theSOE->getDeviceB();
 
-    // Check that system is not scalar CSR (block CSR not supported)
-    if (blockSize != 1) {
-        opserr << "ERROR: CuDSSLinSolver::solve() - "
-               << "Only blockSize = 1 is supported" << endln;
-        return -1;
-    }
-    
     // Check if device pointers are valid
-    if (!rowPtrs) {
-        opserr << "ERROR: CuDSSLinSolver::solve() - getDeviceRowPtrs() returned nullptr" << endln;
-        return -1;
-    }
-    if (!colIndices) {
-        opserr << "ERROR: CuDSSLinSolver::solve() - getDeviceColIndices() returned nullptr" << endln;
-        return -1;
-    }
-    void* values = theSOE->getDeviceAValues();
-    void* x = theSOE->getDeviceX();
-    void* b = theSOE->getDeviceB();
-
-    if (!values) {
+    if (!AValues) {
         opserr << "ERROR: CuDSSLinSolver::solve() - getDeviceAValues() returned nullptr" << endln;
         return -1;
     }
-    if (!x) {
+    if (!xValues) {
         opserr << "ERROR: CuDSSLinSolver::solve() - getDeviceX() returned nullptr" << endln;
         return -1;
     }
-    if (!b) {
+    if (!bValues) {
         opserr << "ERROR: CuDSSLinSolver::solve() - getDeviceB() returned nullptr" << endln;
         return -1;
     }
 
-    // Upload the matrix data to the GPU and factorize if necessary
+    // Setup matrices if structure has changed (setupMatrices checks internally)
+    if (setupMatrices() != 0) {
+        opserr << "ERROR: CuDSSLinSolver::solve() - setupMatrices() failed" << endln;
+        return -1;
+    }
+
+    // Handle matrix updates and factorization
     if (matrixStatus == CudaGenBcsrLinSOE::MatrixStatus::STRUCTURE_CHANGED) {
-        /* Create the cuDSS matrix */
-        cudssMatrixType_t matrixType = CUDSS_MTYPE_GENERAL;
-        cudssMatrixViewType_t matrixView = CUDSS_MVIEW_FULL;
-        cudssIndexBase_t indexBase = CUDSS_BASE_ZERO;
-        cuDSSCheckError(cudssMatrixCreateCsr(
-            m_Handle, numRows, numCols, numNZ, 
-            rowPtrs, nullptr, colIndices, values, 
-            m_IndexType, m_ValueType, 
-            matrixType, matrixView, indexBase
-        ), "create cuDSS matrix");
-        
-        /* Symbolic factorization */
-        cuDSSCheckError(cudssExecute(
-            m_Handle, CUDSS_PHASE_ANALYSIS, m_Config, m_Data,
-            m_Matrix, m_RHS, m_Solution
-        ), "cuDSS symbolic factorization");
-        
-        /* Numerical factorization */
+        /* Update the RHS and solution pointers */
+        cuDSSCheckError(cudssMatrixSetValues(m_RHS, bValues), "update cuDSS RHS values");
+        cuDSSCheckError(cudssMatrixSetValues(m_Solution, xValues), "update cuDSS solution values");
+
+        /* Numerical factorization (first time) */
         cuDSSCheckError(cudssExecute(
             m_Handle, CUDSS_PHASE_FACTORIZATION, m_Config, m_Data,
-            m_Matrix, m_RHS, m_Solution
+            m_Matrix, m_Solution, m_RHS
         ), "cuDSS numerical factorization");
     } else if (matrixStatus == CudaGenBcsrLinSOE::MatrixStatus::COEFFICIENTS_CHANGED) {
         /* Update coefficients */
-        cuDSSCheckError(cudssMatrixSetValues(m_Matrix, values), "set cuDSS matrix values");
+        cuDSSCheckError(cudssMatrixSetValues(m_Matrix, AValues), "set cuDSS matrix values");
+        
+        /* Update the RHS and solution pointers */
+        cuDSSCheckError(cudssMatrixSetValues(m_RHS, bValues), "update cuDSS RHS values");
+        cuDSSCheckError(cudssMatrixSetValues(m_Solution, xValues), "update cuDSS solution values");
 
-        /* Numerical factorization */
+        /* Numerical factorization (refactorize with updated coefficients) */
         cuDSSCheckError(cudssExecute(
             m_Handle, CUDSS_PHASE_REFACTORIZATION, m_Config, m_Data,
-            m_Matrix, m_RHS, m_Solution
+            m_Matrix, m_Solution, m_RHS
         ), "cuDSS numerical factorization");
-    } else { /* pass */ }
-
-    // Upload the rhs and solution data to the GPU
-    cuDSSCheckError(cudssMatrixCreateDn(
-        m_RHS, (int64_t)numRows, 1, (int64_t)numRows, b, m_ValueType, CUDSS_LAYOUT_COL_MAJOR
-    ), "create cuDSS right-hand side");
-    cuDSSCheckError(cudssMatrixCreateDn(
-        m_Solution, (int64_t)numRows, 1, (int64_t)numRows, x, m_ValueType, CUDSS_LAYOUT_COL_MAJOR
-    ), "create cuDSS solution");
+    } else {
+        /* No changes, just update RHS and solution pointers */
+        cuDSSCheckError(cudssMatrixSetValues(m_RHS, bValues), "update cuDSS RHS values");
+        cuDSSCheckError(cudssMatrixSetValues(m_Solution, xValues), "update cuDSS solution values");
+    }
 
     // Solve the system of equations
     cudssStatus_t status;
     status = cudssExecute(
         m_Handle, CUDSS_PHASE_SOLVE, m_Config, m_Data,
-        m_Matrix, m_RHS, m_Solution
+        m_Matrix, m_Solution, m_RHS
     );
     
     if (status != CUDSS_STATUS_SUCCESS) {
@@ -296,6 +271,9 @@ int CuDSSLinSolver::solve(void) {
                << "cuDSS solve failed with status " << status << endln;
         return -1;
     }
+
+    // Synchronize the CUDA stream to ensure solve is complete before returning
+    cudaCheckError(cudaStreamSynchronize(m_cudaStream), "synchronize CUDA stream after solve");
 
     if (m_verbose) {
         opserr << "INFO: CuDSSLinSolver::solve() - "
@@ -308,40 +286,131 @@ int CuDSSLinSolver::solve(void) {
 }
 
 int CuDSSLinSolver::setSize() {
+    // In OpenSees, setSize() is called before data is ready on the GPU
+    // Matrix initialization is done in solve() via setupMatrices()
     return 0;
 }
 
-// OpenSees API for parsing command line arguments
-#ifdef _CUDSS
+int CuDSSLinSolver::setupMatrices() {
+    #ifdef _CUDSS
+    CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
+    if (theSOE == nullptr) {
+        opserr << "WARNING: CuDSSLinSolver::setupMatrices() - "
+               << "LinearSOE not set" << endln;
+        return -1;
+    }
 
-struct CuDSSConfig {
+    // Check matrix status - only setup if structure has changed
+    CudaGenBcsrLinSOE::MatrixStatus matrixStatus = theSOE->getMatrixStatus();
+    if (matrixStatus != CudaGenBcsrLinSOE::MatrixStatus::STRUCTURE_CHANGED) {
+        // Matrices already set up, nothing to do
+        return 0;
+    }
+
+    // Extract info from the SOE
+    int numRows = theSOE->getNumRowBlocks();
+    int numCols = numRows;
+    int numNZ = theSOE->getNumNonZeroValues();
+    int blockSize = theSOE->getBlockSize();
+    int* rowPtrs = theSOE->getDeviceRowPtrs();
+    int* colIndices = theSOE->getDeviceColIndices();
+
+    // Check that system is scalar CSR (block CSR not supported)
+    if (blockSize != 1) {
+        opserr << "ERROR: CuDSSLinSolver::setupMatrices() - "
+               << "Only blockSize = 1 is supported" << endln;
+        return -1;
+    }
+    
+    // Check if device pointers are valid
+    if (!rowPtrs) {
+        opserr << "ERROR: CuDSSLinSolver::setupMatrices() - getDeviceRowPtrs() returned nullptr" << endln;
+        return -1;
+    }
+    if (!colIndices) {
+        opserr << "ERROR: CuDSSLinSolver::setupMatrices() - getDeviceColIndices() returned nullptr" << endln;
+        return -1;
+    }
+    void* AValues = theSOE->getDeviceAValues();
+    if (!AValues) {
+        opserr << "ERROR: CuDSSLinSolver::setupMatrices() - getDeviceAValues() returned nullptr" << endln;
+        return -1;
+    }
+
+    // Get x and b pointers for dense matrix creation
+    void* xValues = theSOE->getDeviceX();
+    void* bValues = theSOE->getDeviceB();
+    if (!xValues) {
+        opserr << "ERROR: CuDSSLinSolver::setupMatrices() - getDeviceX() returned nullptr" << endln;
+        return -1;
+    }
+    if (!bValues) {
+        opserr << "ERROR: CuDSSLinSolver::setupMatrices() - getDeviceB() returned nullptr" << endln;
+        return -1;
+    }
+
+    /* Destroy existing matrices if they exist */
+    if (m_Matrix != nullptr) {
+        cuDSSCheckError(cudssMatrixDestroy(m_Matrix), "destroy existing cuDSS matrix");
+        m_Matrix = nullptr;
+    }
+    if (m_RHS != nullptr) {
+        cuDSSCheckError(cudssMatrixDestroy(m_RHS), "destroy existing cuDSS RHS");
+        m_RHS = nullptr;
+    }
+    if (m_Solution != nullptr) {
+        cuDSSCheckError(cudssMatrixDestroy(m_Solution), "destroy existing cuDSS solution");
+        m_Solution = nullptr;
+    }
+    
+    /* Create the cuDSS CSR matrix */
+    cudssMatrixType_t mtype = CUDSS_MTYPE_GENERAL;
+    cudssMatrixViewType_t mview = CUDSS_MVIEW_FULL;
+    cudssIndexBase_t ibase = CUDSS_BASE_ZERO;
+    cuDSSCheckError(cudssMatrixCreateCsr(
+        &m_Matrix, numRows, numCols, numNZ, 
+        rowPtrs, nullptr, colIndices, AValues, 
+        m_IndexType, m_ValueType, 
+        mtype, mview, ibase
+    ), "create cuDSS matrix");
+    
+    /* Create the cuDSS dense matrices for RHS and solution */
+    cuDSSCheckError(cudssMatrixCreateDn(
+        &m_RHS, (int64_t)numRows, 1, (int64_t)numRows, bValues, m_ValueType, CUDSS_LAYOUT_COL_MAJOR
+    ), "create cuDSS right-hand side");
+    cuDSSCheckError(cudssMatrixCreateDn(
+        &m_Solution, (int64_t)numRows, 1, (int64_t)numRows, xValues, m_ValueType, CUDSS_LAYOUT_COL_MAJOR
+    ), "create cuDSS solution");
+    
+    /* Symbolic factorization */
+    cuDSSCheckError(cudssExecute(
+        m_Handle, CUDSS_PHASE_ANALYSIS, m_Config, m_Data,
+        m_Matrix, m_Solution, m_RHS
+    ), "cuDSS symbolic factorization");
+
+    if (m_verbose) {
+        opserr << "INFO: CuDSSLinSolver::setupMatrices() - "
+               << "All matrices created and symbolic factorization complete" << endln;
+    }
+    #endif // _CUDSS
+
+    return 0;
+}
+
+// OpenSees API for creating CuDSS solver
+#ifdef _CUDSS
+void* OPS_CuDSSLinSolver()
+{
+    // Use default configuration for now
     std::string dataType = "double";
     bool verbose = false;
     int blockSize = 1;
-};
-
-CudaGenBcsrLinSolver* createCuDSSSolver(const CuDSSConfig& config) {
-    return new CuDSSLinSolver(
-        config.dataType, config.verbose
-    );
-}
-
-void* OPS_CuDSSLinSolver()
-{
-    // Handle case with no arguments - use default configuration
-    if (OPS_GetNumRemainingInputArgs() == 0) {
-        CuDSSConfig defaultConfig; // Use default values
-        auto solver = createCuDSSSolver(defaultConfig);
-        return CudaGenBcsrLinSOE::createDouble(
-            *solver, defaultConfig.blockSize, 
-            false, defaultConfig.verbose
-        );
-    }
-
-    // If we get here, parsing failed
-    opserr << "WARNING: OPS_CuDSSLinSolver() - "
-           << "Failed to parse CuDSSLinSolver parameters" << endln;
-    return nullptr;
+    
+    // Create solver with default settings
+    CuDSSLinSolver* solver = new CuDSSLinSolver(dataType, verbose);
+    
+    // Create and return SOE
+    return CudaGenBcsrLinSOE::createDouble(*solver, blockSize, false, verbose);
 }
 #else // _CUDSS
 void* OPS_CuDSSLinSolver() {

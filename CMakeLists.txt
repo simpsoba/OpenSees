@@ -444,6 +444,34 @@ if(HAVE_CUDA)
       message(STATUS "AMGX support enabled.")
       message(STATUS "Adding include directory ${AMGX_INCLUDE_DIR} and compile definition ${AMGX_FLAG}")
   endif()
+  
+  # CuDSS configuration using CMake config (Linux/Unix only)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    # Common cuDSS install locations on Linux
+    set(CUDSS_HINTS
+      /usr/lib/x86_64-linux-gnu/libcudss/12/cmake
+      /usr/lib/aarch64-linux-gnu/libcudss/12/cmake
+    )
+    
+    find_package(cudss QUIET HINTS ${CUDSS_HINTS})
+    if(cudss_FOUND)
+        message(STATUS "cuDSS found via CMake config")
+        set(CUDSS_FLAG -D_CUDSS)
+        set(HAVE_CUDSS TRUE)
+        message(STATUS "cuDSS support enabled.")
+    else()
+        message(STATUS "cuDSS not found. To enable cuDSS:")
+        message(STATUS "  - Ensure libcudss-dev is installed, or")
+        message(STATUS "  - Set CMAKE_PREFIX_PATH to cuDSS CMake config directory")
+        set(CUDSS_FLAG -D_NOCUDSS)
+        set(HAVE_CUDSS FALSE)
+    endif()
+  else()
+    # Windows: cuDSS support not configured
+    message(STATUS "cuDSS support not configured for Windows platform")
+    set(CUDSS_FLAG -D_NOCUDSS)
+    set(HAVE_CUDSS FALSE)
+  endif()
 else()
   message(STATUS "CUDAToolkit was NOT found.")
   set(CUDA_LIBRARIES "")
@@ -452,7 +480,7 @@ endif()
 
 message(STATUS "SCALAPACK_LIBRARIES=${SCALAPACK_LIBRARIES}")
 
-# Helper function to configure CUDA and AMGX for targets
+# Helper function to configure CUDA, AMGX, and CUDSS for targets
 function(configure_cuda_for_target target_name)
   if(HAVE_CUDA)
     target_compile_definitions(${target_name} PUBLIC ${CUDA_FLAG})
@@ -467,6 +495,11 @@ function(configure_cuda_for_target target_name)
       target_include_directories(${target_name} PUBLIC ${AMGX_INCLUDE_DIR})
       target_compile_definitions(${target_name} PUBLIC ${AMGX_FLAG})
       target_link_libraries(${target_name} ${AMGX_LIBRARIES})
+    endif()
+    
+    if(HAVE_CUDSS)
+      target_compile_definitions(${target_name} PUBLIC ${CUDSS_FLAG})
+      target_link_libraries(${target_name} cudss)
     endif()
   endif()
 endfunction()
@@ -624,8 +657,8 @@ target_link_libraries(OpenSeesLIB
 # CUDA support as OPS_ sublibrary
 if(HAVE_CUDA)
   add_library(OPS_Cuda OBJECT
-    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCuda/CudaGenBcsrLinSOE.cu
-    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCuda/CudaGenBcsrLinSolver.cu
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaGenBcsrLinSOE.cu
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaGenBcsrLinSolver.cu
   )
   
   # Configure CUDA for the OPS_Cuda library
@@ -634,7 +667,14 @@ if(HAVE_CUDA)
   # Add AMGX-specific sources if AMGX is available
   if(DEFINED AMGX_NO_MPI_DIR)
     target_sources(OPS_Cuda PRIVATE
-      ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCuda/AmgXLinSolver.cu
+      ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/AmgXLinSolver.cu
+    )
+  endif()
+  
+  # Add cuDSS-specific sources if CUDSS is available
+  if(HAVE_CUDSS)
+    target_sources(OPS_Cuda PRIVATE
+      ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuDSSLinSolver.cu
     )
   endif()
 endif()

@@ -507,6 +507,9 @@ void* OPS_FullGenLinLapackSolver();
 #ifdef _AMGX
 void* OPS_AmgXLinSolver();
 #endif // _AMGX
+#ifdef _CUDSS
+void* OPS_CuDSSLinSolver();
+#endif // _CUDSS
 
 void* OPS_PlainNumberer();
 

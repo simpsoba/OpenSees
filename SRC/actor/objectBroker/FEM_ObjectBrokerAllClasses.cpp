@@ -692,7 +692,7 @@
 #include "DomainSolver.h"
 
 #ifdef _CUDA
-#include "sparseCuda/CudaGenBcsrLinSOE.h"
+#include "sparseCUDA/CudaGenBcsrLinSOE.h"
 #endif
 #include "fullGEN/FullGenLinSOE.h"
 #include "bandGEN/BandGenLinSOE.h"
@@ -741,8 +741,6 @@
 #include "PetscSolver.h"
 #include "SparseGenColLinSOE.h"
 #endif
-
-// CUDA includes moved to separate CUDA file to avoid Thrust compilation issues
 
 #ifdef _MUMPS
 #include "MumpsSOE.h"

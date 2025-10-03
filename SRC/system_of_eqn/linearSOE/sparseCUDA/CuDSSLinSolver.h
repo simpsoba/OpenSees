@@ -17,10 +17,10 @@
 **   Filip C. Filippou (filippou@ce.berkeley.edu)                     **
 **                                                                    **
 ** ****************************************************************** */                                                                        
-                                                                        
-// $Source: OpenSees/SRC/system_of_eqn/linearSOE/sparseCuda/AmgXLinSolver.h
+                                                                       
+// $Source: OpenSees/SRC/system_of_eqn/linearSOE/sparseCUDA/CuDSSLinSolver.h
 //
-// Written: gaaraujo 
+// Written: gaaraujo
 // Created: 10/2025
 //
 // Description: This file contains the class definition for CuDSSLinSolver.
@@ -77,7 +77,10 @@ private:
     bool m_verbose;
 
     // cuDSS initializer (to be used by constructors only)
-    void _init(std::string dataType);
+    void init(std::string dataType);
+    
+    // Helper function to initialize cuDSS matrices when structure changes
+    int setupMatrices();
 
     #ifdef _CUDSS
     // Static members

@@ -205,7 +205,7 @@ AmgXLinSolver::AmgXLinSolver(
         abs_tolerance, rel_tolerance, monitor_residual);
     const char* nullConfigFile = nullptr;
     const char* mode = "dDDI";
-    _init(nullConfigFile, configOptions.c_str(), mode);
+    init(nullConfigFile, configOptions.c_str(), mode);
     #endif // _AMGX
 }
 
@@ -216,13 +216,13 @@ AmgXLinSolver::AmgXLinSolver(
     m_verbose(verbose)
 {
     #ifdef _AMGX
-    _init(configFile, configOptions, mode, callbackStream);
+    init(configFile, configOptions, mode, callbackStream);
     #endif // _AMGX
 }
 
 
-void AmgXLinSolver::_init(const char *configFile, const char *configOptions, 
-                        const char *mode, OPS_Stream* callbackStream) 
+void AmgXLinSolver::init(const char *configFile, const char *configOptions, 
+                         const char *mode, OPS_Stream* callbackStream) 
 {
     #ifdef _AMGX
     /* Initialize AMGX library - only done once across all instances */
@@ -290,7 +290,7 @@ void AmgXLinSolver::_init(const char *configFile, const char *configOptions,
     } else if (strcmp(mode, "dFFI") == 0) {
         m_Mode = AMGX_mode_dFFI; // device, float matrix, float vector, int index
     } else {
-        opserr << "WARNING: AmgXLinSolver::_init() - "
+        opserr << "WARNING: AmgXLinSolver::init() - "
                << "Invalid mode. Only dDDI and dFFI are supported. "
                << "Setting mode to dDDI" << endln;
         m_Mode = AMGX_mode_dDDI; // device, double matrix, double vector, int index

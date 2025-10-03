@@ -33,4 +33,4 @@ add_subdirectory(profileSPD)
 add_subdirectory(itpack)
 
 # CUDA sparse solvers
-add_subdirectory(sparseCuda)
+add_subdirectory(sparseCUDA)
