@@ -58,8 +58,11 @@ class CuDSSLinSolver : public CudaGenBcsrLinSolver
 public:
     // Constructor with default parameters
     CuDSSLinSolver(
-        std::string dataType = "double",
-        bool verbose = false
+        const char* precision = "dDDI",
+        bool verbose = false,
+        bool hybridMemoryMode = false,
+        size_t hybridDeviceMemoryLimit = 0,
+        bool hybridExecuteMode = false
     );
     
     // Destructor
@@ -75,9 +78,14 @@ protected:
 private:
     // Verbosity flag
     bool m_verbose;
+    
+    // Hybrid mode settings
+    bool m_hybridMemoryMode;
+    size_t m_hybridDeviceMemoryLimit;
+    bool m_hybridExecuteMode;
 
     // cuDSS initializer (to be used by constructors only)
-    void init(std::string dataType);
+    void init(const char* precision);
     
     // Helper function to initialize cuDSS matrices when structure changes
     int setupMatrices();

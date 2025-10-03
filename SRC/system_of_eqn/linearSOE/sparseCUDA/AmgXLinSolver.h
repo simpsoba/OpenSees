@@ -79,7 +79,7 @@ public:
     // Constructor with config file and options
     AmgXLinSolver(
         const char *configFile = nullptr, const char *configOptions = nullptr,
-        const char *mode = "dDDI", bool verbose = false, 
+        const char *precision = "dDDI", bool verbose = false, 
         OPS_Stream* callbackStream = (OPS_Stream*)&opserr
     );
     
@@ -107,7 +107,7 @@ private:
     // AMGX initializer (to be used by constructors only)
     void init(const char *configFile = nullptr, 
               const char *configOptions = nullptr, 
-              const char *mode = "dDDI",
+              const char *precision = "dDDI",
               OPS_Stream* callbackStream = (OPS_Stream*)&opserr);
 
     #ifdef _AMGX

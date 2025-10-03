@@ -204,25 +204,25 @@ AmgXLinSolver::AmgXLinSolver(
         solver, preconditioner, smoother, max_iters, 
         abs_tolerance, rel_tolerance, monitor_residual);
     const char* nullConfigFile = nullptr;
-    const char* mode = "dDDI";
-    init(nullConfigFile, configOptions.c_str(), mode);
+    const char* precision = "dDDI";
+    init(nullConfigFile, configOptions.c_str(), precision);
     #endif // _AMGX
 }
 
 AmgXLinSolver::AmgXLinSolver( 
     const char *configFile, const char *configOptions, 
-    const char *mode, bool verbose, OPS_Stream* callbackStream)
+    const char *precision, bool verbose, OPS_Stream* callbackStream)
     :CudaGenBcsrLinSolver(SOLVER_TAGS_AmgXLinSolver), 
     m_verbose(verbose)
 {
     #ifdef _AMGX
-    init(configFile, configOptions, mode, callbackStream);
+    init(configFile, configOptions, precision, callbackStream);
     #endif // _AMGX
 }
 
 
 void AmgXLinSolver::init(const char *configFile, const char *configOptions, 
-                         const char *mode, OPS_Stream* callbackStream) 
+                         const char *precision, OPS_Stream* callbackStream) 
 {
     #ifdef _AMGX
     /* Initialize AMGX library - only done once across all instances */
@@ -284,15 +284,15 @@ void AmgXLinSolver::init(const char *configFile, const char *configOptions,
         AMGX_resources_create_simple(&m_Resources, m_Config);
     }
 
-    /* Set AmgX mode */
-    if (strcmp(mode, "dDDI") == 0) {
+    /* Set AmgX precision mode */
+    if (strcmp(precision, "dDDI") == 0) {
         m_Mode = AMGX_mode_dDDI; // device, double matrix, double vector, int index
-    } else if (strcmp(mode, "dFFI") == 0) {
+    } else if (strcmp(precision, "dFFI") == 0) {
         m_Mode = AMGX_mode_dFFI; // device, float matrix, float vector, int index
     } else {
         opserr << "WARNING: AmgXLinSolver::init() - "
-               << "Invalid mode. Only dDDI and dFFI are supported. "
-               << "Setting mode to dDDI" << endln;
+               << "Invalid precision '" << precision << "'. Only dDDI and dFFI are supported. "
+               << "Setting precision to dDDI" << endln;
         m_Mode = AMGX_mode_dDDI; // device, double matrix, double vector, int index
     }
 
@@ -504,7 +504,7 @@ CudaGenBcsrLinSolver* createAmgXSolver(const AmgXSimpleConfig& config);
 struct AmgXGeneralConfig {
     std::string configFile;
     std::string configOptions;
-    std::string mode = "dDDI";
+    std::string precision = "dDDI";
     bool verbose = false;
     OPS_Stream* callbackStream = (OPS_Stream*)&opserr;
     std::string callbackFilename;  // Store the filename for FileStream creation
@@ -520,7 +520,7 @@ struct AmgXSimpleConfig {
     double absTolerance = 1e-12;
     double relTolerance = 1e-6;
     int monitorResidual = 1;
-    std::string mode = "dDDI";
+    std::string precision = "dDDI";
     bool verbose = false;
     int blockSize = 1;
     bool paddingEnabled = true;
@@ -552,11 +552,10 @@ private:
     static auto findParameter(const std::string& key, 
                             const std::unordered_map<std::string, std::function<void(ConfigType&)>>& parsers) {
         // Strip leading dash if present
-        const char* canonicalKey = key.c_str();
-        if (key[0] == '-') {
-            canonicalKey = key.c_str() + 1;
+        if (!key.empty() && key[0] == '-') {
+            return parsers.find(key.substr(1));
         }
-        return parsers.find(canonicalKey);
+        return parsers.find(key);
     }
 };
 
@@ -571,12 +570,20 @@ AmgXParameterParser::generalConfigParsers = {
         const char* value = OPS_GetString();
         if (value) config.configOptions = value;
     }},
-    {"mode", [](AmgXGeneralConfig& config) { 
+    {"precision", [](AmgXGeneralConfig& config) { 
         const char* value = OPS_GetString();
         if (value && (strcmp(value, "dDDI") == 0 || strcmp(value, "dFFI") == 0)) {
-            config.mode = value;
+            config.precision = value;
         } else if (value) {
-            throw std::invalid_argument("Invalid mode. Only dDDI and dFFI are supported.");
+            throw std::invalid_argument("Invalid precision. Only dDDI and dFFI are supported.");
+        }
+    }},
+    {"mode", [](AmgXGeneralConfig& config) {  // Alias for precision (backward compatibility)
+        const char* value = OPS_GetString();
+        if (value && (strcmp(value, "dDDI") == 0 || strcmp(value, "dFFI") == 0)) {
+            config.precision = value;
+        } else if (value) {
+            throw std::invalid_argument("Invalid mode/precision. Only dDDI and dFFI are supported.");
         }
     }},
     {"verbose", [](AmgXGeneralConfig& config) { 
@@ -659,12 +666,20 @@ AmgXParameterParser::simpleConfigParsers = {
             config.monitorResidual = val;
         }
     }},
-    {"mode", [](AmgXSimpleConfig& config) { 
+    {"precision", [](AmgXSimpleConfig& config) { 
         const char* value = OPS_GetString();
         if (value && (strcmp(value, "dDDI") == 0 || strcmp(value, "dFFI") == 0)) {
-            config.mode = value;
+            config.precision = value;
         } else if (value) {
-            throw std::invalid_argument("Invalid mode. Only dDDI and dFFI are supported.");
+            throw std::invalid_argument("Invalid precision. Only dDDI and dFFI are supported.");
+        }
+    }},
+    {"mode", [](AmgXSimpleConfig& config) {  // Alias for precision (backward compatibility)
+        const char* value = OPS_GetString();
+        if (value && (strcmp(value, "dDDI") == 0 || strcmp(value, "dFFI") == 0)) {
+            config.precision = value;
+        } else if (value) {
+            throw std::invalid_argument("Invalid mode/precision. Only dDDI and dFFI are supported.");
         }
     }},
     {"verbose", [](AmgXSimpleConfig& config) { 
@@ -741,29 +756,31 @@ bool AmgXParameterParser::parseSimpleConfigParameters(AmgXSimpleConfig& config) 
 
 // Print usage information for both options
 void AmgXParameterParser::printGeneralUsageInfo() {
-    opserr << "AmgXParameterParser::printGeneralUsageInfo() - "
-           << "Expected: system AmgX "
-           << "<-configFile configFile> "
-           << "<-configOptions configOptions> "
-           << "<-mode mode> "
-           << "<-blockSize blockSize> "
-           << "<-verbose verbose> "
-           << "<-callback callbackStream|callbackFile>" << endln;
+    opserr << "AmgXParameterParser::printGeneralUsageInfo() - " << endln;
+    opserr << "Usage: system AmgX [options]" << endln;
+    opserr << "Options:" << endln;
+    opserr << "  -configFile <path>              AmgX JSON config file" << endln;
+    opserr << "  -configOptions <string>         AmgX config string" << endln;
+    opserr << "  -precision <dDDI|dFFI>          Precision mode (default: dDDI)" << endln;
+    opserr << "  -blockSize <int>                Block size (default: 1)" << endln;
+    opserr << "  -verbose <0|1>                  Enable verbose output (default: 0)" << endln;
+    opserr << "  -callback <stream|file>         Callback output (default|opserr|none|filename)" << endln;
 }
 
 void AmgXParameterParser::printSimpleUsageInfo() {
-    opserr << "AmgXParameterParser::printSimpleUsageInfo() - "
-           << "Expected: system AmgX "
-           << "<-solver solver> "
-           << "<-preconditioner preconditioner> "
-           << "<-smoother smoother> "
-           << "<-maxIters maxIters> "
-           << "<-absTolerance absTolerance> "
-           << "<-relTolerance relTolerance> "
-           << "<-monitorResidual monitorResidual> "
-           << "<-mode mode> "
-           << "<-blockSize blockSize> "
-           << "<-verbose verbose> " << endln;
+    opserr << "AmgXParameterParser::printSimpleUsageInfo() - " << endln;
+    opserr << "Usage: system AmgX [options]" << endln;
+    opserr << "Options:" << endln;
+    opserr << "  -solver <name>                  Solver type (e.g., PCG, GMRES, BiCGSTAB)" << endln;
+    opserr << "  -preconditioner <name>          Preconditioner (e.g., JACOBI_L1, AMG, BLOCK_JACOBI)" << endln;
+    opserr << "  -smoother <name>                Smoother (e.g., JACOBI_L1, BLOCK_JACOBI)" << endln;
+    opserr << "  -maxIters <int>                 Max iterations (default: 1000)" << endln;
+    opserr << "  -absTolerance <double>          Absolute tolerance (default: 1e-12)" << endln;
+    opserr << "  -relTolerance <double>          Relative tolerance (default: 1e-6)" << endln;
+    opserr << "  -monitorResidual <0|1>          Monitor residual (default: 1)" << endln;
+    opserr << "  -precision <dDDI|dFFI>          Precision mode (default: dDDI)" << endln;
+    opserr << "  -blockSize <int>                Block size (default: 1)" << endln;
+    opserr << "  -verbose <0|1>                  Enable verbose output (default: 0)" << endln;
 }
 
 // Factory functions for creating solvers and SOEs
@@ -771,7 +788,7 @@ CudaGenBcsrLinSolver* createAmgXSolver(const AmgXGeneralConfig& config) {
     return new AmgXLinSolver(
         config.configFile.c_str(), 
         config.configOptions.c_str(), 
-        config.mode.c_str(),
+        config.precision.c_str(),
         config.verbose, 
         config.callbackStream
     );
@@ -840,7 +857,7 @@ void* OPS_AmgXLinSolver()
             
             // Create solver and SOE
             auto solver = createAmgXSolver(generalConfig);
-            if (generalConfig.mode == "dDDI") {
+            if (generalConfig.precision == "dDDI") {
                 return CudaGenBcsrLinSOE::createDouble(
                     *solver, generalConfig.blockSize, 
                     generalConfig.paddingEnabled, generalConfig.verbose
@@ -870,7 +887,7 @@ void* OPS_AmgXLinSolver()
         
         // Create solver and SOE
         auto solver = createAmgXSolver(simpleConfig);
-        if (simpleConfig.mode == "dDDI") {
+        if (simpleConfig.precision == "dDDI") {
             return CudaGenBcsrLinSOE::createDouble(
                 *solver, simpleConfig.blockSize, 
                 simpleConfig.paddingEnabled, simpleConfig.verbose
@@ -886,6 +903,9 @@ void* OPS_AmgXLinSolver()
     // If we get here, parsing failed
     opserr << "WARNING: OPS_AmgXLinSolver() - "
            << "Failed to parse AmgXLinSolver parameters" << endln;
+    AmgXParameterParser::printGeneralUsageInfo();
+    opserr << "Alternatively, use the simple constructor: " << endln;
+    AmgXParameterParser::printSimpleUsageInfo();
     return nullptr;
 }
 #else // _AMGX

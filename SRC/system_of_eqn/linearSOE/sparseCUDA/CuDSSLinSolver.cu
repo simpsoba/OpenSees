@@ -94,16 +94,21 @@ namespace {
     }
     #endif // _CUDSS
 }
-CuDSSLinSolver::CuDSSLinSolver(std::string dataType, bool verbose)
+CuDSSLinSolver::CuDSSLinSolver(const char* precision, bool verbose, 
+                               bool hybridMemoryMode, size_t hybridDeviceMemoryLimit, 
+                               bool hybridExecuteMode)
     :CudaGenBcsrLinSolver(SOLVER_TAGS_CuDSSLinSolver), 
-    m_verbose(verbose)
+    m_verbose(verbose),
+    m_hybridMemoryMode(hybridMemoryMode),
+    m_hybridDeviceMemoryLimit(hybridDeviceMemoryLimit),
+    m_hybridExecuteMode(hybridExecuteMode)
 {
     #ifdef _CUDSS
-    init(dataType);
+    init(precision);
     #endif // _CUDSS
 }
 
-void CuDSSLinSolver::init(std::string dataType)
+void CuDSSLinSolver::init(const char* precision)
 {
     #ifdef _CUDSS
     if (!m_CuDSSInitialized) {
@@ -128,16 +133,61 @@ void CuDSSLinSolver::init(std::string dataType)
     // (optional) Modifying solver settings, e.g., reordering algorithm
     cudssAlgType_t reorderAlgorithm = CUDSS_ALG_DEFAULT;
     cudssConfigSet(m_Config, CUDSS_CONFIG_REORDERING_ALG, &reorderAlgorithm, sizeof(cudssAlgType_t));
+    
+    /* Configure hybrid modes (must be set before analysis phase) */
+    if (m_hybridMemoryMode) {
+        int hybridMemoryModeEnabled = 1;
+        cuDSSCheckError(cudssConfigSet(m_Config, CUDSS_CONFIG_HYBRID_MODE, &hybridMemoryModeEnabled, sizeof(int)), 
+                       "enable hybrid memory mode");
+        
+        // Optionally set device memory limit
+        if (m_hybridDeviceMemoryLimit > 0) {
+            cuDSSCheckError(cudssConfigSet(m_Config, CUDSS_CONFIG_HYBRID_DEVICE_MEMORY_LIMIT, 
+                                          &m_hybridDeviceMemoryLimit, sizeof(size_t)), 
+                           "set hybrid device memory limit");
+        }
+        
+        if (m_verbose) {
+            opserr << "INFO: CuDSSLinSolver::init() - "
+                   << "Hybrid memory mode enabled";
+            if (m_hybridDeviceMemoryLimit > 0) {
+                opserr << " with device memory limit = " << m_hybridDeviceMemoryLimit << " bytes";
+            }
+            opserr << endln;
+        }
+    }
+    
+    if (m_hybridExecuteMode) {
+        int hybridExecuteModeEnabled = 1;
+        cuDSSCheckError(cudssConfigSet(m_Config, CUDSS_CONFIG_HYBRID_EXECUTE_MODE, &hybridExecuteModeEnabled, sizeof(int)), 
+                       "enable hybrid execute mode");
+        
+        if (m_verbose) {
+            opserr << "INFO: CuDSSLinSolver::init() - "
+                   << "Hybrid execute mode enabled" << endln;
+        }
+    }
 
     m_Matrix = nullptr;
     m_RHS = nullptr;
     m_Solution = nullptr;
     
-    m_IndexType = CUDA_R_32I;
-    if (dataType == "float") {
-        m_ValueType = CUDA_R_32F;
+    /* Parse precision string (format: dXYI where X=matrix type, Y=vector type, I=index type)
+     * d = device (always required for GPU)
+     * X,Y = D (double) or F (float)
+     * I = I (int32) - currently only int32 is supported
+     */
+    m_IndexType = CUDA_R_32I; // Currently only 32-bit integers supported
+    
+    if (strcmp(precision, "dFFI") == 0) {
+        m_ValueType = CUDA_R_32F; // Float precision
+    } else if (strcmp(precision, "dDDI") == 0) {
+        m_ValueType = CUDA_R_64F; // Double precision
     } else {
-        m_ValueType = CUDA_R_64F;
+        opserr << "WARNING: CuDSSLinSolver::init() - "
+               << "Invalid precision '" << precision << "'. Only dDDI and dFFI are supported. "
+               << "Setting precision to dDDI (double)" << endln;
+        m_ValueType = CUDA_R_64F; // Default to double precision
     }
 
     /* Increment counter */
@@ -399,18 +449,162 @@ int CuDSSLinSolver::setupMatrices() {
 
 // OpenSees API for creating CuDSS solver
 #ifdef _CUDSS
+
+struct CuDSSConfig {
+    std::string precision = "dDDI";
+    bool verbose = false;
+    bool hybridMemoryMode = false;        // Hybrid host/device memory mode
+    size_t hybridDeviceMemoryLimit = 0;   // Device memory limit for hybrid memory mode (0 = use internal heuristic)
+    bool hybridExecuteMode = false;       // Hybrid host/device execute mode
+};
+
+class CuDSSParameterParser {
+private:
+    static std::unordered_map<std::string, std::function<void(CuDSSConfig&)>> const configParsers;
+    
+    // Helper function to strip dashes and find parameter
+    static std::unordered_map<std::string, std::function<void(CuDSSConfig&)>>::const_iterator 
+    findParameter(const std::string& key, 
+                  const std::unordered_map<std::string, std::function<void(CuDSSConfig&)>>& parsers) {
+        // Strip leading dash if present
+        if (!key.empty() && key[0] == '-') {
+            return parsers.find(key.substr(1));
+        }
+        return parsers.find(key);
+    }
+
+public:
+    static bool parseParameters(CuDSSConfig& config);
+    static void printUsageInfo();
+};
+
+const std::unordered_map<std::string, std::function<void(CuDSSConfig&)>> 
+CuDSSParameterParser::configParsers = {
+    {"precision", [](CuDSSConfig& config) { 
+        const char* value = OPS_GetString();
+        if (value && (strcmp(value, "dDDI") == 0 || strcmp(value, "dFFI") == 0)) {
+            config.precision = value;
+        } else if (value) {
+            throw std::invalid_argument("Invalid precision. Only dDDI and dFFI are supported.");
+        }
+    }},
+    {"verbose", [](CuDSSConfig& config) { 
+        int numData = 1;
+        int flag = 0;
+        if (OPS_GetIntInput(&numData, &flag) == 0) {
+            if (flag != 0 && flag != 1) throw std::invalid_argument("verbose must be 0 or 1");
+            config.verbose = (flag == 1);
+        }
+    }},
+    {"hybridMemoryMode", [](CuDSSConfig& config) { 
+        int numData = 1;
+        int flag = 0;
+        if (OPS_GetIntInput(&numData, &flag) == 0) {
+            if (flag != 0 && flag != 1) throw std::invalid_argument("hybridMemoryMode must be 0 or 1");
+            config.hybridMemoryMode = (flag == 1);
+        }
+    }},
+    {"hybridDeviceMemoryLimit", [](CuDSSConfig& config) { 
+        int numData = 1;
+        double limit = 0.0;
+        if (OPS_GetDoubleInput(&numData, &limit) == 0) {
+            if (limit < 0.0) throw std::invalid_argument("hybridDeviceMemoryLimit cannot be negative");
+            config.hybridDeviceMemoryLimit = static_cast<size_t>(limit);
+        }
+    }},
+    {"hybridExecuteMode", [](CuDSSConfig& config) { 
+        int numData = 1;
+        int flag = 0;
+        if (OPS_GetIntInput(&numData, &flag) == 0) {
+            if (flag != 0 && flag != 1) throw std::invalid_argument("hybridExecuteMode must be 0 or 1");
+            config.hybridExecuteMode = (flag == 1);
+        }
+    }}
+};
+
+bool CuDSSParameterParser::parseParameters(CuDSSConfig& config) {
+    try {
+        while (OPS_GetNumRemainingInputArgs() > 0) {
+            const char* key = OPS_GetString();
+            if (!key) {
+                opserr << "WARNING: CuDSSParameterParser::parseParameters() - "
+                       << "Invalid input argument" << endln;
+                return false;
+            }
+            
+            auto it = findParameter(key, configParsers);
+            if (it != configParsers.end()) {
+                it->second(config);
+            } else {
+                continue;
+            }
+        }
+        return true;
+    } catch (const std::exception& e) {
+        opserr << "WARNING: CuDSSParameterParser::parseParameters() - "
+               << e.what() << endln;
+        return false;
+    }
+}
+
+void CuDSSParameterParser::printUsageInfo() {
+    opserr << "CuDSSParameterParser::printUsageInfo() - " << endln;
+    opserr << "Usage: system CuDSS [options]" << endln;
+    opserr << "Options:" << endln;
+    opserr << "  -precision <dDDI|dFFI>          Precision mode (default: dDDI)" << endln;
+    opserr << "  -verbose <0|1>                  Enable verbose output (default: 0)" << endln;
+    opserr << "  -hybridMemoryMode <0|1>         Hybrid host/device memory mode (default: 0)" << endln;
+    opserr << "  -hybridDeviceMemoryLimit <bytes> Device memory limit for hybrid mode (default: 0=auto)" << endln;
+    opserr << "  -hybridExecuteMode <0|1>        Hybrid host/device execute mode (default: 0)" << endln;
+    opserr << "Note: hybridMemoryMode and hybridExecuteMode are mutually exclusive" << endln;
+}
+
 void* OPS_CuDSSLinSolver()
 {
-    // Use default configuration for now
-    std::string dataType = "double";
-    bool verbose = false;
-    int blockSize = 1;
+    CuDSSConfig config;
     
-    // Create solver with default settings
-    CuDSSLinSolver* solver = new CuDSSLinSolver(dataType, verbose);
+    // Parse command-line arguments
+    if (!CuDSSParameterParser::parseParameters(config)) {
+        opserr << "WARNING: OPS_CuDSSLinSolver() - "
+               << "Failed to parse parameters" << endln;
+        CuDSSParameterParser::printUsageInfo();
+        return nullptr;
+    }
     
-    // Create and return SOE
-    return CudaGenBcsrLinSOE::createDouble(*solver, blockSize, false, verbose);
+    // Validate that hybrid modes are mutually exclusive
+    if (config.hybridMemoryMode && config.hybridExecuteMode) {
+        opserr << "ERROR: OPS_CuDSSLinSolver() - "
+               << "hybridMemoryMode and hybridExecuteMode are mutually exclusive. "
+               << "Only one can be enabled at a time." << endln;
+        return nullptr;
+    }
+    
+    // Validate that hybridDeviceMemoryLimit is only used with hybridMemoryMode
+    if (config.hybridDeviceMemoryLimit > 0 && !config.hybridMemoryMode) {
+        opserr << "WARNING: OPS_CuDSSLinSolver() - "
+               << "hybridDeviceMemoryLimit is only valid with hybridMemoryMode enabled. "
+               << "Ignoring hybridDeviceMemoryLimit." << endln;
+    }
+    
+    // Create solver with all configuration options
+    CuDSSLinSolver* solver = new CuDSSLinSolver(
+        config.precision.c_str(), 
+        config.verbose,
+        config.hybridMemoryMode,
+        config.hybridDeviceMemoryLimit,
+        config.hybridExecuteMode
+    );
+    
+    // CuDSS only supports scalar CSR (blockSize = 1, no padding)
+    const int blockSize = 1;
+    const bool paddingEnabled = false;
+    
+    // Create and return SOE based on precision
+    if (config.precision == "dFFI") {
+        return CudaGenBcsrLinSOE::createFloat(*solver, blockSize, paddingEnabled, config.verbose);
+    } else {
+        return CudaGenBcsrLinSOE::createDouble(*solver, blockSize, paddingEnabled, config.verbose);
+    }
 }
 #else // _CUDSS
 void* OPS_CuDSSLinSolver() {
