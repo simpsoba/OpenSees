@@ -97,12 +97,15 @@ namespace {
 }
 CuDSSLinSolver::CuDSSLinSolver(const char* precision, bool verbose, 
                                bool hybridMemoryMode, size_t hybridDeviceMemoryLimit, 
-                               bool hybridExecuteMode)
+                               bool hybridExecuteMode, bool multiThreadingMode,
+                               const char* threadingLibPath)
     :CudaGenBcsrLinSolver(SOLVER_TAGS_CuDSSLinSolver), 
     m_verbose(verbose),
     m_hybridMemoryMode(hybridMemoryMode),
     m_hybridDeviceMemoryLimit(hybridDeviceMemoryLimit),
-    m_hybridExecuteMode(hybridExecuteMode)
+    m_hybridExecuteMode(hybridExecuteMode),
+    m_multiThreadingMode(multiThreadingMode),
+    m_threadingLibPath(threadingLibPath ? threadingLibPath : "")
 {
     #ifdef _CUDSS
     init(precision);
@@ -122,6 +125,39 @@ void CuDSSLinSolver::init(const char* precision)
         
         /* Set the CUDA stream */
         cuDSSCheckError(cudssSetStream(m_Handle, m_cudaStream), "set CUDA stream");
+
+        /* Setup OpenMP multi-threading */
+        #ifdef CUDSS_USE_OPENMP
+        if (m_multiThreadingMode) {
+            // Determine threading library path
+            // If "NULL" -> pass NULL to cudssSetThreadingLayer (let cuDSS use CUDSS_THREADING_LIB env var)
+            // Otherwise use provided path (default is set in config struct)
+            const char* threadingLib = (m_threadingLibPath == "NULL") ? nullptr : m_threadingLibPath.c_str();
+            
+            // Set the threading layer in cuDSS
+            cudssStatus_t status = cudssSetThreadingLayer(m_Handle, threadingLib);
+            if (status != CUDSS_STATUS_SUCCESS) {
+                opserr << "WARNING: CuDSSLinSolver::init() - "
+                       << "cudssSetThreadingLayer failed with status " << status << endln;
+                opserr << "Continuing without multi-threading support" << endln;
+            } else if (m_verbose) {
+                opserr << "INFO: CuDSSLinSolver::init() - "
+                       << "OpenMP multi-threading mode enabled" << endln;
+                if (threadingLib) {
+                    opserr << "Threading library: " << threadingLib << endln;
+                } else {
+                    opserr << "Threading library: NULL ";
+                    opserr << "(cuDSS will use the threading layer library name ";
+                    opserr << "from the environment variable 'CUDSS_THREADING_LIB')" << endln;
+                }
+            }
+        }
+        #else
+        if (m_multiThreadingMode && m_verbose) {
+            opserr << "INFO: CuDSSLinSolver::init() - "
+                   << "OpenMP multi-threading support not available (OpenMP not found at build time)" << endln;
+        }
+        #endif // CUDSS_USE_OPENMP
 
         /* Initialize cuDSS */
         m_CuDSSInitialized = true;
@@ -457,6 +493,8 @@ struct CuDSSConfig {
     bool hybridMemoryMode = false;        // Hybrid host/device memory mode
     size_t hybridDeviceMemoryLimit = 0;   // Device memory limit for hybrid memory mode (0 = use internal heuristic)
     bool hybridExecuteMode = false;       // Hybrid host/device execute mode
+    bool multiThreadingMode = false;      // OpenMP multi-threading mode (requires OpenMP at build time)
+    std::string threadingLibPath = "/usr/lib/x86_64-linux-gnu/libcudss_mtlayer_gomp.so";  // Threading layer library path ("NULL" = pass NULL to cuDSS)
 };
 
 class CuDSSParameterParser {
@@ -509,6 +547,18 @@ CuDSSParameterParser::configParsers = {
             if (flag != 0 && flag != 1) throw std::invalid_argument("hybridExecuteMode must be 0 or 1");
             config.hybridExecuteMode = (flag == 1);
         }
+    }},
+    {"multiThreadingMode", [](CuDSSConfig& config) { 
+        int numData = 1;
+        int flag = 0;
+        if (OPS_GetIntInput(&numData, &flag) == 0) {
+            if (flag != 0 && flag != 1) throw std::invalid_argument("multiThreadingMode must be 0 or 1");
+            config.multiThreadingMode = (flag == 1);
+        }
+    }},
+    {"threadingLibPath", [](CuDSSConfig& config) { 
+        const char* value = OPS_GetString();
+        if (value) config.threadingLibPath = value;
     }}
 };
 
@@ -546,7 +596,14 @@ void CuDSSParameterParser::printUsageInfo() {
     opserr << "  -hybridMemoryMode <0|1>         Hybrid host/device memory mode (default: 0)" << endln;
     opserr << "  -hybridDeviceMemoryLimit <bytes> Device memory limit for hybrid mode (default: 0=auto)" << endln;
     opserr << "  -hybridExecuteMode <0|1>        Hybrid host/device execute mode (default: 0)" << endln;
-    opserr << "Note: hybridMemoryMode and hybridExecuteMode are mutually exclusive" << endln;
+    opserr << "  -multiThreadingMode <0|1>       OpenMP multi-threading mode (default: 0)" << endln;
+    opserr << "                                  (requires OpenMP at build time)" << endln;
+    opserr << "  -threadingLibPath <path|NULL>   Path to threading layer library" << endln;
+    opserr << "                                  (default: /usr/lib/x86_64-linux-gnu/libcudss_mtlayer_gomp.so," << endln;
+    opserr << "                                   use 'NULL' to let cuDSS choose via CUDSS_THREADING_LIB env var)" << endln;
+    opserr << "Notes:" << endln;
+    opserr << "  - hybridMemoryMode and hybridExecuteMode are mutually exclusive" << endln;
+    opserr << "  - To control thread count: export OMP_NUM_THREADS=<n> before running OpenSees" << endln;
 }
 
 void* OPS_CuDSSLinSolver()
@@ -582,7 +639,9 @@ void* OPS_CuDSSLinSolver()
         config.verbose,
         config.hybridMemoryMode,
         config.hybridDeviceMemoryLimit,
-        config.hybridExecuteMode
+        config.hybridExecuteMode,
+        config.multiThreadingMode,
+        config.threadingLibPath.c_str()
     );
     
     // CuDSS only supports scalar CSR (blockSize = 1, no padding)

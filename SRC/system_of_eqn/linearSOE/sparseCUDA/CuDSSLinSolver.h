@@ -62,7 +62,9 @@ public:
         bool verbose = false,
         bool hybridMemoryMode = false,
         size_t hybridDeviceMemoryLimit = 0,
-        bool hybridExecuteMode = false
+        bool hybridExecuteMode = false,
+        bool multiThreadingMode = false,
+        const char* threadingLibPath = nullptr
     );
     
     // Destructor
@@ -83,6 +85,10 @@ private:
     bool m_hybridMemoryMode;
     size_t m_hybridDeviceMemoryLimit;
     bool m_hybridExecuteMode;
+    
+    // Multi-threading settings
+    bool m_multiThreadingMode;
+    std::string m_threadingLibPath;
 
     // cuDSS initializer (to be used by constructors only)
     void init(const char* precision);
