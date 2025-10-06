@@ -42,6 +42,7 @@
 #include <elementAPI.h>
 #include <FileStream.h>
 #include <unordered_map>
+#include "ParameterUtils.h"
 #endif // _CUDSS
 
 // C++ includes
@@ -461,17 +462,6 @@ struct CuDSSConfig {
 class CuDSSParameterParser {
 private:
     static std::unordered_map<std::string, std::function<void(CuDSSConfig&)>> const configParsers;
-    
-    // Helper function to strip dashes and find parameter
-    static std::unordered_map<std::string, std::function<void(CuDSSConfig&)>>::const_iterator 
-    findParameter(const std::string& key, 
-                  const std::unordered_map<std::string, std::function<void(CuDSSConfig&)>>& parsers) {
-        // Strip leading dash if present
-        if (!key.empty() && key[0] == '-') {
-            return parsers.find(key.substr(1));
-        }
-        return parsers.find(key);
-    }
 
 public:
     static bool parseParameters(CuDSSConfig& config);
@@ -532,7 +522,7 @@ bool CuDSSParameterParser::parseParameters(CuDSSConfig& config) {
                 return false;
             }
             
-            auto it = findParameter(key, configParsers);
+            auto it = ParameterUtils::findParameter(key, configParsers);
             if (it != configParsers.end()) {
                 it->second(config);
             } else {
@@ -566,9 +556,9 @@ void* OPS_CuDSSLinSolver()
     // Parse command-line arguments
     if (!CuDSSParameterParser::parseParameters(config)) {
         opserr << "WARNING: OPS_CuDSSLinSolver() - "
-               << "Failed to parse parameters" << endln;
+               << "Failed to parse parameters, using defaults" << endln;
+        opserr << "For valid parameters, use:" << endln;
         CuDSSParameterParser::printUsageInfo();
-        return nullptr;
     }
     
     // Validate that hybrid modes are mutually exclusive

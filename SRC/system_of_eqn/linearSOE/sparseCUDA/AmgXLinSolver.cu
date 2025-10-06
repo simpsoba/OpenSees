@@ -44,6 +44,7 @@
 #include <unordered_map>
 #include <functional>
 #include <memory>
+#include "ParameterUtils.h"
 #endif // _AMGX
 
 // C++ includes
@@ -545,18 +546,6 @@ public:
     // Print usage information for both options
     static void printGeneralUsageInfo();
     static void printSimpleUsageInfo();
-    
-private:
-    // Helper function to strip dashes and find parameter
-    template<typename ConfigType>
-    static auto findParameter(const std::string& key, 
-                            const std::unordered_map<std::string, std::function<void(ConfigType&)>>& parsers) {
-        // Strip leading dash if present
-        if (!key.empty() && key[0] == '-') {
-            return parsers.find(key.substr(1));
-        }
-        return parsers.find(key);
-    }
 };
 
 // Option 1: users can pass a config json file or a config string per AMGX Reference Manual
@@ -712,7 +701,7 @@ bool AmgXParameterParser::parseGeneralConfigParameters(AmgXGeneralConfig& config
             }
             
             // Use helper function to handle both with and without dashes
-            auto it = findParameter(key, generalConfigParsers);
+            auto it = ParameterUtils::findParameter(key, generalConfigParsers);
             if (it != generalConfigParsers.end()) {
                 it->second(config);
             } else {
@@ -739,7 +728,7 @@ bool AmgXParameterParser::parseSimpleConfigParameters(AmgXSimpleConfig& config) 
             }
             
             // Use helper function to handle both with and without dashes
-            auto it = findParameter(key, simpleConfigParsers);
+            auto it = ParameterUtils::findParameter(key, simpleConfigParsers);
             if (it != simpleConfigParsers.end()) {
                 it->second(config);
             } else {
