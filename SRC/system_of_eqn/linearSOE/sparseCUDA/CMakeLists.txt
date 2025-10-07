@@ -11,6 +11,7 @@ target_sources(OPS_SysOfEqn
         CudaGenBcsrLinSolver.h
         AmgXLinSolver.h
         CuDSSLinSolver.h
+        CuPCGLinSolver.h
 )
 
 target_include_directories(OPS_SysOfEqn PUBLIC ${CMAKE_CURRENT_LIST_DIR})

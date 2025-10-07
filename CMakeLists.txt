@@ -738,6 +738,11 @@ if(HAVE_CUDA)
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuDSSLinSolver.cu
     )
   endif()
+  
+  # Add general PCG solver (requires CUDA for cuSPARSE/cuBLAS)
+  target_sources(OPS_Cuda PRIVATE
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuPCGLinSolver.cu
+  )
 endif()
 
 # ########################################################################

@@ -37,6 +37,9 @@
 #include <CudaGenBcsrLinSOE.h>
 #include <CuDSSLinSolver.h>
 
+// CUDA utilities
+#include "CudaUtils.h"
+
 // for parsing command line arguments
 #ifdef _CUDSS
 #include <elementAPI.h>
@@ -59,42 +62,11 @@ bool CuDSSLinSolver::m_CuDSSInitialized = false;
 int CuDSSLinSolver::m_ActiveSolverInstances = 0;
 cudssHandle_t CuDSSLinSolver::m_Handle = nullptr;
 cudaStream_t CuDSSLinSolver::m_cudaStream = nullptr;
+
+// Use CudaUtils namespace for error checking
+using namespace CudaUtils;
 #endif // _CUDSS
 
-/* Anonymous namespace for helper functions */
-namespace {
-    #ifdef _CUDSS
-    void cudaCheckError(cudaError_t error, const char* message, bool throwError = true)
-    {
-        if (error != cudaSuccess) {
-            const char* errorString = cudaGetErrorString(error);
-            if (throwError) {
-                throw std::runtime_error(
-                "CUDA API returned error " + 
-                std::string(errorString) + 
-                " for " + std::string(message)
-                );
-            } else {
-                opserr << "CUDA API returned error " << errorString << " for " << message << endln;
-            }
-        }
-    }
-    void cuDSSCheckError(cudssStatus_t error, const char* message, bool throwError = true)
-    {
-        if (error != CUDSS_STATUS_SUCCESS) {
-            if (throwError) {
-                throw std::runtime_error(
-                "cuDSS API returned error " + 
-                std::to_string(error) + 
-                " for " + std::string(message)
-                );
-            } else {
-                opserr << "cuDSS API returned error " << error << " for " << message << endln;
-            }
-        }
-    }
-    #endif // _CUDSS
-}
 CuDSSLinSolver::CuDSSLinSolver(const char* precision, bool verbose, 
                                bool hybridMemoryMode, size_t hybridDeviceMemoryLimit, 
                                bool hybridExecuteMode, bool multiThreadingMode,
@@ -366,6 +338,59 @@ int CuDSSLinSolver::solve(void) {
         opserr << "INFO: CuDSSLinSolver::solve() - "
                << "cuDSS solve successful" << endln;
     }
+
+    #endif // _CUDSS
+
+    return 0;
+}
+
+int CuDSSLinSolver::solveNoRefact(void) {
+    #ifdef _CUDSS
+    CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
+    if (theSOE == nullptr) {
+        opserr << "WARNING: CuDSSLinSolver::solveNoRefact() - "
+               << "LinearSOE not set" << endln;
+        return -1;
+    }
+    
+    void* xValues = theSOE->getDeviceX();
+    void* bValues = theSOE->getDeviceB();
+
+    // Check if device pointers are valid
+    if (!xValues) {
+        opserr << "ERROR: CuDSSLinSolver::solveNoRefact() - getDeviceX() returned nullptr" << endln;
+        return -1;
+    }
+    if (!bValues) {
+        opserr << "ERROR: CuDSSLinSolver::solveNoRefact() - getDeviceB() returned nullptr" << endln;
+        return -1;
+    }
+    
+    // Ensure matrices are set up
+    if (m_Matrix == nullptr || m_RHS == nullptr || m_Solution == nullptr) {
+        opserr << "ERROR: CuDSSLinSolver::solveNoRefact() - "
+               << "Matrices not initialized. Call solve() first to perform factorization." << endln;
+        return -1;
+    }
+
+    /* Update only RHS and solution pointers (no factorization) */
+    cuDSSCheckError(cudssMatrixSetValues(m_RHS, bValues), "update cuDSS RHS values");
+    cuDSSCheckError(cudssMatrixSetValues(m_Solution, xValues), "update cuDSS solution values");
+
+    // Solve using existing factorization
+    cudssStatus_t status = cudssExecute(
+        m_Handle, CUDSS_PHASE_SOLVE, m_Config, m_Data,
+        m_Matrix, m_Solution, m_RHS
+    );
+    
+    if (status != CUDSS_STATUS_SUCCESS) {
+        opserr << "WARNING: CuDSSLinSolver::solveNoRefact() - "
+               << "cuDSS solve failed with status " << status << endln;
+        return -1;
+    }
+
+    // Synchronize the CUDA stream
+    cudaCheckError(cudaStreamSynchronize(m_cudaStream), "synchronize CUDA stream after solve");
 
     #endif // _CUDSS
 

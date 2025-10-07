@@ -510,6 +510,9 @@ void* OPS_AmgXLinSolver();
 #ifdef _CUDSS
 void* OPS_CuDSSLinSolver();
 #endif // _CUDSS
+#ifdef _CUDA
+void* OPS_CuPCGLinSolver();
+#endif // _CUDA
 
 void* OPS_PlainNumberer();
 

@@ -1174,6 +1174,7 @@
 #define SOLVER_TAGS_PFEMDiaSolver                       33
 #define SOLVER_TAGS_AmgXLinSolver                       34
 #define SOLVER_TAGS_CuDSSLinSolver                      35
+#define SOLVER_TAGS_CuPCGLinSolver                      36
 
 #define RECORDER_TAGS_ElementRecorder		1
 #define RECORDER_TAGS_NodeRecorder		2
