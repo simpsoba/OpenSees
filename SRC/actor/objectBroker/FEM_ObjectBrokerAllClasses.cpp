@@ -3156,6 +3156,8 @@ FEM_ObjectBrokerAllClasses::getNewLinearSOE(int classTagSOE)
 #ifdef _CUDA
     case LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE:
     case LinSOE_TAGS_CudaBcsrLinSOE_FLOAT:
+    case LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE_FLOAT:
+    case LinSOE_TAGS_CudaBcsrLinSOE_FLOAT_DOUBLE:
         theSOE = CudaGenBcsrLinSOE::createCudaLinearSOE(classTagSOE);
         if (theSOE != nullptr) return theSOE;
         break;

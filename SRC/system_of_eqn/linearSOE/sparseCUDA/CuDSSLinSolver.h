@@ -58,7 +58,7 @@ class CuDSSLinSolver : public CudaGenBcsrLinSolver
 public:
     // Constructor with default parameters
     CuDSSLinSolver(
-        const char* precision = "dDDI",
+        CudaPrecision precision = CudaPrecision::dDDI,
         bool verbose = false,
         bool hybridMemoryMode = false,
         size_t hybridDeviceMemoryLimit = 0,
@@ -95,7 +95,7 @@ private:
     std::string m_threadingLibPath;
 
     // cuDSS initializer (to be used by constructors only)
-    void init(const char* precision);
+    void init(CudaPrecision precision);
     
     // Helper function to initialize cuDSS matrices when structure changes
     int setupMatrices();

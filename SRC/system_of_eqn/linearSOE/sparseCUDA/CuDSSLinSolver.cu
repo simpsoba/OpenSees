@@ -55,6 +55,7 @@
 #include <string>
 #include <cstring>
 #include <cmath>
+#include <stdexcept>
 
 #ifdef _CUDSS
 // Static member initialization
@@ -67,11 +68,11 @@ cudaStream_t CuDSSLinSolver::m_cudaStream = nullptr;
 using namespace CudaUtils;
 #endif // _CUDSS
 
-CuDSSLinSolver::CuDSSLinSolver(const char* precision, bool verbose, 
+CuDSSLinSolver::CuDSSLinSolver(CudaPrecision precision, bool verbose, 
                                bool hybridMemoryMode, size_t hybridDeviceMemoryLimit, 
                                bool hybridExecuteMode, bool multiThreadingMode,
                                const char* threadingLibPath)
-    :CudaGenBcsrLinSolver(SOLVER_TAGS_CuDSSLinSolver), 
+    :CudaGenBcsrLinSolver(SOLVER_TAGS_CuDSSLinSolver, precision), 
     m_verbose(verbose),
     m_hybridMemoryMode(hybridMemoryMode),
     m_hybridDeviceMemoryLimit(hybridDeviceMemoryLimit),
@@ -80,11 +81,18 @@ CuDSSLinSolver::CuDSSLinSolver(const char* precision, bool verbose,
     m_threadingLibPath(threadingLibPath ? threadingLibPath : "")
 {
     #ifdef _CUDSS
+    // CuDSS currently only supports uniform precision (dDDI or dFFI)
+    if (!isUniformPrecision(precision)) {
+        opserr << "ERROR: CuDSSLinSolver::CuDSSLinSolver() - "
+               << "Precision " << cudaPrecisionToString(precision) << " is not supported by cuDSS. "
+               << "cuDSS only supports uniform precision: dDDI (double) and dFFI (float)." << endln;
+        throw std::invalid_argument("CuDSS does not support mixed precision");
+    }
     init(precision);
     #endif // _CUDSS
 }
 
-void CuDSSLinSolver::init(const char* precision)
+void CuDSSLinSolver::init(CudaPrecision precision)
 {
     #ifdef _CUDSS
     if (!m_CuDSSInitialized) {
@@ -181,22 +189,17 @@ void CuDSSLinSolver::init(const char* precision)
     m_RHS = nullptr;
     m_Solution = nullptr;
     
-    /* Parse precision string (format: dXYI where X=matrix type, Y=vector type, I=index type)
+    /* Set precision (format: dXYI where X=matrix type, Y=vector type, I=index type)
      * d = device (always required for GPU)
      * X,Y = D (double) or F (float)
      * I = I (int32) - currently only int32 is supported
      */
     m_IndexType = CUDA_R_32I; // Currently only 32-bit integers supported
     
-    if (strcmp(precision, "dFFI") == 0) {
+    if (precision == CudaPrecision::dFFI) {
         m_ValueType = CUDA_R_32F; // Float precision
-    } else if (strcmp(precision, "dDDI") == 0) {
+    } else {  // CudaPrecision::dDDI
         m_ValueType = CUDA_R_64F; // Double precision
-    } else {
-        opserr << "WARNING: CuDSSLinSolver::init() - "
-               << "Invalid precision '" << precision << "'. Only dDDI and dFFI are supported. "
-               << "Setting precision to dDDI (double)" << endln;
-        m_ValueType = CUDA_R_64F; // Default to double precision
     }
 
     /* Increment counter */
@@ -246,15 +249,15 @@ int CuDSSLinSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE) {
         return -1;
     }
     
-    bool bothDouble = theSOE.isDoublePrecision() && m_ValueType == CUDA_R_64F;
-    bool bothFloat = !theSOE.isDoublePrecision() && m_ValueType == CUDA_R_32F;
-    if (bothDouble || bothFloat) {
-        return this->CudaGenBcsrLinSolver::setLinearSOE(theSOE);
-    } else {
+    // Check precision match using unified enum
+    if (theSOE.getPrecision() != this->getPrecision()) {
         opserr << "WARNING: CuDSSLinSolver::setLinearSOE() - "
-                << "precision mismatch between LinearSOE and CuDSSLinSolver" << endln;
+               << "precision mismatch: SOE is " << cudaPrecisionToString(theSOE.getPrecision())
+               << ", solver is " << cudaPrecisionToString(this->getPrecision()) << endln;
         return -1;
     }
+    
+    return this->CudaGenBcsrLinSolver::setLinearSOE(theSOE);
     #endif // _CUDSS
 
     return 0;
@@ -642,8 +645,16 @@ void CuDSSParameterParser::printUsageInfo() {
 // Factory function to create CuDSS solver from parsed config
 // This allows reuse in composite solvers like CuPCG
 CudaGenBcsrLinSolver* createCuDSSSolverFromConfig(const CuDSSConfig& config) {
+    // Convert string precision to enum
+    CudaPrecision precision;
+    if (!cudaPrecisionFromString(config.precision.c_str(), precision)) {
+        opserr << "WARNING: createCuDSSSolverFromConfig() - "
+               << "Invalid precision '" << config.precision.c_str() << "', defaulting to dDDI" << endln;
+        precision = CudaPrecision::dDDI;
+    }
+    
     return new CuDSSLinSolver(
-        config.precision.c_str(), 
+        precision, 
         config.verbose,
         config.hybridMemoryMode,
         config.hybridDeviceMemoryLimit,
@@ -710,8 +721,16 @@ void* OPS_CuDSSLinSolver()
                << "Ignoring hybridDeviceMemoryLimit." << endln;
     }
     
-    // Create solver using factory
-    CudaGenBcsrLinSolver* solver = createCuDSSSolverFromConfig(config);
+    // Create solver using factory (constructor validates precision)
+    CudaGenBcsrLinSolver* solver = nullptr;
+    try {
+        solver = createCuDSSSolverFromConfig(config);
+    } catch (const std::exception& e) {
+        opserr << "ERROR: OPS_CuDSSLinSolver() - "
+               << "Failed to create solver: " << e.what() << endln;
+        return nullptr;
+    }
+    
     if (solver == nullptr) {
         return nullptr;
     }
@@ -720,11 +739,18 @@ void* OPS_CuDSSLinSolver()
     const int blockSize = 1;
     const bool paddingEnabled = false;
     
-    // Create and return SOE based on precision
-    if (config.precision == "dFFI") {
-        return CudaGenBcsrLinSOE::createFloat(*solver, blockSize, paddingEnabled, config.verbose);
-    } else {
-        return CudaGenBcsrLinSOE::createDouble(*solver, blockSize, paddingEnabled, config.verbose);
+    // Create and return SOE based on precision (only uniform modes reach here)
+    CudaPrecision precision = solver->getPrecision();
+    switch(precision) {
+        case CudaPrecision::dDDI:
+            return CudaGenBcsrLinSOE::createDouble(*solver, blockSize, paddingEnabled, config.verbose);
+        case CudaPrecision::dFFI:
+            return CudaGenBcsrLinSOE::createFloat(*solver, blockSize, paddingEnabled, config.verbose);
+        default:
+            // Should never reach here - constructor rejects mixed precision
+            opserr << "ERROR: OPS_CuDSSLinSolver() - Unexpected precision mode" << endln;
+            delete solver;
+            return nullptr;
     }
 }
 #else // _CUDSS

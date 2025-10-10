@@ -53,6 +53,9 @@
 #endif
 
 #ifdef _CUDA
+// CUDA includes
+#include <cuda_runtime.h>
+
 // Thrust includes
 #include <thrust/copy.h>
 #include <thrust/fill.h>
@@ -185,7 +188,6 @@ CudaGenBcsrLinSOE::CudaGenBcsrLinSOE(int classTag): LinearSOE(classTag),
     m_paddingEnabled(true),
     m_verbose(false)
 {
-    
 }
 
 CudaGenBcsrLinSOE::~CudaGenBcsrLinSOE() 
@@ -1061,6 +1063,7 @@ int* CudaGenBcsrLinSOE::getDeviceColIndices(void)
 
 void CudaGenBcsrLinSOE::uploadAIndicesToDevice(void)
 {
+    // Use thrust for transfer
     m_deviceCsrIndices = m_hostCsrIndices;
 }
 
@@ -1082,7 +1085,7 @@ CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createDouble(
     bool paddingEnabled,
     bool verbose
 ) {
-    return new CudaGenBcsrLinSOEImpl<double>(
+    return new CudaGenBcsrLinSOEImpl<double, double>(
         theSolver, blockSize, paddingEnabled, verbose
     );
 }
@@ -1093,7 +1096,29 @@ CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloat(
     bool paddingEnabled,
     bool verbose
 ) {
-    return new CudaGenBcsrLinSOEImpl<float>(
+    return new CudaGenBcsrLinSOEImpl<float, float>(
+        theSolver, blockSize, paddingEnabled, verbose
+    );
+}
+
+CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createDoubleFloat(
+    CudaGenBcsrLinSolver &theSolver,
+    int blockSize, 
+    bool paddingEnabled,
+    bool verbose
+) {
+    return new CudaGenBcsrLinSOEImpl<double, float>(
+        theSolver, blockSize, paddingEnabled, verbose
+    );
+}
+
+CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloatDouble(
+    CudaGenBcsrLinSolver &theSolver,
+    int blockSize, 
+    bool paddingEnabled,
+    bool verbose
+) {
+    return new CudaGenBcsrLinSOEImpl<float, double>(
         theSolver, blockSize, paddingEnabled, verbose
     );
 }
@@ -1101,9 +1126,13 @@ CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloat(
 LinearSOE* CudaGenBcsrLinSOE::createCudaLinearSOE(int classTag) {
     switch(classTag) {
         case LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE:
-            return new CudaGenBcsrLinSOEImpl<double>();
+            return new CudaGenBcsrLinSOEImpl<double, double>();  // dDDI
         case LinSOE_TAGS_CudaBcsrLinSOE_FLOAT:
-            return new CudaGenBcsrLinSOEImpl<float>();
+            return new CudaGenBcsrLinSOEImpl<float, float>();    // dFFI
+        case LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE_FLOAT:
+            return new CudaGenBcsrLinSOEImpl<double, float>();   // dDFI
+        case LinSOE_TAGS_CudaBcsrLinSOE_FLOAT_DOUBLE:
+            return new CudaGenBcsrLinSOEImpl<float, double>();   // dFDI
         default:
             return nullptr;
     }
@@ -1127,6 +1156,26 @@ CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloat(
     bool verbose
 ) {
     opserr << "WARNING: CudaGenBcsrLinSOE::createFloat() - CUDA not available, cannot create SOE\n";
+    return nullptr;
+}
+
+CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createDoubleFloat(
+    CudaGenBcsrLinSolver &theSolver,
+    int blockSize, 
+    bool paddingEnabled,
+    bool verbose
+) {
+    opserr << "WARNING: CudaGenBcsrLinSOE::createDoubleFloat() - CUDA not available, cannot create SOE\n";
+    return nullptr;
+}
+
+CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloatDouble(
+    CudaGenBcsrLinSolver &theSolver,
+    int blockSize, 
+    bool paddingEnabled,
+    bool verbose
+) {
+    opserr << "WARNING: CudaGenBcsrLinSOE::createFloatDouble() - CUDA not available, cannot create SOE\n";
     return nullptr;
 }
 

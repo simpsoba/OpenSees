@@ -72,7 +72,7 @@ public:
     
 protected:
     // Virtual method for applying preconditioner (can be overridden by derived classes)
-    // Uses void* pointers with runtime type dispatch via isDoublePrecision()
+    // Uses void* pointers with runtime type dispatch via getPrecision()
     virtual int applyPreconditioner(void* z, void* r, int n, bool updatePreconditioner);
 
 private:
@@ -120,8 +120,9 @@ private:
     void* m_d_Ap;          // A * p (points into workspace block)
     void* m_d_temp;        // temporary vector for RHS storage (points into workspace block)
     
-    // Precision
-    cudaDataType_t m_ValueType;
+    // Precision (matrix and vector types can differ)
+    cudaDataType_t m_MatrixValueType;
+    cudaDataType_t m_VectorValueType;
     
     // Helper methods for PCG
     template<typename T>

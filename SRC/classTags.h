@@ -1138,6 +1138,8 @@
 #define LinSOE_TAGS_PARDISOGenLinSOE 99990
 #define LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE 31
 #define LinSOE_TAGS_CudaBcsrLinSOE_FLOAT 32
+#define LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE_FLOAT 33
+#define LinSOE_TAGS_CudaBcsrLinSOE_FLOAT_DOUBLE 34
 
 #define SOLVER_TAGS_FullGenLinLapackSolver  	1
 #define SOLVER_TAGS_BandGenLinLapackSolver  	2

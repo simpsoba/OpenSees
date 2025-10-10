@@ -72,7 +72,7 @@ CuPCGLinSolver::CuPCGLinSolver(
     CudaGenBcsrLinSolver* preconditioner,
     int maxIterations, double relativeTolerance, double absoluteTolerance,
     int updateFrequency, bool updateOnFailure, bool verbose)
-    :CudaGenBcsrLinSolver(SOLVER_TAGS_CuPCGLinSolver), 
+    :CudaGenBcsrLinSolver(SOLVER_TAGS_CuPCGLinSolver, CudaPrecision::dDDI),  // Default to double, updated in setLinearSOE
     m_verbose(verbose),
     m_maxIterations(maxIterations),
     m_relativeTolerance(relativeTolerance),
@@ -100,9 +100,9 @@ CuPCGLinSolver::CuPCGLinSolver(
     m_vecY = nullptr;
     
     // Preconditioner is optional (nullptr = identity preconditioner)
-    // Determine precision from preconditioner (assume it matches)
-    // We'll validate this in setLinearSOE
-    m_ValueType = CUDA_R_64F; // Default, will be set properly when SOE is attached
+    // Precision will be determined from SOE when attached via setLinearSOE()
+    m_MatrixValueType = CUDA_R_64F; // Default, will be set properly when SOE is attached
+    m_VectorValueType = CUDA_R_64F; // Default, will be set properly when SOE is attached
     
     init("");
     #endif // _CUDA
@@ -198,8 +198,30 @@ int CuPCGLinSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE)
         return -1;
     }
     
-    // Determine precision from SOE
-    m_ValueType = theSOE.isDoublePrecision() ? CUDA_R_64F : CUDA_R_32F;
+    // Adopt precision from SOE
+    m_precision = theSOE.getPrecision();
+    
+    // CuPCG has a specific limitation from cuSPARSE SpMV:
+    // Supports: dDDI, dFFI, dFDI
+    // Does NOT support: dDFI - double matrix with float vectors
+    if (m_precision == CudaPrecision::dDFI) {
+        opserr << "ERROR: CuPCGLinSolver::setLinearSOE() - "
+               << "Precision dDFI (double matrix, float vectors) is not supported by cuSPARSE SpMV. "
+               << "Supported modes: dDDI, dFFI, dFDI" << endln;
+        return -1;
+    }
+    
+    // Set CUDA data types for matrix and vectors separately
+    if (m_precision == CudaPrecision::dDDI) {
+        m_MatrixValueType = CUDA_R_64F;  // double matrix
+        m_VectorValueType = CUDA_R_64F;  // double vectors
+    } else if (m_precision == CudaPrecision::dFFI) {
+        m_MatrixValueType = CUDA_R_32F;  // float matrix
+        m_VectorValueType = CUDA_R_32F;  // float vectors
+    } else if (m_precision == CudaPrecision::dFDI) {
+        m_MatrixValueType = CUDA_R_32F;  // float matrix
+        m_VectorValueType = CUDA_R_64F;  // double vectors
+    }
     
     // Set for this solver
     int result = this->CudaGenBcsrLinSolver::setLinearSOE(theSOE);
@@ -387,7 +409,7 @@ int CuPCGLinSolver::solvePCG()
     int numScalarRows = numBlockRows * blockSize;
 
     // Allocate PCG workspace vectors in one contiguous block if needed
-    size_t vectorSize = numScalarRows * (m_ValueType == CUDA_R_64F ? sizeof(double) : sizeof(float));
+    size_t vectorSize = numScalarRows * (m_VectorValueType == CUDA_R_64F ? sizeof(double) : sizeof(float));
     if (m_d_workspaceBlock == nullptr) {
         // Determine how many vectors we need
         // Always need: x, r, p, Ap (4 vectors)
@@ -444,7 +466,7 @@ int CuPCGLinSolver::solvePCG()
                 rowPtrs, colIndices, AValues,
                 indexType, indexType,
                 CUSPARSE_INDEX_BASE_ZERO,
-                m_ValueType
+                m_MatrixValueType  // Matrix data type
             ), "create cuSPARSE CSR matrix");
         } else {
             // Block CSR (BSR) format
@@ -461,7 +483,7 @@ int CuPCGLinSolver::solvePCG()
                 indexType,                 // bsrRowOffsetsType
                 indexType,                 // bsrColIndType
                 CUSPARSE_INDEX_BASE_ZERO,  // idxBase
-                m_ValueType,               // valueType
+                m_MatrixValueType,         // valueType - Matrix data type
                 CUSPARSE_ORDER_ROW         // order (row-major within blocks)
             ), "create cuSPARSE BSR matrix");
         }
@@ -475,8 +497,8 @@ int CuPCGLinSolver::solvePCG()
 
     // Setup dense vector descriptors
     if (m_vecX == nullptr) {
-        cuSparseCheckError(cusparseCreateDnVec(&m_vecX, numScalarRows, m_d_p, m_ValueType), "create vecX");
-        cuSparseCheckError(cusparseCreateDnVec(&m_vecY, numScalarRows, m_d_Ap, m_ValueType), "create vecY");
+        cuSparseCheckError(cusparseCreateDnVec(&m_vecX, numScalarRows, m_d_p, m_VectorValueType), "create vecX");
+        cuSparseCheckError(cusparseCreateDnVec(&m_vecY, numScalarRows, m_d_Ap, m_VectorValueType), "create vecY");
     }
 
     // Get SpMV buffer size, allocate, and preprocess if needed
@@ -485,7 +507,8 @@ int CuPCGLinSolver::solvePCG()
         cuSparseCheckError(cusparseSpMV_bufferSize(
             m_cuSparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
             &alpha, m_spMatDescr, m_vecX, &beta, m_vecY,
-            m_ValueType, CUSPARSE_SPMV_ALG_DEFAULT, &m_bufferSize
+            m_VectorValueType,  // Compute type (use vector precision for accumulation)
+            CUSPARSE_SPMV_ALG_DEFAULT, &m_bufferSize
         ), "get SpMV buffer size");
         
         if (m_bufferSize > 0) {
@@ -496,7 +519,8 @@ int CuPCGLinSolver::solvePCG()
         cuSparseCheckError(cusparseSpMV_preprocess(
             m_cuSparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
             &alpha, m_spMatDescr, m_vecX, &beta, m_vecY,
-            m_ValueType, CUSPARSE_SPMV_ALG_DEFAULT, m_dBuffer
+            m_VectorValueType,  // Compute type (use vector precision for accumulation)
+            CUSPARSE_SPMV_ALG_DEFAULT, m_dBuffer
         ), "preprocess SpMV");
     }
 
@@ -507,9 +531,9 @@ int CuPCGLinSolver::solvePCG()
         updatePreconditioner = true;
     }
 
-    // Call the appropriate PCG implementation based on precision
+    // Call the appropriate PCG implementation based on vector precision
     int result;
-    if (m_ValueType == CUDA_R_64F) {
+    if (m_VectorValueType == CUDA_R_64F) {
         result = solvePCG_impl<double>((double*)m_d_x, (double*)bValues, numScalarRows, updatePreconditioner);
     } else {
         result = solvePCG_impl<float>((float*)m_d_x, (float*)bValues, numScalarRows, updatePreconditioner);
@@ -522,7 +546,7 @@ int CuPCGLinSolver::solvePCG()
         m_solvesSinceUpdate = 0;
         updatePreconditioner = true;
 
-        if (m_ValueType == CUDA_R_64F) {
+        if (m_VectorValueType == CUDA_R_64F) {
             result = solvePCG_impl<double>((double*)m_d_x, (double*)bValues, numScalarRows, updatePreconditioner);
         } else {
             result = solvePCG_impl<float>((float*)m_d_x, (float*)bValues, numScalarRows, updatePreconditioner);
@@ -595,14 +619,18 @@ int CuPCGLinSolver::applyPreconditioner(void* z, void* r, int n, bool updatePrec
         return -1;
     }
     
-    // Dispatch to typed implementation based on SOE precision
-    if (theSOE->isDoublePrecision()) {
+    // Dispatch to typed implementation based on vector precision
+    CudaPrecision precision = theSOE->getPrecision();
+    if (precision == CudaPrecision::dDDI || precision == CudaPrecision::dFDI) {
+        // Vector type is double
         return applyPreconditionerImpl<double>((double*)z, (double*)r, n, updatePreconditioner);
     } else {
+        // Vector type is float
         return applyPreconditionerImpl<float>((float*)z, (float*)r, n, updatePreconditioner);
     }
 }
 
+// PCG implementation templated on vector type T
 template<typename T>
 int CuPCGLinSolver::solvePCG_impl(T* x, T* b, int n, bool updatePreconditioner)
 {
@@ -702,7 +730,8 @@ int CuPCGLinSolver::solvePCG_impl(T* x, T* b, int n, bool updatePreconditioner)
         cuSparseCheckError(cusparseSpMV(
             m_cuSparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
             &one, m_spMatDescr, m_vecX, &zero, m_vecY,
-            m_ValueType, CUSPARSE_SPMV_ALG_DEFAULT, m_dBuffer
+            m_VectorValueType,  // Compute type (use vector precision for accumulation)
+            CUSPARSE_SPMV_ALG_DEFAULT, m_dBuffer
         ), "SpMV in PCG");
 
         // pAp = p^T * Ap
@@ -1029,15 +1058,42 @@ void* OPS_CuPCGLinSolver()
         config.verbose
     );
     
+    // Parse precision from config string
+    CudaPrecision precision;
+    if (!cudaPrecisionFromString(config.precision.c_str(), precision)) {
+        opserr << "WARNING: OPS_CuPCGLinSolver() - "
+               << "Invalid precision '" << config.precision.c_str() << "', defaulting to dDDI" << endln;
+        precision = CudaPrecision::dDDI;
+    }
+    
+    // CuPCG supports: dDDI, dFFI, dFDI (via cuSPARSE SpMV)
+    // Does NOT support: dDFI (double matrix, float vectors - cuSPARSE limitation)
+    if (precision == CudaPrecision::dDFI) {
+        opserr << "ERROR: OPS_CuPCGLinSolver() - "
+               << "Precision dDFI (double matrix, float vectors) is not supported by cuSPARSE SpMV. "
+               << "Supported modes: dDDI, dFFI, dFDI" << endln;
+        delete solver;
+        return nullptr;
+    }
+    
     // CuPCG supports both scalar CSR (blockSize = 1) and BSR (blockSize > 1)
     // Note, however, certain preconditioners only support blockSize = 1
     const int blockSize = 1;
     const bool paddingEnabled = false;
     
-    if (config.precision == "dFFI") {
-        return CudaGenBcsrLinSOE::createFloat(*solver, blockSize, paddingEnabled, config.verbose);
-    } else {
-        return CudaGenBcsrLinSOE::createDouble(*solver, blockSize, paddingEnabled, config.verbose);
+    // Create SOE based on precision mode
+    switch(precision) {
+        case CudaPrecision::dDDI:
+            return CudaGenBcsrLinSOE::createDouble(*solver, blockSize, paddingEnabled, config.verbose);
+        case CudaPrecision::dFFI:
+            return CudaGenBcsrLinSOE::createFloat(*solver, blockSize, paddingEnabled, config.verbose);
+        case CudaPrecision::dFDI:
+            return CudaGenBcsrLinSOE::createFloatDouble(*solver, blockSize, paddingEnabled, config.verbose);
+        default:
+            // Should never reach here due to validation above
+            opserr << "ERROR: OPS_CuPCGLinSolver() - Unexpected precision mode" << endln;
+            delete solver;
+            return nullptr;
     }
     
     #endif // _CUDA

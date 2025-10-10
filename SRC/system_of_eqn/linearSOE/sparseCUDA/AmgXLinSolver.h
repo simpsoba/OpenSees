@@ -79,7 +79,7 @@ public:
     // Constructor with config file and options
     AmgXLinSolver(
         const char *configFile = nullptr, const char *configOptions = nullptr,
-        const char *precision = "dDDI", bool verbose = false, 
+        CudaPrecision precision = CudaPrecision::dDDI, bool verbose = false, 
         OPS_Stream* callbackStream = (OPS_Stream*)&opserr
     );
     

@@ -39,8 +39,12 @@
 #include <LinearSOE.h>
 #include <LinearSOESolver.h>
 #include <Vector.h>
+#include "CudaUtils.h"
 
 #ifdef _CUDA
+// CUDA includes
+#include <cuda_runtime.h>
+
 // Thrust includes
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
@@ -82,6 +86,7 @@ public:
     ~CudaGenBcsrLinSOE();
     
     // Factory methods - no templates exposed to users
+    // Uniform precision modes (matrix and vector types match)
     static CudaGenBcsrLinSOE* createDouble(
         CudaGenBcsrLinSolver &theSolver, 
         int blockSize = DEFAULT_BLOCK_SIZE, 
@@ -90,6 +95,21 @@ public:
     );
     
     static CudaGenBcsrLinSOE* createFloat(
+        CudaGenBcsrLinSolver &theSolver,
+        int blockSize = DEFAULT_BLOCK_SIZE, 
+        bool paddingEnabled = true,
+        bool verbose = false
+    );
+    
+    // Mixed-precision modes (available, but most solvers don't support these yet)
+    static CudaGenBcsrLinSOE* createDoubleFloat(
+        CudaGenBcsrLinSolver &theSolver,
+        int blockSize = DEFAULT_BLOCK_SIZE, 
+        bool paddingEnabled = true,
+        bool verbose = false
+    );
+    
+    static CudaGenBcsrLinSOE* createFloatDouble(
         CudaGenBcsrLinSolver &theSolver,
         int blockSize = DEFAULT_BLOCK_SIZE, 
         bool paddingEnabled = true,
@@ -156,7 +176,9 @@ public:
     virtual void* getDeviceX(void) = 0;
     virtual const void* getDeviceB(void) const = 0;
     virtual void* getDeviceB(void) = 0;
-    virtual bool isDoublePrecision() const = 0;
+    
+    // Precision query method
+    virtual CudaPrecision getPrecision() const = 0;
 
     // Host-device data transfer methods
     virtual void uploadVectorsToDevice(void) = 0;

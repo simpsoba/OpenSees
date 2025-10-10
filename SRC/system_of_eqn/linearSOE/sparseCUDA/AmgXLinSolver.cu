@@ -53,6 +53,7 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <stdexcept>
 
 #ifdef _AMGX
 // Static member initialization
@@ -197,7 +198,7 @@ AmgXLinSolver::AmgXLinSolver(
     const std::string solver, const std::string preconditioner, const std::string smoother, 
     int max_iters, double abs_tolerance, double rel_tolerance, int monitor_residual, 
     bool verbose)
-    :CudaGenBcsrLinSolver(SOLVER_TAGS_AmgXLinSolver), 
+    :CudaGenBcsrLinSolver(SOLVER_TAGS_AmgXLinSolver, CudaPrecision::dDDI),  // Simple constructor always uses double
     m_verbose(verbose)
 {
     #ifdef _AMGX
@@ -205,19 +206,30 @@ AmgXLinSolver::AmgXLinSolver(
         solver, preconditioner, smoother, max_iters, 
         abs_tolerance, rel_tolerance, monitor_residual);
     const char* nullConfigFile = nullptr;
-    const char* precision = "dDDI";
-    init(nullConfigFile, configOptions.c_str(), precision);
+    // Simple constructor always uses double precision
+    const char* precisionStr = "dDDI";
+    init(nullConfigFile, configOptions.c_str(), precisionStr);
     #endif // _AMGX
 }
 
 AmgXLinSolver::AmgXLinSolver( 
     const char *configFile, const char *configOptions, 
-    const char *precision, bool verbose, OPS_Stream* callbackStream)
-    :CudaGenBcsrLinSolver(SOLVER_TAGS_AmgXLinSolver), 
+    CudaPrecision precision, bool verbose, OPS_Stream* callbackStream)
+    :CudaGenBcsrLinSolver(SOLVER_TAGS_AmgXLinSolver, precision), 
     m_verbose(verbose)
 {
     #ifdef _AMGX
-    init(configFile, configOptions, precision, callbackStream);
+    // AmgX currently only supports uniform precision (dDDI or dFFI)
+    if (!isUniformPrecision(precision)) {
+        opserr << "ERROR: AmgXLinSolver::AmgXLinSolver() - "
+               << "Precision " << cudaPrecisionToString(precision) << " is not supported by AmgX. "
+               << "AmgX only supports uniform precision: dDDI (double) and dFFI (float)." << endln;
+        throw std::invalid_argument("AmgX does not support mixed precision");
+    }
+    
+    // Convert enum to string for AMGX library (which expects string format)
+    const char* precisionStr = cudaPrecisionToString(precision);
+    init(configFile, configOptions, precisionStr, callbackStream);
     #endif // _AMGX
 }
 
@@ -342,15 +354,15 @@ AmgXLinSolver::~AmgXLinSolver() {
 
 int AmgXLinSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE) {
     #ifdef _AMGX
-    bool bothDouble = theSOE.isDoublePrecision() && m_Mode == AMGX_mode_dDDI;
-    bool bothFloat = !theSOE.isDoublePrecision() && m_Mode == AMGX_mode_dFFI;
-    if (bothDouble || bothFloat) {
-        return this->CudaGenBcsrLinSolver::setLinearSOE(theSOE);
-    } else {
+    // Check precision match between solver and SOE
+    if (theSOE.getPrecision() != this->getPrecision()) {
         opserr << "WARNING: AmgXLinSolver::setLinearSOE() - "
-                << "precision mismatch between LinearSOE and AmgXLinSolver" << endln;
+               << "precision mismatch: SOE is " << cudaPrecisionToString(theSOE.getPrecision())
+               << ", solver is " << cudaPrecisionToString(this->getPrecision()) << endln;
         return -1;
     }
+    
+    return this->CudaGenBcsrLinSolver::setLinearSOE(theSOE);
     #endif // _AMGX
 
     return 0;
@@ -835,13 +847,26 @@ void AmgXParameterParser::printSimpleUsageInfo() {
 
 // Factory functions for creating solvers and SOEs
 CudaGenBcsrLinSolver* createAmgXSolver(const AmgXGeneralConfig& config) {
-    return new AmgXLinSolver(
-        config.configFile.c_str(), 
-        config.configOptions.c_str(), 
-        config.precision.c_str(),
-        config.verbose, 
-        config.callbackStream
-    );
+    // Convert string precision to enum
+    CudaPrecision precision;
+    if (!cudaPrecisionFromString(config.precision.c_str(), precision)) {
+        opserr << "WARNING: createAmgXSolver() - "
+               << "Invalid precision '" << config.precision.c_str() << "', defaulting to dDDI" << endln;
+        precision = CudaPrecision::dDDI;
+    }
+    
+    try {
+        return new AmgXLinSolver(
+            config.configFile.c_str(), 
+            config.configOptions.c_str(), 
+            precision,
+            config.verbose, 
+            config.callbackStream
+        );
+    } catch (const std::exception& e) {
+        opserr << "ERROR: createAmgXSolver() - " << e.what() << endln;
+        return nullptr;
+    }
 }
 
 CudaGenBcsrLinSolver* createAmgXSolver(const AmgXSimpleConfig& config) {
@@ -1014,23 +1039,31 @@ static AmgXSolverAndConfig createAmgXSolverAndConfigFromParser() {
 void* OPS_AmgXLinSolver()
 {
     // Use helper function to parse and create solver with config
+    // Note: Constructor validates precision and throws if unsupported
     AmgXSolverAndConfig result = createAmgXSolverAndConfigFromParser();
     
     if (result.solver == nullptr) {
         return nullptr;
     }
     
-    // Create and return SOE based on precision
-    if (result.precision == "dDDI") {
-        return CudaGenBcsrLinSOE::createDouble(
-            *result.solver, result.blockSize, 
-            result.paddingEnabled, result.verbose
-        );
-    } else {
-        return CudaGenBcsrLinSOE::createFloat(
-            *result.solver, result.blockSize, 
-            result.paddingEnabled, result.verbose
-        );
+    // Create and return SOE based on precision (only uniform modes reach here)
+    CudaPrecision precision = result.solver->getPrecision();
+    switch(precision) {
+        case CudaPrecision::dDDI:
+            return CudaGenBcsrLinSOE::createDouble(
+                *result.solver, result.blockSize, 
+                result.paddingEnabled, result.verbose
+            );
+        case CudaPrecision::dFFI:
+            return CudaGenBcsrLinSOE::createFloat(
+                *result.solver, result.blockSize, 
+                result.paddingEnabled, result.verbose
+            );
+        default:
+            // Should never reach here - constructor rejects mixed precision
+            opserr << "ERROR: OPS_AmgXLinSolver() - Unexpected precision mode" << endln;
+            delete result.solver;
+            return nullptr;
     }
 }
 #else // _AMGX

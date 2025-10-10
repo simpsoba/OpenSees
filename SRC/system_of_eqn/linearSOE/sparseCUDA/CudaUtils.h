@@ -12,6 +12,66 @@
 #include <OPS_Globals.h>
 #include <stdexcept>
 #include <string>
+#include <cstring>
+
+// ============================================================================
+// Precision Type Definitions
+// ============================================================================
+
+// Precision modes for CUDA solvers and SOEs (matches AMGX naming convention)
+// Format: d<Matrix><Vector>I where:
+//   - d: device (GPU)
+//   - Matrix: D (double) or F (float) for matrix values
+//   - Vector: D (double) or F (float) for vector values
+//   - I: Int (32-bit integer indices)
+enum class CudaPrecision {
+    dDDI,  // device, Double matrix, Double vector, Int index
+    dFFI,  // device, Float matrix, Float vector, Int index
+    dDFI,  // device, Double matrix, Float vector, Int index
+    dFDI   // device, Float matrix, Double vector, Int index
+};
+
+// Conversion utilities for CudaPrecision
+inline const char* cudaPrecisionToString(CudaPrecision precision) {
+    switch(precision) {
+        case CudaPrecision::dDDI: return "dDDI";
+        case CudaPrecision::dFFI: return "dFFI";
+        case CudaPrecision::dDFI: return "dDFI";
+        case CudaPrecision::dFDI: return "dFDI";
+        default: return "unknown";
+    }
+}
+
+inline bool cudaPrecisionFromString(const char* str, CudaPrecision& precision) {
+    if (std::strcmp(str, "dDDI") == 0) {
+        precision = CudaPrecision::dDDI;
+        return true;
+    } else if (std::strcmp(str, "dFFI") == 0) {
+        precision = CudaPrecision::dFFI;
+        return true;
+    } else if (std::strcmp(str, "dDFI") == 0) {
+        precision = CudaPrecision::dDFI;
+        return true;
+    } else if (std::strcmp(str, "dFDI") == 0) {
+        precision = CudaPrecision::dFDI;
+        return true;
+    }
+    return false;
+}
+
+inline bool isDoublePrecision(CudaPrecision precision) {
+    return precision == CudaPrecision::dDDI;
+}
+
+// Check if precision uses uniform types (matrix == vector)
+// Note: !isUniformPrecision(p) means mixed precision
+inline bool isUniformPrecision(CudaPrecision precision) {
+    return precision == CudaPrecision::dDDI || precision == CudaPrecision::dFFI;
+}
+
+// ============================================================================
+// CUDA Error Checking
+// ============================================================================
 
 #ifdef _CUDA
 #include <cuda_runtime.h>

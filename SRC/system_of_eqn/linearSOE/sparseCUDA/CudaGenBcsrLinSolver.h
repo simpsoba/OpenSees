@@ -32,6 +32,7 @@
 #include <LinearSOESolver.h>
 #include <Channel.h>
 #include <FEM_ObjectBroker.h>
+#include "CudaUtils.h"
 
 // Forward declarations
 class CudaGenBcsrLinSOE;
@@ -39,7 +40,7 @@ class CudaGenBcsrLinSOE;
 class CudaGenBcsrLinSolver : public LinearSOESolver
 {
 public:
-    CudaGenBcsrLinSolver(int classTag);    
+    CudaGenBcsrLinSolver(int classTag, CudaPrecision precision = CudaPrecision::dDDI);    
     virtual ~CudaGenBcsrLinSolver();
 
     // Set the associated CudaGenBcsrLinSOE object
@@ -47,6 +48,9 @@ public:
     
     // Get the associated SOE
     CudaGenBcsrLinSOE* getLinearSOE(void) const;
+    
+    // Get solver precision
+    CudaPrecision getPrecision(void) const { return m_precision; }
 
     // Abstract methods that must be implemented by subclasses
     int solve(void) override = 0;
@@ -62,6 +66,7 @@ public:
 
 protected:
     CudaGenBcsrLinSOE* theSOE;
+    CudaPrecision m_precision;
 
 private:
 };

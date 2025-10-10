@@ -35,6 +35,9 @@
 #include <CudaGenBcsrLinSOE.h>
 #include <CudaGenBcsrLinSolver.h>
 #ifdef _CUDA
+// CUDA includes
+#include <cuda_runtime.h>
+
 // Thrust includes
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
@@ -61,8 +64,21 @@ class CudaGenBcsrLinSolver;
 
 // This template class provides the actual implementation for different data types.
 // It inherits from CudaGenBcsrLinSOE and implements all the pure virtual methods.
-// The template parameter DataType allows us to specialize for double and float without code duplication.
-template<typename DataType>
+// The template parameters allow us to specialize matrix and vector types independently:
+//   - MatrixType: Type for matrix values (A)
+//   - VectorType: Type for vectors (x, b)
+// 
+// Currently instantiated combinations:
+//   - CudaGenBcsrLinSOEImpl<double, double> (dDDI) - uniform double precision
+//   - CudaGenBcsrLinSOEImpl<float, float>   (dFFI) - uniform float precision
+// 
+// Additional combinations can be instantiated when needed:
+//   - CudaGenBcsrLinSOEImpl<double, float>  (dDFI) - double matrix, float vectors
+//   - CudaGenBcsrLinSOEImpl<float, double>  (dFDI) - float matrix, double vectors
+// 
+// Note: Whether a precision mode is "supported" depends on the solver, not the SOE.
+//       The SOE simply provides the data in the requested format.
+template<typename MatrixType, typename VectorType = MatrixType>
 class CudaGenBcsrLinSOEImpl : public CudaGenBcsrLinSOE
 {
 public:
@@ -73,7 +89,7 @@ public:
         bool paddingEnabled = true,
         bool verbose = false
     )
-    : CudaGenBcsrLinSOE(CudaGenBcsrLinSOEImpl<DataType>::getClassTagForType(), theSolver, blockSize, paddingEnabled, verbose),
+    : CudaGenBcsrLinSOE(CudaGenBcsrLinSOEImpl<MatrixType, VectorType>::getClassTagForType(), theSolver, blockSize, paddingEnabled, verbose),
       m_deviceAValues(), m_deviceX(), m_deviceB()
     {
         // Now that the derived class is fully constructed, we can safely call setLinearSOE
@@ -82,7 +98,7 @@ public:
     
     // Default constructor
     CudaGenBcsrLinSOEImpl()
-    : CudaGenBcsrLinSOE(CudaGenBcsrLinSOEImpl<DataType>::getClassTagForType()),
+    : CudaGenBcsrLinSOE(CudaGenBcsrLinSOEImpl<MatrixType, VectorType>::getClassTagForType()),
       m_deviceAValues(), m_deviceX(), m_deviceB()
     {
         /* Nothing to do here */
@@ -150,14 +166,27 @@ public:
         #endif
     }
     
-    // This method allows the solver to know the data type of the SOE at runtime.
-    bool isDoublePrecision(void) const noexcept override { 
-        return std::is_same<DataType, double>::value; 
+    // Precision query method
+    CudaPrecision getPrecision(void) const noexcept override {
+        // Determine precision from template types
+        constexpr bool matrixDouble = std::is_same<MatrixType, double>::value;
+        constexpr bool vectorDouble = std::is_same<VectorType, double>::value;
+        
+        if constexpr (matrixDouble && vectorDouble) {
+            return CudaPrecision::dDDI;  // Double matrix, Double vectors
+        } else if constexpr (!matrixDouble && !vectorDouble) {
+            return CudaPrecision::dFFI;  // Float matrix, Float vectors
+        } else if constexpr (matrixDouble && !vectorDouble) {
+            return CudaPrecision::dDFI;  // Double matrix, Float vectors
+        } else {  // !matrixDouble && vectorDouble
+            return CudaPrecision::dFDI;  // Float matrix, Double vectors
+        }
     }
     
-    // Host (double)-device (DataType) data transfer methods
+    // Host (double)-device (VectorType) data transfer methods
     inline void uploadVectorsToDevice(void) override {
         #ifdef _CUDA
+        // Use thrust for transfer (handles type conversion)
         m_deviceB = this->CudaGenBcsrLinSOE::m_hostB;
         m_deviceX.resize(this->CudaGenBcsrLinSOE::m_hostX.size());
         #else
@@ -166,7 +195,7 @@ public:
             this->CudaGenBcsrLinSOE::m_hostB.begin(),
             this->CudaGenBcsrLinSOE::m_hostB.end(),
             m_deviceB.begin(),
-            [](double val){ return static_cast<DataType>(val); } // convert to device type
+            [](double val){ return static_cast<VectorType>(val); } // convert to device type
         );
         m_deviceX.resize(this->CudaGenBcsrLinSOE::m_hostX.size());
         #endif
@@ -174,6 +203,7 @@ public:
     
     inline void downloadSolutionFromDevice(void) override {
         #ifdef _CUDA
+        // Use thrust for transfer (handles type conversion)
         this->CudaGenBcsrLinSOE::m_hostX = m_deviceX;
         #else
         this->CudaGenBcsrLinSOE::m_hostX.resize(m_deviceX.size());
@@ -181,7 +211,7 @@ public:
             m_deviceX.begin(),
             m_deviceX.end(),
             this->CudaGenBcsrLinSOE::m_hostX.begin(),
-            [](DataType val){ return static_cast<double>(val); } // convert to host type
+            [](VectorType val){ return static_cast<double>(val); } // convert to host type
         );
         #endif
         this->CudaGenBcsrLinSOE::m_X.setData(
@@ -192,6 +222,7 @@ public:
     
     inline void uploadAValuesToDevice(void) override {
         #ifdef _CUDA
+        // Use thrust for transfer (handles type conversion)
         m_deviceAValues = this->CudaGenBcsrLinSOE::m_hostAValues;
         #else
         m_deviceAValues.resize(this->CudaGenBcsrLinSOE::m_hostAValues.size());
@@ -199,7 +230,7 @@ public:
             this->CudaGenBcsrLinSOE::m_hostAValues.begin(),
             this->CudaGenBcsrLinSOE::m_hostAValues.end(),
             m_deviceAValues.begin(),
-            [](double val){ return static_cast<DataType>(val); } // convert to device type
+            [](double val){ return static_cast<MatrixType>(val); } // convert to device type
         );
         #endif
     }
@@ -207,31 +238,39 @@ public:
 private:    
     // Device memory storage using Thrust vectors
     #ifdef _CUDA
-    thrust::device_vector<DataType> m_deviceX, m_deviceB, m_deviceAValues;
+    thrust::device_vector<VectorType> m_deviceX, m_deviceB;
+    thrust::device_vector<MatrixType> m_deviceAValues;
     #else
-    std::vector<DataType> m_deviceX, m_deviceB, m_deviceAValues;
+    std::vector<VectorType> m_deviceX, m_deviceB;
+    std::vector<MatrixType> m_deviceAValues;
     #endif
 
 public:
     // Helper function to get class tag for type
     static int getClassTagForType() {
-        if constexpr (std::is_same_v<DataType, double>) {
-            return LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE;
-        } else if constexpr (std::is_same_v<DataType, float>) {
-            return LinSOE_TAGS_CudaBcsrLinSOE_FLOAT;
-        } else {
-            static_assert(std::is_same_v<DataType, double> || std::is_same_v<DataType, float>, 
-                         "Only double and float types are supported");
-            return -1; // This should never be reached due to static_assert
+        constexpr bool matrixDouble = std::is_same_v<MatrixType, double>;
+        constexpr bool vectorDouble = std::is_same_v<VectorType, double>;
+        
+        if constexpr (matrixDouble && vectorDouble) {
+            return LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE;        // dDDI
+        } else if constexpr (!matrixDouble && !vectorDouble) {
+            return LinSOE_TAGS_CudaBcsrLinSOE_FLOAT;         // dFFI
+        } else if constexpr (matrixDouble && !vectorDouble) {
+            return LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE_FLOAT;  // dDFI
+        } else {  // !matrixDouble && vectorDouble
+            return LinSOE_TAGS_CudaBcsrLinSOE_FLOAT_DOUBLE;  // dFDI
         }
     }
 
 private:
 };
 
-// Explicit template instantiations for common data types
-// This ensures the compiler generates optimized code for these types
-template class CudaGenBcsrLinSOEImpl<double>;
-template class CudaGenBcsrLinSOEImpl<float>;
+// Explicit template instantiations
+// All four precision modes are instantiated and ready to use.
+// Solvers validate which modes they support at construction/connection time.
+template class CudaGenBcsrLinSOEImpl<double, double>;  // dDDI - uniform double precision
+template class CudaGenBcsrLinSOEImpl<float, float>;    // dFFI - uniform float precision
+template class CudaGenBcsrLinSOEImpl<double, float>;   // dDFI - double matrix, float vectors (mixed)
+template class CudaGenBcsrLinSOEImpl<float, double>;   // dFDI - float matrix, double vectors (mixed)
 
 #endif

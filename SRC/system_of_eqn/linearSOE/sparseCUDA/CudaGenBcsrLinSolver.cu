@@ -32,9 +32,10 @@
 #include <CudaGenBcsrLinSolver.h>
 #include <CudaGenBcsrLinSOE.h>
 
-CudaGenBcsrLinSolver::CudaGenBcsrLinSolver(int theClassTag)    
+CudaGenBcsrLinSolver::CudaGenBcsrLinSolver(int theClassTag, CudaPrecision precision)    
 :LinearSOESolver(theClassTag),
- theSOE(nullptr)
+ theSOE(nullptr),
+ m_precision(precision)
 {
 
 }    
