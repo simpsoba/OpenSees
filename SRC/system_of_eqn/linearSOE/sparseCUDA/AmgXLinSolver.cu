@@ -455,6 +455,67 @@ int AmgXLinSolver::solve() {
     return 0;
 }
 
+int AmgXLinSolver::solveNoRefact() {
+    #ifdef _AMGX
+    CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
+    if (theSOE == nullptr) {
+        opserr << "WARNING: AmgXLinSolver::solveNoRefact() - "
+               << "LinearSOE not set" << endln;
+        return -1;
+    }
+
+    // Extract only what we need: dimensions and RHS/solution vectors
+    int numRowBlocks = theSOE->getNumRowBlocks();
+    int blockSize = theSOE->getBlockSize();
+    void* xValues = theSOE->getDeviceX();
+    void* bValues = theSOE->getDeviceB();
+    
+    if (!xValues) {
+        opserr << "ERROR: AmgXLinSolver::solveNoRefact() - getDeviceX() returned nullptr" << endln;
+        return -1;
+    }
+    if (!bValues) {
+        opserr << "ERROR: AmgXLinSolver::solveNoRefact() - getDeviceB() returned nullptr" << endln;
+        return -1;
+    }
+
+    // Upload the rhs data to the GPU
+    AMGX_vector_upload(m_RHS, numRowBlocks, blockSize, bValues);
+
+    /* Solve with 0-vector initial guess */
+    AMGX_vector_set_zero(m_Solution, numRowBlocks, blockSize);
+
+    // Solve the system of equations with existing solver setup
+    double initialResidualNorm = this->getResidualNorm();
+    AMGX_solver_solve_with_0_initial_guess(m_Solver, m_RHS, m_Solution);
+    double finalResidualNorm = this->getResidualNorm();
+
+    /* Download the solution vector from the GPU */
+    AMGX_vector_download(m_Solution, xValues);
+
+    /* AMGX check status */
+    AMGX_SOLVE_STATUS status;
+    AMGX_solver_get_status(m_Solver, &status);
+
+    if (status != AMGX_SOLVE_SUCCESS) {
+        opserr << "WARNING: AmgXLinSolver::solveNoRefact() - "
+               << "Solver failed with status " << status << endln;
+        if (status != AMGX_SOLVE_FAILED) {
+            reportAmgXSolveStats(this->getNumIterations(), initialResidualNorm, finalResidualNorm);
+        }
+        return -1;
+    }
+
+    if (m_verbose) {
+        opserr << "INFO: AmgXLinSolver::solveNoRefact() - "
+               << "Solve successful (without refactorization)" << endln;
+        reportAmgXSolveStats(this->getNumIterations(), initialResidualNorm, finalResidualNorm);
+    }
+    #endif // _AMGX
+
+    return 0;
+}
+
 int AmgXLinSolver::setSize()
 {
     return 0;
@@ -796,22 +857,19 @@ CudaGenBcsrLinSolver* createAmgXSolver(const AmgXSimpleConfig& config) {
     );
 }
 
-void* OPS_AmgXLinSolver()
-{
+// Factory function that parses OPS arguments and creates solver (for use in composite solvers like CuPCG)
+// Note: For composite solvers (like CuPCG), this returns just the solver with default SOE parameters
+CudaGenBcsrLinSolver* createAmgXSolverFromParser() {
     // Handle case with no arguments - use default configuration
     if (OPS_GetNumRemainingInputArgs() == 0) {
         AmgXSimpleConfig simpleConfig; // Use default values
-        auto solver = createAmgXSolver(simpleConfig);
-        return CudaGenBcsrLinSOE::createDouble(
-            *solver, simpleConfig.blockSize, 
-            simpleConfig.paddingEnabled, simpleConfig.verbose
-        );
+        return createAmgXSolver(simpleConfig);
     }
     
     // Check argument count for cases with arguments
     if (OPS_GetNumRemainingInputArgs() % 2 != 0) {
-        opserr << "WARNING: OPS_AmgXLinSolver() - "
-               << "Incorrect number of arguments for AmgXLinSolver. " << endln;
+        opserr << "WARNING: createAmgXSolverFromParser() - "
+               << "Incorrect number of arguments for AmgX. " << endln;
         AmgXParameterParser::printGeneralUsageInfo();
         opserr << "Alternatively, use the simple constructor: " << endln;
         AmgXParameterParser::printSimpleUsageInfo();
@@ -828,35 +886,8 @@ void* OPS_AmgXLinSolver()
     if (AmgXParameterParser::parseGeneralConfigParameters(generalConfig)) {
         // Check if we have config file parameters
         if (!generalConfig.configFile.empty() || !generalConfig.configOptions.empty()) {
-            // Handle file callback if specified
-            if (!generalConfig.callbackFilename.empty()) {
-                // Create a FileStream for the specified filename
-                static FileStream callbackFile;
-                if (callbackFile.setFile(generalConfig.callbackFilename.c_str()) != 0) {
-                    opserr << "WARNING: OPS_AmgXLinSolver() - "
-                           << "Failed to open callback file: " 
-                           << generalConfig.callbackFilename.c_str() << endln;
-                    return nullptr;
-                }
-                generalConfig.callbackStream = &callbackFile;
-            }
-            
-            // Note: We don't validate blockSize here because we don't know
-            // what preconditioner/smoother is in the config file
-            
-            // Create solver and SOE
-            auto solver = createAmgXSolver(generalConfig);
-            if (generalConfig.precision == "dDDI") {
-                return CudaGenBcsrLinSOE::createDouble(
-                    *solver, generalConfig.blockSize, 
-                    generalConfig.paddingEnabled, generalConfig.verbose
-                );
-            } else {
-                return CudaGenBcsrLinSOE::createFloat(
-                    *solver, generalConfig.blockSize, 
-                    generalConfig.paddingEnabled, generalConfig.verbose
-                );
-            }
+            // Note: File callback handling would need to be done by caller if needed
+            return createAmgXSolver(generalConfig);
         }
     }
     
@@ -865,7 +896,96 @@ void* OPS_AmgXLinSolver()
     
     AmgXSimpleConfig simpleConfig;
     if (AmgXParameterParser::parseSimpleConfigParameters(simpleConfig)) {
-        // Validate block size for JACOBI_L1 - we know the preconditioner/smoother here
+        // Validate block size for JACOBI_L1
+        if ((simpleConfig.preconditioner == "JACOBI_L1" || 
+             simpleConfig.smoother == "JACOBI_L1") && simpleConfig.blockSize != 1) {
+            opserr << "WARNING: createAmgXSolverFromParser() - "
+                   << "JACOBI_L1 smoother/preconditioner only supports blockSize = 1. "
+                   << "Setting blockSize to 1..." << endln;
+            simpleConfig.blockSize = 1;
+        }
+        
+        return createAmgXSolver(simpleConfig);
+    }
+    
+    // If we get here, parsing failed
+    opserr << "WARNING: createAmgXSolverFromParser() - "
+           << "Failed to parse AmgX parameters" << endln;
+    AmgXParameterParser::printGeneralUsageInfo();
+    opserr << "Alternatively, use the simple constructor: " << endln;
+    AmgXParameterParser::printSimpleUsageInfo();
+    return nullptr;
+}
+
+// Helper struct to return both solver and SOE config from parsing
+struct AmgXSolverAndConfig {
+    CudaGenBcsrLinSolver* solver;
+    int blockSize;
+    std::string precision;
+    bool paddingEnabled;
+    bool verbose;
+};
+
+// Internal function for OPS_AmgXLinSolver to parse and create solver with full config
+static AmgXSolverAndConfig createAmgXSolverAndConfigFromParser() {
+    AmgXSolverAndConfig result = {nullptr, 1, "dDDI", false, false};
+    
+    // Handle case with no arguments - use default configuration
+    if (OPS_GetNumRemainingInputArgs() == 0) {
+        AmgXSimpleConfig simpleConfig;
+        result.solver = createAmgXSolver(simpleConfig);
+        result.blockSize = simpleConfig.blockSize;
+        result.precision = simpleConfig.precision;
+        result.paddingEnabled = simpleConfig.paddingEnabled;
+        result.verbose = simpleConfig.verbose;
+        return result;
+    }
+    
+    // Check argument count
+    if (OPS_GetNumRemainingInputArgs() % 2 != 0) {
+        opserr << "WARNING: OPS_AmgXLinSolver() - "
+               << "Incorrect number of arguments for AmgXLinSolver. " << endln;
+        AmgXParameterParser::printGeneralUsageInfo();
+        opserr << "Alternatively, use the simple constructor: " << endln;
+        AmgXParameterParser::printSimpleUsageInfo();
+        return result;
+    }
+
+    // Try to parse as general config parameters first
+    AmgXGeneralConfig generalConfig;
+    generalConfig.callbackStream = (OPS_Stream*)&opserr;
+    
+    int originalArgCount = OPS_GetNumRemainingInputArgs();
+    
+    if (AmgXParameterParser::parseGeneralConfigParameters(generalConfig)) {
+        if (!generalConfig.configFile.empty() || !generalConfig.configOptions.empty()) {
+            // Handle file callback if specified
+            if (!generalConfig.callbackFilename.empty()) {
+                static FileStream callbackFile;
+                if (callbackFile.setFile(generalConfig.callbackFilename.c_str()) != 0) {
+                    opserr << "WARNING: OPS_AmgXLinSolver() - "
+                           << "Failed to open callback file: " 
+                           << generalConfig.callbackFilename.c_str() << endln;
+                    return result;
+                }
+                generalConfig.callbackStream = &callbackFile;
+            }
+            
+            result.solver = createAmgXSolver(generalConfig);
+            result.blockSize = generalConfig.blockSize;
+            result.precision = generalConfig.precision;
+            result.paddingEnabled = generalConfig.paddingEnabled;
+            result.verbose = generalConfig.verbose;
+            return result;
+        }
+    }
+    
+    // Reset arguments and try simple config
+    OPS_ResetCurrentInputArg(-originalArgCount);
+    
+    AmgXSimpleConfig simpleConfig;
+    if (AmgXParameterParser::parseSimpleConfigParameters(simpleConfig)) {
+        // Validate block size for JACOBI_L1
         if ((simpleConfig.preconditioner == "JACOBI_L1" || 
              simpleConfig.smoother == "JACOBI_L1") && simpleConfig.blockSize != 1) {
             opserr << "WARNING: OPS_AmgXLinSolver() - "
@@ -874,19 +994,12 @@ void* OPS_AmgXLinSolver()
             simpleConfig.blockSize = 1;
         }
         
-        // Create solver and SOE
-        auto solver = createAmgXSolver(simpleConfig);
-        if (simpleConfig.precision == "dDDI") {
-            return CudaGenBcsrLinSOE::createDouble(
-                *solver, simpleConfig.blockSize, 
-                simpleConfig.paddingEnabled, simpleConfig.verbose
-            );
-        } else {
-            return CudaGenBcsrLinSOE::createFloat(
-                *solver, simpleConfig.blockSize, 
-                simpleConfig.paddingEnabled, simpleConfig.verbose
-            );
-        }
+        result.solver = createAmgXSolver(simpleConfig);
+        result.blockSize = simpleConfig.blockSize;
+        result.precision = simpleConfig.precision;
+        result.paddingEnabled = simpleConfig.paddingEnabled;
+        result.verbose = simpleConfig.verbose;
+        return result;
     }
     
     // If we get here, parsing failed
@@ -895,7 +1008,30 @@ void* OPS_AmgXLinSolver()
     AmgXParameterParser::printGeneralUsageInfo();
     opserr << "Alternatively, use the simple constructor: " << endln;
     AmgXParameterParser::printSimpleUsageInfo();
-    return nullptr;
+    return result;
+}
+
+void* OPS_AmgXLinSolver()
+{
+    // Use helper function to parse and create solver with config
+    AmgXSolverAndConfig result = createAmgXSolverAndConfigFromParser();
+    
+    if (result.solver == nullptr) {
+        return nullptr;
+    }
+    
+    // Create and return SOE based on precision
+    if (result.precision == "dDDI") {
+        return CudaGenBcsrLinSOE::createDouble(
+            *result.solver, result.blockSize, 
+            result.paddingEnabled, result.verbose
+        );
+    } else {
+        return CudaGenBcsrLinSOE::createFloat(
+            *result.solver, result.blockSize, 
+            result.paddingEnabled, result.verbose
+        );
+    }
 }
 #else // _AMGX
 void* OPS_AmgXLinSolver() {

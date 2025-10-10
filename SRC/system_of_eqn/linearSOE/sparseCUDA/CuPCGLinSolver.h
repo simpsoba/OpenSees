@@ -46,12 +46,15 @@ class CuPCGLinSolver : public CudaGenBcsrLinSolver
 {
 public:
     // Constructor - takes ownership of the preconditioner (can be nullptr for identity)
+    // updateFrequency: Update preconditioner every N solves (0 = never, 1 = always, N > 1 = periodic)
+    // updateOnFailure: If true, also update when PCG fails regardless of frequency
     CuPCGLinSolver(
         CudaGenBcsrLinSolver* preconditioner,
         int maxIterations = 100,
         double relativeTolerance = 1e-6,
         double absoluteTolerance = 1e-12,
-        bool refactorOnNonConvergence = true,
+        int updateFrequency = 1,
+        bool updateOnFailure = true,
         bool verbose = false
     );
     
@@ -68,6 +71,9 @@ public:
     int getNumRefactorizations() const { return m_numRefactorizations; }
     
 protected:
+    // Virtual method for applying preconditioner (can be overridden by derived classes)
+    // Uses void* pointers with runtime type dispatch via isDoublePrecision()
+    virtual int applyPreconditioner(void* z, void* r, int n, bool updatePreconditioner);
 
 private:
     // Configuration
@@ -75,11 +81,13 @@ private:
     int m_maxIterations;
     double m_relativeTolerance;
     double m_absoluteTolerance;
-    bool m_refactorOnNonConvergence;
+    int m_updateFrequency;     // Update preconditioner every N solves (0 = never)
+    bool m_updateOnFailure;    // Update preconditioner when PCG fails
     
     // Solve statistics
     int m_lastIterationCount;
     int m_numRefactorizations;
+    int m_solvesSinceUpdate;   // Counter for periodic updates
     bool m_isFirstSolve;
     
     // Preconditioner (takes ownership)
@@ -103,23 +111,25 @@ private:
     void* m_dBuffer;       // cuSPARSE workspace buffer
     size_t m_bufferSize;
     
-    // PCG workspace vectors (device memory)
-    void* m_d_x;           // solution workspace
-    void* m_d_r;           // residual
-    void* m_d_z;           // preconditioned residual
-    void* m_d_p;           // search direction
-    void* m_d_Ap;          // A * p
-    void* m_d_temp;        // temporary vector for RHS storage
+    // PCG workspace vectors (device memory) - allocated in one contiguous block
+    void* m_d_workspaceBlock; // Single allocation for all vectors
+    void* m_d_x;           // solution workspace (points into workspace block)
+    void* m_d_r;           // residual (points into workspace block)
+    void* m_d_z;           // preconditioned residual (points into workspace block)
+    void* m_d_p;           // search direction (points into workspace block)
+    void* m_d_Ap;          // A * p (points into workspace block)
+    void* m_d_temp;        // temporary vector for RHS storage (points into workspace block)
     
     // Precision
     cudaDataType_t m_ValueType;
     
     // Helper methods for PCG
     template<typename T>
-    int solvePCG_impl(T* x, T* b, int n);
+    int solvePCG_impl(T* x, T* b, int n, bool updatePreconditioner);
     
+    // Template helper for preconditioner application (used by virtual method)
     template<typename T>
-    int applyPreconditioner(T* z, T* r, int n);
+    int applyPreconditionerImpl(T* z, T* r, int n, bool updatePreconditioner);
 
     void init(const char* precision);
     void cleanup();

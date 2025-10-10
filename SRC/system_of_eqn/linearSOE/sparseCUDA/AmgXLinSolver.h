@@ -88,6 +88,7 @@ public:
 
     // Solver methods
     int solve(void) override;
+    int solveNoRefact(void);  // Solve without rebuilding solver/preconditioner (reuses existing setup)
     int setSize(void) override;
     int getNumIterations(void);
     double getResidualNorm(void);

@@ -238,6 +238,14 @@ CuDSSLinSolver::~CuDSSLinSolver()
 
 int CuDSSLinSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE) {
     #ifdef _CUDSS
+    // cuDSS only supports scalar CSR (blockSize = 1), not BSR
+    if (theSOE.getBlockSize() != 1) {
+        opserr << "WARNING: CuDSSLinSolver::setLinearSOE() - "
+               << "cuDSS only supports scalar CSR (blockSize = 1), got blockSize = " 
+               << theSOE.getBlockSize() << endln;
+        return -1;
+    }
+    
     bool bothDouble = theSOE.isDoublePrecision() && m_ValueType == CUDA_R_64F;
     bool bothFloat = !theSOE.isDoublePrecision() && m_ValueType == CUDA_R_32F;
     if (bothDouble || bothFloat) {
@@ -631,6 +639,50 @@ void CuDSSParameterParser::printUsageInfo() {
     opserr << "  - To control thread count: export OMP_NUM_THREADS=<n> before running OpenSees" << endln;
 }
 
+// Factory function to create CuDSS solver from parsed config
+// This allows reuse in composite solvers like CuPCG
+CudaGenBcsrLinSolver* createCuDSSSolverFromConfig(const CuDSSConfig& config) {
+    return new CuDSSLinSolver(
+        config.precision.c_str(), 
+        config.verbose,
+        config.hybridMemoryMode,
+        config.hybridDeviceMemoryLimit,
+        config.hybridExecuteMode,
+        config.multiThreadingMode,
+        config.threadingLibPath.c_str()
+    );
+}
+
+// Factory function that parses OPS arguments and creates solver
+CudaGenBcsrLinSolver* createCuDSSSolverFromParser() {
+    CuDSSConfig config;
+    
+    // Parse command-line arguments
+    if (!CuDSSParameterParser::parseParameters(config)) {
+        opserr << "WARNING: createCuDSSSolverFromParser() - "
+               << "Failed to parse parameters, using defaults" << endln;
+        opserr << "For valid parameters, use:" << endln;
+        CuDSSParameterParser::printUsageInfo();
+    }
+    
+    // Validate that hybrid modes are mutually exclusive
+    if (config.hybridMemoryMode && config.hybridExecuteMode) {
+        opserr << "ERROR: createCuDSSSolverFromParser() - "
+               << "hybridMemoryMode and hybridExecuteMode are mutually exclusive. "
+               << "Only one can be enabled at a time." << endln;
+        return nullptr;
+    }
+    
+    // Validate that hybridDeviceMemoryLimit is only used with hybridMemoryMode
+    if (config.hybridDeviceMemoryLimit > 0 && !config.hybridMemoryMode) {
+        opserr << "WARNING: createCuDSSSolverFromParser() - "
+               << "hybridDeviceMemoryLimit is only valid with hybridMemoryMode enabled. "
+               << "Ignoring hybridDeviceMemoryLimit." << endln;
+    }
+    
+    return createCuDSSSolverFromConfig(config);
+}
+
 void* OPS_CuDSSLinSolver()
 {
     CuDSSConfig config;
@@ -658,16 +710,11 @@ void* OPS_CuDSSLinSolver()
                << "Ignoring hybridDeviceMemoryLimit." << endln;
     }
     
-    // Create solver with all configuration options
-    CuDSSLinSolver* solver = new CuDSSLinSolver(
-        config.precision.c_str(), 
-        config.verbose,
-        config.hybridMemoryMode,
-        config.hybridDeviceMemoryLimit,
-        config.hybridExecuteMode,
-        config.multiThreadingMode,
-        config.threadingLibPath.c_str()
-    );
+    // Create solver using factory
+    CudaGenBcsrLinSolver* solver = createCuDSSSolverFromConfig(config);
+    if (solver == nullptr) {
+        return nullptr;
+    }
     
     // CuDSS only supports scalar CSR (blockSize = 1, no padding)
     const int blockSize = 1;

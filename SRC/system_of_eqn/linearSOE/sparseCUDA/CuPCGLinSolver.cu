@@ -47,6 +47,15 @@
 #include <cstring>
 #include <cmath>
 
+// Forward declarations of factory functions from other solver files
+#ifdef _CUDSS
+CudaGenBcsrLinSolver* createCuDSSSolverFromParser();
+#endif
+
+#ifdef _AMGX
+CudaGenBcsrLinSolver* createAmgXSolverFromParser();
+#endif
+
 #ifdef _CUDA
 // Static member initialization
 bool CuPCGLinSolver::m_CuSparseInitialized = false;
@@ -62,21 +71,24 @@ using namespace CudaUtils;
 CuPCGLinSolver::CuPCGLinSolver(
     CudaGenBcsrLinSolver* preconditioner,
     int maxIterations, double relativeTolerance, double absoluteTolerance,
-    bool refactorOnNonConvergence, bool verbose)
+    int updateFrequency, bool updateOnFailure, bool verbose)
     :CudaGenBcsrLinSolver(SOLVER_TAGS_CuPCGLinSolver), 
     m_verbose(verbose),
     m_maxIterations(maxIterations),
     m_relativeTolerance(relativeTolerance),
     m_absoluteTolerance(absoluteTolerance),
-    m_refactorOnNonConvergence(refactorOnNonConvergence),
+    m_updateFrequency(updateFrequency),
+    m_updateOnFailure(updateOnFailure),
     m_lastIterationCount(0),
     m_numRefactorizations(0),
+    m_solvesSinceUpdate(0),
     m_isFirstSolve(true),
     m_preconditioner(preconditioner)
 {
     #ifdef _CUDA
     m_dBuffer = nullptr;
     m_bufferSize = 0;
+    m_d_workspaceBlock = nullptr;
     m_d_x = nullptr;
     m_d_r = nullptr;
     m_d_z = nullptr;
@@ -160,29 +172,16 @@ void CuPCGLinSolver::cleanup()
         m_dBuffer = nullptr;
     }
     
-    /* Free PCG workspace vectors */
-    if (m_d_x != nullptr) {
-        cudaCheckError(cudaFree(m_d_x), "free PCG x vector", false);
+    /* Free PCG workspace vectors (single block allocation) */
+    if (m_d_workspaceBlock != nullptr) {
+        cudaCheckError(cudaFree(m_d_workspaceBlock), "free PCG workspace block", false);
+        m_d_workspaceBlock = nullptr;
+        // Reset all vector pointers (they pointed into the workspace block)
         m_d_x = nullptr;
-    }
-    if (m_d_r != nullptr) {
-        cudaCheckError(cudaFree(m_d_r), "free PCG r vector", false);
         m_d_r = nullptr;
-    }
-    if (m_d_z != nullptr) {
-        cudaCheckError(cudaFree(m_d_z), "free PCG z vector", false);
         m_d_z = nullptr;
-    }
-    if (m_d_p != nullptr) {
-        cudaCheckError(cudaFree(m_d_p), "free PCG p vector", false);
         m_d_p = nullptr;
-    }
-    if (m_d_Ap != nullptr) {
-        cudaCheckError(cudaFree(m_d_Ap), "free PCG Ap vector", false);
         m_d_Ap = nullptr;
-    }
-    if (m_d_temp != nullptr) {
-        cudaCheckError(cudaFree(m_d_temp), "free PCG temp vector", false);
         m_d_temp = nullptr;
     }
 }
@@ -191,10 +190,11 @@ void CuPCGLinSolver::cleanup()
 int CuPCGLinSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE)
 {
     #ifdef _CUDA
-    // Only support scalar CSR (blockSize = 1)
-    if (theSOE.getBlockSize() != 1) {
+    // Support both scalar CSR (blockSize = 1) and BSR (blockSize > 1)
+    int blockSize = theSOE.getBlockSize();
+    if (blockSize < 1 || blockSize > 32) {
         opserr << "WARNING: CuPCGLinSolver::setLinearSOE() - "
-               << "Only blockSize = 1 is supported" << endln;
+               << "blockSize must be between 1 and 32, got " << blockSize << endln;
         return -1;
     }
     
@@ -219,8 +219,9 @@ int CuPCGLinSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE)
 int CuPCGLinSolver::setSize()
 {
     #ifdef _CUDA
-    // Let preconditioner handle size setting (if provided)
-    if (m_preconditioner != nullptr) {
+    // Only update preconditioner on first solve
+    // Subsequent updates are handled in solvePCG() based on updateFrequency
+    if (m_preconditioner != nullptr && m_isFirstSolve) {
         return m_preconditioner->setSize();
     }
     #endif
@@ -240,6 +241,7 @@ int CuPCGLinSolver::solve(void)
             m_isFirstSolve = false;
             m_lastIterationCount = 0;
             m_numRefactorizations++;
+            m_solvesSinceUpdate = 0; // Reset counter after update
         }
         return result;
     } else {
@@ -248,6 +250,11 @@ int CuPCGLinSolver::solve(void)
             opserr << "INFO: CuPCGLinSolver - No preconditioner, using unpreconditioned CG" << endln;
         }
         m_isFirstSolve = false;
+        
+        // Increment solve counter
+        m_solvesSinceUpdate++;
+        
+        // Attempt PCG solve
         return solvePCG();
     }
     #endif // _CUDA
@@ -257,6 +264,108 @@ int CuPCGLinSolver::solve(void)
 
 #ifdef _CUDA
 
+// ============================================================================
+// Custom CUDA kernels - combine operations to reduce kernel launches
+// Grid-stride loop pattern: each thread can process multiple elements
+// ============================================================================
+
+// Kernel: x = x + alpha*p  AND  r = r - alpha*Ap (combined update)
+template<typename T>
+__global__ void updateXandR_kernel(
+    T* __restrict__ x,
+    T* __restrict__ r, 
+    const T* __restrict__ p,
+    const T* __restrict__ Ap,
+    T alpha,
+    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int i = idx; i < n; i += stride) {
+        x[i] += alpha * p[i];
+        r[i] -= alpha * Ap[i];
+    }
+}
+
+// Kernel: p = beta*p + vec (update search direction)
+// vec can be z (preconditioned) or r (unpreconditioned)
+template<typename T>
+__global__ void updateP_kernel(
+    T* __restrict__ p,
+    const T* __restrict__ vec,
+    T beta,
+    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int i = idx; i < n; i += stride) {
+        p[i] = beta * p[i] + vec[i];
+    }
+}
+
+// Kernel: copy vector (replaces cudaMemcpy for device-to-device)
+template<typename T>
+__global__ void copy_kernel(
+    T* __restrict__ dst,
+    const T* __restrict__ src,
+    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int i = idx; i < n; i += stride) {
+        dst[i] = src[i];
+    }
+}
+
+// Kernel: initialize x=0 and r=b (combined initialization)
+template<typename T>
+__global__ void initXandR_kernel(
+    T* __restrict__ x,
+    T* __restrict__ r,
+    const T* __restrict__ b,
+    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int i = idx; i < n; i += stride) {
+        x[i] = 0;
+        r[i] = b[i];
+    }
+}
+
+// Helpers to launch kernels
+template<typename T>
+void launchUpdateXandR(T* x, T* r, const T* p, const T* Ap, T alpha, int n, cudaStream_t stream)
+{
+    const int blockSize = 256;
+    const int numBlocks = (n + blockSize - 1) / blockSize;
+    updateXandR_kernel<<<numBlocks, blockSize, 0, stream>>>(x, r, p, Ap, alpha, n);
+}
+
+template<typename T>
+void launchUpdateP(T* p, const T* vec, T beta, int n, cudaStream_t stream)
+{
+    const int blockSize = 256;
+    const int numBlocks = (n + blockSize - 1) / blockSize;
+    updateP_kernel<<<numBlocks, blockSize, 0, stream>>>(p, vec, beta, n);
+}
+
+template<typename T>
+void launchCopy(T* dst, const T* src, int n, cudaStream_t stream)
+{
+    const int blockSize = 256;
+    const int numBlocks = (n + blockSize - 1) / blockSize;
+    copy_kernel<<<numBlocks, blockSize, 0, stream>>>(dst, src, n);
+}
+
+template<typename T>
+void launchInitXandR(T* x, T* r, const T* b, int n, cudaStream_t stream)
+{
+    const int blockSize = 256;
+    const int numBlocks = (n + blockSize - 1) / blockSize;
+    initXandR_kernel<<<numBlocks, blockSize, 0, stream>>>(x, r, b, n);
+}
+
 int CuPCGLinSolver::solvePCG()
 {
     CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
@@ -265,47 +374,109 @@ int CuPCGLinSolver::solvePCG()
         return -1;
     }
 
-    int numRows = theSOE->getNumRowBlocks();
-    int numNonZero = theSOE->getNumNonZeroBlocks();
+    int blockSize = theSOE->getBlockSize();
+    int numBlockRows = theSOE->getNumRowBlocks();
+    int numNonZeroBlocks = theSOE->getNumNonZeroBlocks();
     int* rowPtrs = theSOE->getDeviceRowPtrs();
     int* colIndices = theSOE->getDeviceColIndices();
     void* AValues = theSOE->getDeviceAValues();
     void* xValues = theSOE->getDeviceX();
     void* bValues = theSOE->getDeviceB();
 
-    // Allocate PCG workspace vectors if needed
-    size_t vectorSize = numRows * (m_ValueType == CUDA_R_64F ? sizeof(double) : sizeof(float));
-    if (m_d_r == nullptr) {
-        cudaCheckError(cudaMalloc(&m_d_x, vectorSize), "allocate PCG x vector");
-        cudaCheckError(cudaMalloc(&m_d_r, vectorSize), "allocate PCG r vector");
-        cudaCheckError(cudaMalloc(&m_d_z, vectorSize), "allocate PCG z vector");
-        cudaCheckError(cudaMalloc(&m_d_p, vectorSize), "allocate PCG p vector");
-        cudaCheckError(cudaMalloc(&m_d_Ap, vectorSize), "allocate PCG Ap vector");
-        cudaCheckError(cudaMalloc(&m_d_temp, vectorSize), "allocate PCG temp vector");
+    // Total number of scalar rows (for vector operations)
+    int numScalarRows = numBlockRows * blockSize;
+
+    // Allocate PCG workspace vectors in one contiguous block if needed
+    size_t vectorSize = numScalarRows * (m_ValueType == CUDA_R_64F ? sizeof(double) : sizeof(float));
+    if (m_d_workspaceBlock == nullptr) {
+        // Determine how many vectors we need
+        // Always need: x, r, p, Ap (4 vectors)
+        // With preconditioner: also need z, temp (6 vectors total)
+        // Without preconditioner: only 4 vectors needed
+        int numVectors = (m_preconditioner != nullptr) ? 6 : 4;
+        size_t totalSize = numVectors * vectorSize;
+        
+        // Allocate single block for all vectors (better cache locality, less fragmentation)
+        cudaCheckError(cudaMalloc(&m_d_workspaceBlock, totalSize), "allocate PCG workspace block");
+        
+        // Set up pointers into the workspace block
+        char* basePtr = static_cast<char*>(m_d_workspaceBlock);
+        m_d_x = basePtr + 0 * vectorSize;
+        m_d_r = basePtr + 1 * vectorSize;
+        m_d_p = basePtr + 2 * vectorSize;
+        m_d_Ap = basePtr + 3 * vectorSize;
+        
+        if (m_preconditioner != nullptr) {
+            m_d_z = basePtr + 4 * vectorSize;
+            m_d_temp = basePtr + 5 * vectorSize;
+        } else {
+            // For unpreconditioned case, we don't need z and temp
+            // Set them to nullptr to make it explicit they're not used
+            m_d_z = nullptr;
+            m_d_temp = nullptr;
+        }
+        
+        if (m_verbose) {
+            double memoryMB = (totalSize) / (1024.0 * 1024.0);
+            opserr << "INFO: CuPCGLinSolver - Allocated " << memoryMB << " MB for " 
+                   << numVectors << " PCG workspace vectors (" 
+                   << (m_preconditioner != nullptr ? "preconditioned" : "unpreconditioned") 
+                   << ")" << endln;
+        }
     }
 
     // Setup cuSPARSE matrix descriptor if needed
-    if (m_spMatDescr == nullptr) {
+    CudaGenBcsrLinSOE::MatrixStatus matrixStatus = theSOE->getMatrixStatus();
+    
+    if (m_spMatDescr == nullptr || matrixStatus == CudaGenBcsrLinSOE::MatrixStatus::STRUCTURE_CHANGED) {
+        // Need to create/recreate matrix descriptor (structure changed or first time)
+        if (m_spMatDescr != nullptr) {
+            cuSparseCheckError(cusparseDestroySpMat(m_spMatDescr), "destroy old matrix descriptor");
+            m_spMatDescr = nullptr;
+        }
+        
         cusparseIndexType_t indexType = CUSPARSE_INDEX_32I;
         
-        cuSparseCheckError(cusparseCreateCsr(
-            &m_spMatDescr, numRows, numRows, numNonZero,
-            rowPtrs, colIndices, AValues,
-            indexType, indexType,
-            CUSPARSE_INDEX_BASE_ZERO,
-            m_ValueType
-        ), "create cuSPARSE CSR matrix");
-    } else {
-        // Update matrix values
-        cuSparseCheckError(cusparseCsrSetPointers(
-            m_spMatDescr, rowPtrs, colIndices, AValues
-        ), "update cuSPARSE CSR pointers");
+        if (blockSize == 1) {
+            // Scalar CSR format
+            cuSparseCheckError(cusparseCreateCsr(
+                &m_spMatDescr, numBlockRows, numBlockRows, numNonZeroBlocks,
+                rowPtrs, colIndices, AValues,
+                indexType, indexType,
+                CUSPARSE_INDEX_BASE_ZERO,
+                m_ValueType
+            ), "create cuSPARSE CSR matrix");
+        } else {
+            // Block CSR (BSR) format
+            cuSparseCheckError(cusparseCreateBsr(
+                &m_spMatDescr,
+                numBlockRows,              // brows
+                numBlockRows,              // bcols
+                numNonZeroBlocks,          // bnnz
+                blockSize,                 // rowBlockSize
+                blockSize,                 // colBlockSize
+                rowPtrs,                   // bsrRowOffsets
+                colIndices,                // bsrColInd
+                AValues,                   // bsrValues
+                indexType,                 // bsrRowOffsetsType
+                indexType,                 // bsrColIndType
+                CUSPARSE_INDEX_BASE_ZERO,  // idxBase
+                m_ValueType,               // valueType
+                CUSPARSE_ORDER_ROW         // order (row-major within blocks)
+            ), "create cuSPARSE BSR matrix");
+        }
+    } else if (matrixStatus == CudaGenBcsrLinSOE::MatrixStatus::COEFFICIENTS_CHANGED) {
+        // Only coefficients changed - update values (works for both CSR and BSR)
+        cuSparseCheckError(cusparseSpMatSetValues(
+            m_spMatDescr, AValues
+        ), "update matrix values");
     }
+    // else: UNCHANGED - no update needed
 
     // Setup dense vector descriptors
     if (m_vecX == nullptr) {
-        cuSparseCheckError(cusparseCreateDnVec(&m_vecX, numRows, m_d_p, m_ValueType), "create vecX");
-        cuSparseCheckError(cusparseCreateDnVec(&m_vecY, numRows, m_d_Ap, m_ValueType), "create vecY");
+        cuSparseCheckError(cusparseCreateDnVec(&m_vecX, numScalarRows, m_d_p, m_ValueType), "create vecX");
+        cuSparseCheckError(cusparseCreateDnVec(&m_vecY, numScalarRows, m_d_Ap, m_ValueType), "create vecY");
     }
 
     // Get SpMV buffer size, allocate, and preprocess if needed
@@ -329,14 +500,35 @@ int CuPCGLinSolver::solvePCG()
         ), "preprocess SpMV");
     }
 
+    // Determine if we need to update the preconditioner
+    bool updatePreconditioner = false;
+    if (m_updateFrequency >= 1 && m_solvesSinceUpdate >= m_updateFrequency) {
+        m_solvesSinceUpdate = 0;
+        updatePreconditioner = true;
+    }
+
     // Call the appropriate PCG implementation based on precision
     int result;
     if (m_ValueType == CUDA_R_64F) {
-        result = solvePCG_impl<double>((double*)m_d_x, (double*)bValues, numRows);
+        result = solvePCG_impl<double>((double*)m_d_x, (double*)bValues, numScalarRows, updatePreconditioner);
     } else {
-        result = solvePCG_impl<float>((float*)m_d_x, (float*)bValues, numRows);
+        result = solvePCG_impl<float>((float*)m_d_x, (float*)bValues, numScalarRows, updatePreconditioner);
     }
     
+    if (result != 0 && m_preconditioner != nullptr && m_updateOnFailure && m_updateFrequency != 1) {
+        if (m_verbose) {
+            opserr << "INFO: CuPCGLinSolver - PCG failed, refactorizing preconditioner and retrying (updateOnFailure)" << endln;
+        }
+        m_solvesSinceUpdate = 0;
+        updatePreconditioner = true;
+
+        if (m_ValueType == CUDA_R_64F) {
+            result = solvePCG_impl<double>((double*)m_d_x, (double*)bValues, numScalarRows, updatePreconditioner);
+        } else {
+            result = solvePCG_impl<float>((float*)m_d_x, (float*)bValues, numScalarRows, updatePreconditioner);
+        }
+    }
+
     // Copy solution from workspace to SOE
     if (result == 0) {
         cudaCheckError(cudaMemcpy(xValues, m_d_x, vectorSize, cudaMemcpyDeviceToDevice), "copy solution to SOE");
@@ -345,9 +537,9 @@ int CuPCGLinSolver::solvePCG()
     return result;
 }
 
-// Helper function to apply preconditioner
+// Template helper for preconditioner application (used by virtual method)
 template<typename T>
-int CuPCGLinSolver::applyPreconditioner(T* z, T* r, int n)
+int CuPCGLinSolver::applyPreconditionerImpl(T* z, T* r, int n, bool updatePreconditioner)
 {
     CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
     
@@ -361,8 +553,23 @@ int CuPCGLinSolver::applyPreconditioner(T* z, T* r, int n)
         cudaCheckError(cudaMemset(z, 0, n * sizeof(T)), "zero z");
         cudaCheckError(cudaMemcpy(theSOE->getDeviceX(), z, n * sizeof(T), cudaMemcpyDeviceToDevice), "init precond solution");
         
-        // Apply preconditioner (use existing factorization)
-        int precond_result = m_preconditioner->solveNoRefact();
+        // Apply preconditioner: choose solve() or solveNoRefact() based on flag
+        int precond_result;
+        if (updatePreconditioner) {
+            // Update preconditioner (calls setSize() + solve())
+            precond_result = m_preconditioner->setSize();
+            if (precond_result != 0) {
+                opserr << "ERROR: CuPCGLinSolver - Preconditioner setSize failed" << endln;
+                cudaCheckError(cudaMemcpy(theSOE->getDeviceB(), temp, n * sizeof(T), cudaMemcpyDeviceToDevice), "restore b");
+                return -1;
+            }
+            m_numRefactorizations++; // Count each forced preconditioner update
+            precond_result = m_preconditioner->solve();
+        } else {
+            // Reuse existing preconditioner setup
+            precond_result = m_preconditioner->solveNoRefact();
+        }
+        
         if (precond_result != 0) {
             opserr << "ERROR: CuPCGLinSolver - Preconditioner application failed" << endln;
             cudaCheckError(cudaMemcpy(theSOE->getDeviceB(), temp, n * sizeof(T), cudaMemcpyDeviceToDevice), "restore b");
@@ -379,8 +586,25 @@ int CuPCGLinSolver::applyPreconditioner(T* z, T* r, int n)
     return 0;
 }
 
+// Virtual method that dispatches to template based on precision
+int CuPCGLinSolver::applyPreconditioner(void* z, void* r, int n, bool updatePreconditioner)
+{
+    CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
+    if (theSOE == nullptr) {
+        opserr << "ERROR: CuPCGLinSolver::applyPreconditioner() - LinearSOE not set" << endln;
+        return -1;
+    }
+    
+    // Dispatch to typed implementation based on SOE precision
+    if (theSOE->isDoublePrecision()) {
+        return applyPreconditionerImpl<double>((double*)z, (double*)r, n, updatePreconditioner);
+    } else {
+        return applyPreconditionerImpl<float>((float*)z, (float*)r, n, updatePreconditioner);
+    }
+}
+
 template<typename T>
-int CuPCGLinSolver::solvePCG_impl(T* x, T* b, int n)
+int CuPCGLinSolver::solvePCG_impl(T* x, T* b, int n, bool updatePreconditioner)
 {
     T* r = (T*)m_d_r;
     T* z = (T*)m_d_z;
@@ -390,31 +614,31 @@ int CuPCGLinSolver::solvePCG_impl(T* x, T* b, int n)
     // Get SOE for preconditioner application
     CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
 
+    // Check if we're using an unpreconditioned solver (identity preconditioner)
+    const bool isUnpreconditioned = (m_preconditioner == nullptr);
+
     // Initial calcs (iter = 0)
     int iter = 0;
-
-    // Start with zero initial guess
-    cudaCheckError(cudaMemset(x, 0, n * sizeof(T)), "zero initial guess");
-
-    // r = b - A*x = b (since x = 0, no need to compute A*x)
-    cudaCheckError(cudaMemcpy(r, b, n * sizeof(T), cudaMemcpyDeviceToDevice), "copy b to r");
-
-    // z = M^{-1} * r (apply preconditioner)
-    int precond_result = applyPreconditioner(z, r, n);
-    if (precond_result != 0) {
-        opserr << "ERROR: CuPCGLinSolver - Preconditioner application failed" << endln;
-        return -1;
-    }
-    
-    // p = z
-    cudaCheckError(cudaMemcpy(p, z, n * sizeof(T), cudaMemcpyDeviceToDevice), "copy z to p");
 
     // Compute norm of RHS for relative tolerance
     T normB = 0.0;
     cublasCheckError(cublasNrm2(m_cublasHandle, n, b, 1, &normB), "norm of b");
     
+    // Early exit for zero RHS
+    if (normB == 0.0) {
+        cudaCheckError(cudaMemset(x, 0, n * sizeof(T)), "zero solution for zero RHS");
+        m_lastIterationCount = 0;
+        if (m_verbose) {
+            opserr << "INFO: CuPCGLinSolver - Zero RHS, returning zero solution" << endln;
+        }
+        return 0;
+    }
+    
+    // Initialize x=0 and r=b
+    launchInitXandR(x, r, b, n, m_cudaStream);
+    
     // Compute dynamic tolerance: tol = max(relTol * ||b||, absTol)
-    T tol = std::max(m_relativeTolerance * normB, m_absoluteTolerance);
+    T tol = std::max(static_cast<T>(m_relativeTolerance * normB), static_cast<T>(m_absoluteTolerance));
     
     if (m_verbose) {
         opserr << "  PCG tolerance = max(" << m_relativeTolerance << " * " << normB 
@@ -422,16 +646,59 @@ int CuPCGLinSolver::solvePCG_impl(T* x, T* b, int n)
     }
 
     T rho = 0.0, rho_old = 0.0;
+    T residualNorm = 0.0;
     
-    for (iter = 1; iter <= m_maxIterations; iter++) {
+    // Initialize: for unpreconditioned CG, z = r, so p = r and rho = ||r||^2
+    if (isUnpreconditioned) {
+        // p = r (no need for z)
+        launchCopy(p, r, n, m_cudaStream);
+        
+        // Compute initial residual norm
+        cublasCheckError(cublasNrm2(m_cublasHandle, n, r, 1, &residualNorm), "norm of r");
+        
+        // Check cuda errors from initializing x, r, and p
+        cudaCheckError(cudaGetLastError(), "init kernels");
+        
+        // For unpreconditioned: rho = r^T * r = ||r||^2
+        rho_old = residualNorm * residualNorm;
+    } else {
+        // z = M^{-1} * r (apply preconditioner)
+        int precond_result = applyPreconditioner((void*)z, (void*)r, n, updatePreconditioner);
+        if (precond_result != 0) {
+            opserr << "ERROR: CuPCGLinSolver - Preconditioner application failed" << endln;
+            return -1;
+        }
+        
+        // p = z
+        launchCopy(p, z, n, m_cudaStream);
+        
         // rho_old = r^T * z
         cublasCheckError(cublasDot(m_cublasHandle, n, r, 1, z, 1, &rho_old), "dot for rho_old");
         
+        // Check cuda errors from initializing x, r, z, p, and rho_old
+        cudaCheckError(cudaGetLastError(), "init kernels");
+        
+        // Compute initial residual norm
+        cublasCheckError(cublasNrm2(m_cublasHandle, n, r, 1, &residualNorm), "norm of r");
+    }
+    
+    // Check if already converged (initial guess was good)
+    if (residualNorm < tol) {
+        m_lastIterationCount = 0;
+        if (m_verbose) {
+            opserr << "INFO: CuPCGLinSolver - Already converged (initial residual = " 
+                   << residualNorm << ")" << endln;
+        }
+        return 0;
+    }
+    
+    const T one = 1.0, zero = 0.0;
+    
+    for (iter = 1; iter <= m_maxIterations; iter++) {
         // Ap = A * p
         cusparseDnVecSetValues(m_vecX, p);
         cusparseDnVecSetValues(m_vecY, Ap);
         
-        const T one = 1.0, zero = 0.0;
         cuSparseCheckError(cusparseSpMV(
             m_cuSparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
             &one, m_spMatDescr, m_vecX, &zero, m_vecY,
@@ -445,16 +712,12 @@ int CuPCGLinSolver::solvePCG_impl(T* x, T* b, int n)
         // alpha = rho_old / pAp
         T alpha = rho_old / pAp;
 
-        // x = x + alpha * p
-        cublasCheckError(cublasAxpy(m_cublasHandle, n, &alpha, p, 1, x, 1), "update x");
+        // Combined update: x = x + alpha*p AND r = r - alpha*Ap (single kernel)
+        launchUpdateXandR(x, r, p, Ap, alpha, n, m_cudaStream);
 
-        // r = r - alpha * Ap
-        T neg_alpha = -alpha;
-        cublasCheckError(cublasAxpy(m_cublasHandle, n, &neg_alpha, Ap, 1, r, 1), "update r");
-
-        // Check convergence: ||r|| < tol
-        T residualNorm = 0.0;
+        // Check convergence: ||r|| < tol (syncs - check errors here)
         cublasCheckError(cublasNrm2(m_cublasHandle, n, r, 1, &residualNorm), "norm of r");
+        cudaCheckError(cudaGetLastError(), "PCG iteration kernels");
         
         if (m_verbose && (iter % 10 == 0 || iter <= 5)) {
             opserr << "  PCG iteration " << iter << ", residual = " << residualNorm << " (tol = " << tol << ")" << endln;
@@ -472,43 +735,48 @@ int CuPCGLinSolver::solvePCG_impl(T* x, T* b, int n)
             return 0;
         }
 
-        // z = M^{-1} * r (apply preconditioner)
-        precond_result = applyPreconditioner(z, r, n);
-        if (precond_result != 0) {
-            opserr << "ERROR: CuPCGLinSolver - Preconditioner application failed" << endln;
-            return -1;
+        // Update search direction
+        if (isUnpreconditioned) {
+            // Optimized unpreconditioned path: z = r, so rho = r^T * r = ||r||^2
+            // We already computed ||r|| for convergence check, so reuse it!
+            rho = residualNorm * residualNorm;
+            
+            // beta = rho / rho_old
+            T beta = rho / rho_old;
+            
+            // p = beta*p + r (pass r directly, no z vector needed)
+            launchUpdateP(p, r, beta, n, m_cudaStream);
+            
+            rho_old = rho;
+        } else {
+            // Preconditioned path: z = M^{-1} * r
+            int precond_result = applyPreconditioner((void*)z, (void*)r, n, false);
+            if (precond_result != 0) {
+                opserr << "ERROR: CuPCGLinSolver - Preconditioner application failed" << endln;
+                return -1;
+            }
+
+            // rho = r^T * z (syncs - check errors here)
+            cublasCheckError(cublasDot(m_cublasHandle, n, r, 1, z, 1, &rho), "dot for rho");
+            cudaCheckError(cudaGetLastError(), "update p kernel");
+            
+            // beta = rho / rho_old
+            T beta = rho / rho_old;
+
+            // p = beta*p + z (pass z from preconditioner)
+            launchUpdateP(p, z, beta, n, m_cudaStream);
+            
+            rho_old = rho;
         }
-
-        // rho = r^T * z
-        cublasCheckError(cublasDot(m_cublasHandle, n, r, 1, z, 1, &rho), "dot for rho");
-        
-        // beta = rho / rho_old
-        T beta = rho / rho_old;
-
-        // p = z + beta * p (need to do in two steps)
-        // Step 1: p = beta * p
-        cublasCheckError(cublasScal(m_cublasHandle, n, &beta, p, 1), "scale p by beta");
-        // Step 2: p = z + p
-        cublasCheckError(cublasAxpy(m_cublasHandle, n, &one, z, 1, p, 1), "add z to p");
     }
 
     // Loop exited without convergence - we completed all maxIterations
     m_lastIterationCount = m_maxIterations;
     
-    // PCG did not converge - refactorize if we have a preconditioner and refactorOnNonConvergence is enabled
-    if (m_preconditioner != nullptr && m_refactorOnNonConvergence) {
-        if (m_verbose) {
-            opserr << "INFO: CuPCGLinSolver - PCG did not converge in " << m_maxIterations 
-                   << " iterations, refactorizing and solving directly" << endln;
-        }
-        
-        // Trigger refactorization by solving with preconditioner
-        // (b is still in theSOE->getDeviceB(), solution will go to theSOE->getDeviceX())
-        int result = m_preconditioner->solve();
-        m_numRefactorizations++;
-        return result;
-    }
-
+    // Final error check
+    cudaCheckError(cudaStreamSynchronize(m_cudaStream), "final sync");
+    cudaCheckError(cudaGetLastError(), "PCG iteration kernels");
+    
     opserr << "WARNING: CuPCGLinSolver - PCG did not converge in " << m_maxIterations << " iterations" << endln;
     return -1;
 }
@@ -517,12 +785,13 @@ int CuPCGLinSolver::solvePCG_impl(T* x, T* b, int n)
 
 // OpenSees API for creating solver
 struct CuPCGConfig {
-    std::string preconditioner = "CuDSS";  // Preconditioner type
+    std::string preconditioner = "None";  // Preconditioner type (default: unpreconditioned CG)
     std::string precision = "dDDI";
     int maxIterations = 100;
     double relativeTolerance = 1e-6;
     double absoluteTolerance = 1e-12;
-    bool refactorOnNonConvergence = true;
+    int updateFrequency = 1;      // Update preconditioner every N solves (1 = always, default)
+    bool updateOnFailure = true;  // Update when PCG fails
     bool verbose = false;
 };
 
@@ -537,10 +806,6 @@ public:
 
 const std::unordered_map<std::string, std::function<void(CuPCGConfig&)>> 
 CuPCGParameterParser::configParsers = {
-    {"preconditioner", [](CuPCGConfig& config) { 
-        const char* value = OPS_GetString();
-        if (value) config.preconditioner = value;
-    }},
     {"precision", [](CuPCGConfig& config) { 
         const char* value = OPS_GetString();
         if (value && (strcmp(value, "dDDI") == 0 || strcmp(value, "dFFI") == 0)) {
@@ -573,12 +838,20 @@ CuPCGParameterParser::configParsers = {
             config.absoluteTolerance = val;
         }
     }},
-    {"refactorOnNonConvergence", [](CuPCGConfig& config) { 
+    {"updateFrequency", [](CuPCGConfig& config) { 
         int numData = 1;
         int val = 0;
         if (OPS_GetIntInput(&numData, &val) == 0) {
-            if (val != 0 && val != 1) throw std::invalid_argument("refactorOnNonConvergence must be 0 or 1");
-            config.refactorOnNonConvergence = (val == 1);
+            if (val < 0) throw std::invalid_argument("updateFrequency cannot be negative");
+            config.updateFrequency = val;
+        }
+    }},
+    {"updateOnFailure", [](CuPCGConfig& config) { 
+        int numData = 1;
+        int val = 0;
+        if (OPS_GetIntInput(&numData, &val) == 0) {
+            if (val != 0 && val != 1) throw std::invalid_argument("updateOnFailure must be 0 or 1");
+            config.updateOnFailure = (val == 1);
         }
     }},
     {"verbose", [](CuPCGConfig& config) { 
@@ -601,6 +874,18 @@ bool CuPCGParameterParser::parseParameters(CuPCGConfig& config) {
                 return false;
             }
             
+            // Special handling for -preconditioner: it terminates CuPCG parsing
+            // and all remaining args are for the preconditioner
+            if (strcmp(key, "-preconditioner") == 0 || strcmp(key, "preconditioner") == 0) {
+                // Read preconditioner type
+                const char* precondType = OPS_GetString();
+                if (precondType) {
+                    config.preconditioner = precondType;
+                }
+                // Stop parsing - remaining arguments are for the preconditioner
+                return true;
+            }
+            
             auto it = ParameterUtils::findParameter(key, configParsers);
             if (it != configParsers.end()) {
                 it->second(config);
@@ -618,21 +903,57 @@ bool CuPCGParameterParser::parseParameters(CuPCGConfig& config) {
 
 void CuPCGParameterParser::printUsageInfo() {
     opserr << "CuPCGParameterParser::printUsageInfo() - " << endln;
-    opserr << "Usage: system CuPCG [options]" << endln;
-    opserr << "Options:" << endln;
-    opserr << "  -preconditioner <CuDSS|None>    Preconditioner type (default: CuDSS)" << endln;
+    opserr << "Usage: system CuPCG [options] -preconditioner <type> [preconditioner-options]" << endln;
+    opserr << "CuPCG Options:" << endln;
     opserr << "  -precision <dDDI|dFFI>          Precision mode (default: dDDI)" << endln;
     opserr << "  -maxIter <int>                  Max PCG iterations (default: 100)" << endln;
     opserr << "  -relTol <double>                Relative convergence tolerance (default: 1e-6)" << endln;
     opserr << "  -absTol <double>                Absolute convergence tolerance (default: 1e-12)" << endln;
     opserr << "                                  Convergence: ||r|| < max(relTol*||b||, absTol)" << endln;
-    opserr << "  -refactorOnNonConvergence <0|1> Refactorize if PCG fails to converge (default: 1)" << endln;
-    opserr << "                                  (only applies when preconditioner != None)" << endln;
+    opserr << "  -updateFrequency <N>            Update preconditioner every N solves (default: 1)" << endln;
+    opserr << "                                  0 = never update (after first solve)" << endln;
+    opserr << "                                  1 = always update (every solve, most robust)" << endln;
+    opserr << "                                  N > 1 = periodic update (every N solves)" << endln;
+    opserr << "  -updateOnFailure <0|1>          Update when PCG fails (default: 1)" << endln;
+    opserr << "                                  Provides adaptive failsafe regardless of frequency" << endln;
     opserr << "  -verbose <0|1>                  Enable verbose output (default: 0)" << endln;
+    opserr << "" << endln;
+    opserr << "Preconditioner Types:" << endln;
+    opserr << "  -preconditioner CuDSS [options] Direct solver preconditioner (uses cuDSS)" << endln;
+    opserr << "  -preconditioner AmgX [options]  Iterative solver preconditioner (uses AmgX)" << endln;
+    opserr << "  -preconditioner None            No preconditioner (unpreconditioned CG)" << endln;
+    opserr << "" << endln;
+    opserr << "Update Strategy Examples:" << endln;
+    opserr << "  (1, *) = ALWAYS:               Update every solve (default, most robust)" << endln;
+    opserr << "  (0, 1) = NEVER + FAILSAFE:     Efficient, refactorizes only on failure" << endln;
+    opserr << "  (0, 0) = NEVER:                One factorization, always PCG (may fail if matrix changes)" << endln;
+    opserr << "  (5, 0) = PERIODIC:             Update every 5 solves (strict schedule)" << endln;
+    opserr << "  (5, 1) = PERIODIC + FAILSAFE:  Update every 5 solves, or on failure (adaptive)" << endln;
+    opserr << "" << endln;
+    opserr << "Examples:" << endln;
+    opserr << "  # Default: always update (most robust)" << endln;
+    opserr << "  system CuPCG -maxIter 200 -relTol 1e-8 -preconditioner CuDSS -verbose 1" << endln;
+    opserr << "" << endln;
+    opserr << "  # Efficient: never update, but refactorize if PCG fails" << endln;
+    opserr << "  system CuPCG -updateFrequency 0 -updateOnFailure 1 -preconditioner CuDSS" << endln;
+    opserr << "" << endln;
+    opserr << "  # Never update (strict - may fail if matrix changes)" << endln;
+    opserr << "  system CuPCG -updateFrequency 0 -updateOnFailure 0 -preconditioner CuDSS" << endln;
+    opserr << "" << endln;
+    opserr << "  # Always update (maximum robustness, expensive)" << endln;
+    opserr << "  system CuPCG -updateFrequency 1 -preconditioner AmgX -solver PCG" << endln;
+    opserr << "" << endln;
+    opserr << "  # Update every 10 solves with failsafe" << endln;
+    opserr << "  system CuPCG -updateFrequency 10 -updateOnFailure 1 -preconditioner CuDSS" << endln;
+    opserr << "" << endln;
+    opserr << "  # Unpreconditioned CG" << endln;
+    opserr << "  system CuPCG -maxIter 500 -preconditioner None" << endln;
+    opserr << "" << endln;
     opserr << "Description:" << endln;
-    opserr << "  General PCG solver with optional preconditioning. With preconditioner," << endln;
-    opserr << "  first solve uses it directly, subsequent solves use PCG. Without" << endln;
-    opserr << "  preconditioner (None), always uses unpreconditioned CG." << endln;
+    opserr << "  General PCG solver with any CudaGenBcsrLinSolver as preconditioner." << endln;
+    opserr << "  Supports both scalar CSR (blockSize=1) and BSR (blockSize>1) formats." << endln;
+    opserr << "  First solve uses preconditioner directly, subsequent solves use PCG." << endln;
+    opserr << "  All arguments after '-preconditioner <type>' are passed to that solver's parser." << endln;
 }
 
 void* OPS_CuPCGLinSolver()
@@ -645,32 +966,55 @@ void* OPS_CuPCGLinSolver()
     
     CuPCGConfig config;
     
+    // Parse CuPCG-specific parameters (stops at -preconditioner)
     if (!CuPCGParameterParser::parseParameters(config)) {
         opserr << "WARNING: OPS_CuPCGLinSolver() - "
                << "Failed to parse parameters, using defaults" << endln;
         CuPCGParameterParser::printUsageInfo();
     }
     
-    // Create the preconditioner based on config
+    // Create the preconditioner based on config.preconditioner
+    // Remaining OPS arguments are passed to the preconditioner factory
     CudaGenBcsrLinSolver* precond = nullptr;
+    
     if (config.preconditioner == "CuDSS" || config.preconditioner == "cuDSS" || 
         config.preconditioner == "CUDSS" || config.preconditioner == "cudss") {
         #ifdef _CUDSS
-        precond = new CuDSSLinSolver(config.precision.c_str(), config.verbose);
+        precond = createCuDSSSolverFromParser();
+        if (precond == nullptr) {
+            opserr << "ERROR: OPS_CuPCGLinSolver() - "
+                   << "Failed to create CuDSS preconditioner" << endln;
+            return nullptr;
+        }
         #else
         opserr << "WARNING: OPS_CuPCGLinSolver() - "
                << "cuDSS not available, falling back to unpreconditioned CG" << endln;
         precond = nullptr;
         config.preconditioner = "None";
         #endif
+    } else if (config.preconditioner == "AmgX" || config.preconditioner == "amgx" || 
+               config.preconditioner == "AMGX" || config.preconditioner == "Amgx") {
+        #ifdef _AMGX
+        precond = createAmgXSolverFromParser();
+        if (precond == nullptr) {
+            opserr << "ERROR: OPS_CuPCGLinSolver() - "
+                   << "Failed to create AmgX preconditioner" << endln;
+            return nullptr;
+        }
+        #else
+        opserr << "WARNING: OPS_CuPCGLinSolver() - "
+               << "AmgX not available, falling back to unpreconditioned CG" << endln;
+        precond = nullptr;
+        config.preconditioner = "None";
+        #endif
     } else if (config.preconditioner == "None" || config.preconditioner == "none" || 
-        config.preconditioner == "NULL" || config.preconditioner == "null") {
+               config.preconditioner == "NULL" || config.preconditioner == "null") {
         // No preconditioner (identity preconditioner)
         precond = nullptr;
     } else {
         opserr << "ERROR: OPS_CuPCGLinSolver() - "
                << "Unknown preconditioner type: " << config.preconditioner.c_str() << endln;
-        opserr << "Currently supported: CuDSS, None" << endln;
+        opserr << "Currently supported: CuDSS, AmgX, None" << endln;
         return nullptr;
     }
     
@@ -680,11 +1024,13 @@ void* OPS_CuPCGLinSolver()
         config.maxIterations,
         config.relativeTolerance,
         config.absoluteTolerance,
-        config.refactorOnNonConvergence,
+        config.updateFrequency,
+        config.updateOnFailure,
         config.verbose
     );
     
-    // CuPCG only supports scalar CSR (blockSize = 1, no padding)
+    // CuPCG supports both scalar CSR (blockSize = 1) and BSR (blockSize > 1)
+    // Note, however, certain preconditioners only support blockSize = 1
     const int blockSize = 1;
     const bool paddingEnabled = false;
     
