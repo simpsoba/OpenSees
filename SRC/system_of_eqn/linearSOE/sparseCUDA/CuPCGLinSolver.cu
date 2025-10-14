@@ -381,6 +381,7 @@ int CuPCGLinSolver::solve(void)
 // ============================================================================
 // Custom CUDA kernels - combine operations to reduce kernel launches
 // Grid-stride loop pattern: each thread can process multiple elements
+// Vectorized versions use float4/double2 for better memory coalescing
 // ============================================================================
 
 // Kernel: x = x + alpha*p  AND  r = r - alpha*Ap (combined update)
@@ -401,6 +402,100 @@ __global__ void updateXandR_kernel(
     }
 }
 
+// Vectorized version for float (4-way)
+__global__ void updateXandR_kernel_float4(
+    float* __restrict__ x,
+    float* __restrict__ r, 
+    const float* __restrict__ p,
+    const float* __restrict__ Ap,
+    float alpha,
+    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    int n_vec = n / 4;
+    
+    // Vectorized access
+    float4* x_vec = reinterpret_cast<float4*>(x);
+    float4* r_vec = reinterpret_cast<float4*>(r);
+    const float4* p_vec = reinterpret_cast<const float4*>(p);
+    const float4* Ap_vec = reinterpret_cast<const float4*>(Ap);
+    
+    // Process vectorized elements
+    for (int i = idx; i < n_vec; i += stride) {
+        float4 p_val = __ldg(&p_vec[i]);      // Read-only load via texture cache
+        float4 Ap_val = __ldg(&Ap_vec[i]);    // Read-only load via texture cache
+        float4 x_val = x_vec[i];
+        float4 r_val = r_vec[i];
+        
+        x_val.x += alpha * p_val.x;
+        x_val.y += alpha * p_val.y;
+        x_val.z += alpha * p_val.z;
+        x_val.w += alpha * p_val.w;
+        
+        r_val.x -= alpha * Ap_val.x;
+        r_val.y -= alpha * Ap_val.y;
+        r_val.z -= alpha * Ap_val.z;
+        r_val.w -= alpha * Ap_val.w;
+        
+        x_vec[i] = x_val;
+        r_vec[i] = r_val;
+    }
+    
+    // Handle remainder elements (single-threaded to avoid race conditions)
+    if (idx == 0) {
+        for (int i = n_vec * 4; i < n; i++) {
+            x[i] += alpha * p[i];
+            r[i] -= alpha * Ap[i];
+        }
+    }
+}
+
+// Vectorized version for double (2-way)
+__global__ void updateXandR_kernel_double2(
+    double* __restrict__ x,
+    double* __restrict__ r, 
+    const double* __restrict__ p,
+    const double* __restrict__ Ap,
+    double alpha,
+    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    int n_vec = n / 2;
+    
+    // Vectorized access
+    double2* x_vec = reinterpret_cast<double2*>(x);
+    double2* r_vec = reinterpret_cast<double2*>(r);
+    const double2* p_vec = reinterpret_cast<const double2*>(p);
+    const double2* Ap_vec = reinterpret_cast<const double2*>(Ap);
+    
+    // Process vectorized elements
+    for (int i = idx; i < n_vec; i += stride) {
+        double2 p_val = __ldg(&p_vec[i]);     // Read-only load via texture cache
+        double2 Ap_val = __ldg(&Ap_vec[i]);   // Read-only load via texture cache
+        double2 x_val = x_vec[i];
+        double2 r_val = r_vec[i];
+        
+        x_val.x += alpha * p_val.x;
+        x_val.y += alpha * p_val.y;
+        
+        r_val.x -= alpha * Ap_val.x;
+        r_val.y -= alpha * Ap_val.y;
+        
+        x_vec[i] = x_val;
+        r_vec[i] = r_val;
+    }
+    
+    // Handle remainder elements
+    if (idx == 0) {
+        for (int i = n_vec * 2; i < n; i++) {
+            x[i] += alpha * p[i];
+            r[i] -= alpha * Ap[i];
+        }
+    }
+}
+
 // Kernel: p = beta*p + vec (update search direction)
 // vec can be z (preconditioned) or r (unpreconditioned)
 template<typename T>
@@ -417,6 +512,70 @@ __global__ void updateP_kernel(
     }
 }
 
+// Vectorized version for float (4-way)
+__global__ void updateP_kernel_float4(
+    float* __restrict__ p,
+    const float* __restrict__ vec,
+    float beta,
+    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    int n_vec = n / 4;
+    
+    float4* p_vec = reinterpret_cast<float4*>(p);
+    const float4* vec_vec = reinterpret_cast<const float4*>(vec);
+    
+    for (int i = idx; i < n_vec; i += stride) {
+        float4 p_val = p_vec[i];
+        float4 v_val = __ldg(&vec_vec[i]);    // Read-only load via texture cache
+        
+        p_val.x = beta * p_val.x + v_val.x;
+        p_val.y = beta * p_val.y + v_val.y;
+        p_val.z = beta * p_val.z + v_val.z;
+        p_val.w = beta * p_val.w + v_val.w;
+        
+        p_vec[i] = p_val;
+    }
+    
+    if (idx == 0) {
+        for (int i = n_vec * 4; i < n; i++) {
+            p[i] = beta * p[i] + vec[i];
+        }
+    }
+}
+
+// Vectorized version for double (2-way)
+__global__ void updateP_kernel_double2(
+    double* __restrict__ p,
+    const double* __restrict__ vec,
+    double beta,
+    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    int n_vec = n / 2;
+    
+    double2* p_vec = reinterpret_cast<double2*>(p);
+    const double2* vec_vec = reinterpret_cast<const double2*>(vec);
+    
+    for (int i = idx; i < n_vec; i += stride) {
+        double2 p_val = p_vec[i];
+        double2 v_val = __ldg(&vec_vec[i]);   // Read-only load via texture cache
+        
+        p_val.x = beta * p_val.x + v_val.x;
+        p_val.y = beta * p_val.y + v_val.y;
+        
+        p_vec[i] = p_val;
+    }
+    
+    if (idx == 0) {
+        for (int i = n_vec * 2; i < n; i++) {
+            p[i] = beta * p[i] + vec[i];
+        }
+    }
+}
+
 // Kernel: copy vector (replaces cudaMemcpy for device-to-device)
 template<typename T>
 __global__ void copy_kernel(
@@ -428,6 +587,54 @@ __global__ void copy_kernel(
     int stride = blockDim.x * gridDim.x;
     for (int i = idx; i < n; i += stride) {
         dst[i] = src[i];
+    }
+}
+
+// Vectorized version for float (4-way)
+__global__ void copy_kernel_float4(
+    float* __restrict__ dst,
+    const float* __restrict__ src,
+    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    int n_vec = n / 4;
+    
+    float4* dst_vec = reinterpret_cast<float4*>(dst);
+    const float4* src_vec = reinterpret_cast<const float4*>(src);
+    
+    for (int i = idx; i < n_vec; i += stride) {
+        dst_vec[i] = __ldg(&src_vec[i]);      // Read-only load via texture cache
+    }
+    
+    if (idx == 0) {
+        for (int i = n_vec * 4; i < n; i++) {
+            dst[i] = src[i];
+        }
+    }
+}
+
+// Vectorized version for double (2-way)
+__global__ void copy_kernel_double2(
+    double* __restrict__ dst,
+    const double* __restrict__ src,
+    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    int n_vec = n / 2;
+    
+    double2* dst_vec = reinterpret_cast<double2*>(dst);
+    const double2* src_vec = reinterpret_cast<const double2*>(src);
+    
+    for (int i = idx; i < n_vec; i += stride) {
+        dst_vec[i] = __ldg(&src_vec[i]);      // Read-only load via texture cache
+    }
+    
+    if (idx == 0) {
+        for (int i = n_vec * 2; i < n; i++) {
+            dst[i] = src[i];
+        }
     }
 }
 
@@ -447,37 +654,117 @@ __global__ void initXandR_kernel(
     }
 }
 
-// Helpers to launch kernels
-template<typename T>
-void launchUpdateXandR(T* x, T* r, const T* p, const T* Ap, T alpha, int n, cudaStream_t stream)
+// Vectorized version for float (4-way)
+__global__ void initXandR_kernel_float4(
+    float* __restrict__ x,
+    float* __restrict__ r,
+    const float* __restrict__ b,
+    int n)
 {
-    const int blockSize = 256;
-    const int numBlocks = (n + blockSize - 1) / blockSize;
-    updateXandR_kernel<<<numBlocks, blockSize, 0, stream>>>(x, r, p, Ap, alpha, n);
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    int n_vec = n / 4;
+    
+    float4* x_vec = reinterpret_cast<float4*>(x);
+    float4* r_vec = reinterpret_cast<float4*>(r);
+    const float4* b_vec = reinterpret_cast<const float4*>(b);
+    
+    for (int i = idx; i < n_vec; i += stride) {
+        x_vec[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        r_vec[i] = __ldg(&b_vec[i]);          // Read-only load via texture cache
+    }
+    
+    if (idx == 0) {
+        for (int i = n_vec * 4; i < n; i++) {
+            x[i] = 0.0f;
+            r[i] = b[i];
+        }
+    }
 }
 
-template<typename T>
-void launchUpdateP(T* p, const T* vec, T beta, int n, cudaStream_t stream)
+// Vectorized version for double (2-way)
+__global__ void initXandR_kernel_double2(
+    double* __restrict__ x,
+    double* __restrict__ r,
+    const double* __restrict__ b,
+    int n)
 {
-    const int blockSize = 256;
-    const int numBlocks = (n + blockSize - 1) / blockSize;
-    updateP_kernel<<<numBlocks, blockSize, 0, stream>>>(p, vec, beta, n);
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    int n_vec = n / 2;
+    
+    double2* x_vec = reinterpret_cast<double2*>(x);
+    double2* r_vec = reinterpret_cast<double2*>(r);
+    const double2* b_vec = reinterpret_cast<const double2*>(b);
+    
+    for (int i = idx; i < n_vec; i += stride) {
+        x_vec[i] = make_double2(0.0, 0.0);
+        r_vec[i] = __ldg(&b_vec[i]);          // Read-only load via texture cache
+    }
+    
+    if (idx == 0) {
+        for (int i = n_vec * 2; i < n; i++) {
+            x[i] = 0.0;
+            r[i] = b[i];
+        }
+    }
 }
 
-template<typename T>
-void launchCopy(T* dst, const T* src, int n, cudaStream_t stream)
+// Helpers to launch kernels - dispatch to vectorized versions
+void launchUpdateXandR(float* x, float* r, const float* p, const float* Ap, float alpha, int n, cudaStream_t stream)
 {
     const int blockSize = 256;
-    const int numBlocks = (n + blockSize - 1) / blockSize;
-    copy_kernel<<<numBlocks, blockSize, 0, stream>>>(dst, src, n);
+    const int numBlocks = (n / 4 + blockSize - 1) / blockSize;
+    updateXandR_kernel_float4<<<numBlocks, blockSize, 0, stream>>>(x, r, p, Ap, alpha, n);
 }
 
-template<typename T>
-void launchInitXandR(T* x, T* r, const T* b, int n, cudaStream_t stream)
+void launchUpdateXandR(double* x, double* r, const double* p, const double* Ap, double alpha, int n, cudaStream_t stream)
 {
     const int blockSize = 256;
-    const int numBlocks = (n + blockSize - 1) / blockSize;
-    initXandR_kernel<<<numBlocks, blockSize, 0, stream>>>(x, r, b, n);
+    const int numBlocks = (n / 2 + blockSize - 1) / blockSize;
+    updateXandR_kernel_double2<<<numBlocks, blockSize, 0, stream>>>(x, r, p, Ap, alpha, n);
+}
+
+void launchUpdateP(float* p, const float* vec, float beta, int n, cudaStream_t stream)
+{
+    const int blockSize = 256;
+    const int numBlocks = (n / 4 + blockSize - 1) / blockSize;
+    updateP_kernel_float4<<<numBlocks, blockSize, 0, stream>>>(p, vec, beta, n);
+}
+
+void launchUpdateP(double* p, const double* vec, double beta, int n, cudaStream_t stream)
+{
+    const int blockSize = 256;
+    const int numBlocks = (n / 2 + blockSize - 1) / blockSize;
+    updateP_kernel_double2<<<numBlocks, blockSize, 0, stream>>>(p, vec, beta, n);
+}
+
+void launchCopy(float* dst, const float* src, int n, cudaStream_t stream)
+{
+    const int blockSize = 256;
+    const int numBlocks = (n / 4 + blockSize - 1) / blockSize;
+    copy_kernel_float4<<<numBlocks, blockSize, 0, stream>>>(dst, src, n);
+}
+
+void launchCopy(double* dst, const double* src, int n, cudaStream_t stream)
+{
+    const int blockSize = 256;
+    const int numBlocks = (n / 2 + blockSize - 1) / blockSize;
+    copy_kernel_double2<<<numBlocks, blockSize, 0, stream>>>(dst, src, n);
+}
+
+void launchInitXandR(float* x, float* r, const float* b, int n, cudaStream_t stream)
+{
+    const int blockSize = 256;
+    const int numBlocks = (n / 4 + blockSize - 1) / blockSize;
+    initXandR_kernel_float4<<<numBlocks, blockSize, 0, stream>>>(x, r, b, n);
+}
+
+void launchInitXandR(double* x, double* r, const double* b, int n, cudaStream_t stream)
+{
+    const int blockSize = 256;
+    const int numBlocks = (n / 2 + blockSize - 1) / blockSize;
+    initXandR_kernel_double2<<<numBlocks, blockSize, 0, stream>>>(x, r, b, n);
 }
 
 int CuPCGLinSolver::solvePCG()
