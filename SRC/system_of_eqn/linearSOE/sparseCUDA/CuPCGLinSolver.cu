@@ -30,6 +30,7 @@
 // Solver core classes
 #include <CudaGenBcsrLinSOE.h>
 #include <CuPCGLinSolver.h>
+#include <CuJacobiPCGLinSolver.h>
 #include <CuDSSLinSolver.h>
 
 // CUDA utilities
@@ -73,6 +74,49 @@ CuPCGLinSolver::CuPCGLinSolver(
     int maxIterations, double relativeTolerance, double absoluteTolerance,
     int updateFrequency, bool updateOnFailure, bool verbose)
     :CudaGenBcsrLinSolver(SOLVER_TAGS_CuPCGLinSolver, CudaPrecision::dDDI),  // Default to double, updated in setLinearSOE
+    m_verbose(verbose),
+    m_maxIterations(maxIterations),
+    m_relativeTolerance(relativeTolerance),
+    m_absoluteTolerance(absoluteTolerance),
+    m_updateFrequency(updateFrequency),
+    m_updateOnFailure(updateOnFailure),
+    m_lastIterationCount(0),
+    m_numRefactorizations(0),
+    m_solvesSinceUpdate(0),
+    m_isFirstSolve(true),
+    m_preconditioner(preconditioner)
+{
+    #ifdef _CUDA
+    m_dBuffer = nullptr;
+    m_bufferSize = 0;
+    m_d_workspaceBlock = nullptr;
+    m_d_x = nullptr;
+    m_d_r = nullptr;
+    m_d_z = nullptr;
+    m_d_p = nullptr;
+    m_d_Ap = nullptr;
+    m_d_temp = nullptr;
+    m_allocatedSize = 0;
+    m_spMatDescr = nullptr;
+    m_vecX = nullptr;
+    m_vecY = nullptr;
+    
+    // Preconditioner is optional (nullptr = identity preconditioner)
+    // Precision will be determined from SOE when attached via setLinearSOE()
+    m_MatrixValueType = CUDA_R_64F; // Default, will be set properly when SOE is attached
+    m_VectorValueType = CUDA_R_64F; // Default, will be set properly when SOE is attached
+    
+    init("");
+    #endif // _CUDA
+}
+
+// Protected constructor for derived classes
+CuPCGLinSolver::CuPCGLinSolver(
+    int classTag,
+    CudaGenBcsrLinSolver* preconditioner,
+    int maxIterations, double relativeTolerance, double absoluteTolerance,
+    int updateFrequency, bool updateOnFailure, bool verbose)
+    :CudaGenBcsrLinSolver(classTag, CudaPrecision::dDDI),  // Use provided classTag, default to double
     m_verbose(verbose),
     m_maxIterations(maxIterations),
     m_relativeTolerance(relativeTolerance),
@@ -1297,9 +1341,11 @@ void CuPCGParameterParser::printUsageInfo() {
     opserr << "  -verbose <0|1>                  Enable verbose output (default: 0)" << endln;
     opserr << "" << endln;
     opserr << "Preconditioner Types:" << endln;
-    opserr << "  -preconditioner CuDSS [options] Direct solver preconditioner (uses cuDSS)" << endln;
-    opserr << "  -preconditioner AmgX [options]  Iterative solver preconditioner (uses AmgX)" << endln;
-    opserr << "  -preconditioner None            No preconditioner (unpreconditioned CG)" << endln;
+    opserr << "  -preconditioner CuDSS [options]   Direct solver preconditioner (uses cuDSS)" << endln;
+    opserr << "  -preconditioner AmgX [options]    Iterative solver preconditioner (uses AmgX)" << endln;
+    opserr << "  -preconditioner Jacobi            Diagonal Jacobi preconditioner (simple, fast)" << endln;
+    opserr << "  -preconditioner Diagonal          Alias for Jacobi preconditioner" << endln;
+    opserr << "  -preconditioner None              No preconditioner (unpreconditioned CG)" << endln;
     opserr << "" << endln;
     opserr << "Update Strategy Examples:" << endln;
     opserr << "  (1, *) = ALWAYS:               Update every solve (default, most robust)" << endln;
@@ -1309,7 +1355,10 @@ void CuPCGParameterParser::printUsageInfo() {
     opserr << "  (5, 1) = PERIODIC + FAILSAFE:  Update every 5 solves, or on failure (adaptive)" << endln;
     opserr << "" << endln;
     opserr << "Examples:" << endln;
-    opserr << "  # Default: always update (most robust)" << endln;
+    opserr << "  # Jacobi preconditioner (simple diagonal scaling)" << endln;
+    opserr << "  system CuPCG -maxIter 200 -relTol 1e-8 -preconditioner Jacobi" << endln;
+    opserr << "" << endln;
+    opserr << "  # Direct solver preconditioner (most robust)" << endln;
     opserr << "  system CuPCG -maxIter 200 -relTol 1e-8 -preconditioner CuDSS -verbose 1" << endln;
     opserr << "" << endln;
     opserr << "  # Efficient: never update, but refactorize if PCG fails" << endln;
@@ -1328,10 +1377,12 @@ void CuPCGParameterParser::printUsageInfo() {
     opserr << "  system CuPCG -maxIter 500 -preconditioner None" << endln;
     opserr << "" << endln;
     opserr << "Description:" << endln;
-    opserr << "  General PCG solver with any CudaGenBcsrLinSolver as preconditioner." << endln;
+    opserr << "  General PCG solver with flexible preconditioning options." << endln;
     opserr << "  Supports both scalar CSR (blockSize=1) and BSR (blockSize>1) formats." << endln;
-    opserr << "  First solve uses preconditioner directly, subsequent solves use PCG." << endln;
-    opserr << "  All arguments after '-preconditioner <type>' are passed to that solver's parser." << endln;
+    opserr << "  Preconditioner types: CuDSS (direct), AmgX (AMG), Jacobi (diagonal), None." << endln;
+    opserr << "  For CuDSS/AmgX: first solve uses preconditioner directly, subsequent use PCG." << endln;
+    opserr << "  For Jacobi: simple diagonal preconditioning (M = diag(A)), very efficient." << endln;
+    opserr << "  All arguments after '-preconditioner CuDSS/AmgX' are passed to that solver." << endln;
 }
 
 void* OPS_CuPCGLinSolver()
@@ -1349,6 +1400,55 @@ void* OPS_CuPCGLinSolver()
         opserr << "WARNING: OPS_CuPCGLinSolver() - "
                << "Failed to parse parameters, using defaults" << endln;
         CuPCGParameterParser::printUsageInfo();
+    }
+    
+    // Check for Jacobi/Diagonal preconditioner first - it's a special case
+    // (uses CuJacobiPCGLinSolver instead of CuPCGLinSolver with a preconditioner)
+    if (config.preconditioner == "Jacobi" || config.preconditioner == "jacobi" || 
+        config.preconditioner == "JACOBI" || config.preconditioner == "Diagonal" ||
+        config.preconditioner == "diagonal" || config.preconditioner == "DIAGONAL") {
+        
+        // Create Jacobi PCG solver (has built-in Jacobi preconditioning)
+        CuJacobiPCGLinSolver* solver = new CuJacobiPCGLinSolver(
+            config.maxIterations,
+            config.relativeTolerance,
+            config.absoluteTolerance,
+            config.verbose
+        );
+        
+        // Parse precision from config string
+        CudaPrecision precision;
+        if (!cudaPrecisionFromString(config.precision.c_str(), precision)) {
+            opserr << "WARNING: OPS_CuPCGLinSolver() - "
+                   << "Invalid precision '" << config.precision.c_str() << "', defaulting to dDDI" << endln;
+            precision = CudaPrecision::dDDI;
+        }
+        
+        // CuJacobiPCG supports same precision modes as CuPCG: dDDI, dFFI, dFDI
+        if (precision == CudaPrecision::dDFI) {
+            opserr << "ERROR: OPS_CuPCGLinSolver() - "
+                   << "Precision dDFI (double matrix, float vectors) is not supported by cuSPARSE SpMV. "
+                   << "Supported modes: dDDI, dFFI, dFDI" << endln;
+            delete solver;
+            return nullptr;
+        }
+        
+        const int blockSize = 1;
+        const bool paddingEnabled = false;
+        
+        // Create SOE based on precision mode
+        switch(precision) {
+            case CudaPrecision::dDDI:
+                return CudaGenBcsrLinSOE::createDouble(*solver, blockSize, paddingEnabled, config.verbose);
+            case CudaPrecision::dFFI:
+                return CudaGenBcsrLinSOE::createFloat(*solver, blockSize, paddingEnabled, config.verbose);
+            case CudaPrecision::dFDI:
+                return CudaGenBcsrLinSOE::createFloatDouble(*solver, blockSize, paddingEnabled, config.verbose);
+            default:
+                opserr << "ERROR: OPS_CuPCGLinSolver() - Unexpected precision mode" << endln;
+                delete solver;
+                return nullptr;
+        }
     }
     
     // Create the preconditioner based on config.preconditioner
@@ -1392,7 +1492,7 @@ void* OPS_CuPCGLinSolver()
     } else {
         opserr << "ERROR: OPS_CuPCGLinSolver() - "
                << "Unknown preconditioner type: " << config.preconditioner.c_str() << endln;
-        opserr << "Currently supported: CuDSS, AmgX, None" << endln;
+        opserr << "Currently supported: CuDSS, AmgX, Jacobi, Diagonal, None" << endln;
         return nullptr;
     }
     

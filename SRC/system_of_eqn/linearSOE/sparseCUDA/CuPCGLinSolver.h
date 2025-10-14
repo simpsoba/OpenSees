@@ -72,6 +72,19 @@ public:
     // Query methods
     int getNumIterations() const { return m_lastIterationCount; }
     int getNumRefactorizations() const { return m_numRefactorizations; }
+
+protected:
+    // Protected constructor for derived classes to set their own classTag
+    CuPCGLinSolver(
+        int classTag,
+        CudaGenBcsrLinSolver* preconditioner,
+        int maxIterations = 100,
+        double relativeTolerance = 1e-6,
+        double absoluteTolerance = 1e-12,
+        int updateFrequency = 1,
+        bool updateOnFailure = true,
+        bool verbose = false
+    );
     
 protected:
     // Virtual method for applying preconditioner (can be overridden by derived classes)

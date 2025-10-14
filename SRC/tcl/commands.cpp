@@ -370,6 +370,7 @@ extern void *OPS_CuPCGLinSolver(void);
 #include <CuDSSLinSolver.h>
 #endif
 #include <CuPCGLinSolver.h>
+#include <CuJacobiPCGLinSolver.h>
 #endif
 
 #include <SparseGenRowLinSOE.h>
