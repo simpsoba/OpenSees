@@ -95,6 +95,7 @@ CuPCGLinSolver::CuPCGLinSolver(
     m_d_p = nullptr;
     m_d_Ap = nullptr;
     m_d_temp = nullptr;
+    m_allocatedSize = 0;
     m_spMatDescr = nullptr;
     m_vecX = nullptr;
     m_vecY = nullptr;
@@ -238,14 +239,105 @@ int CuPCGLinSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE)
     return 0;
 }
 
+void CuPCGLinSolver::setPreconditioner(CudaGenBcsrLinSolver* preconditioner)
+{
+    #ifdef _CUDA
+    // Transfer ownership of the new preconditioner
+    m_preconditioner.reset(preconditioner);
+    
+    // Reset solve state since we have a new preconditioner
+    m_isFirstSolve = true;
+    m_solvesSinceUpdate = 0;
+    
+    // Attach the LinearSOE to the new preconditioner if we already have one
+    CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
+    if (theSOE != nullptr && preconditioner != nullptr) {
+        preconditioner->setLinearSOE(*theSOE);
+    }
+    
+    // Note: Workspace will be reallocated in next setSize() call if needed
+    // (number of vectors changes depending on whether preconditioner is present)
+    
+    if (m_verbose) {
+        opserr << "INFO: CuPCGLinSolver::setPreconditioner() - "
+               << (preconditioner != nullptr ? "New preconditioner set" : "Preconditioner removed")
+               << endln;
+    }
+    #endif // _CUDA
+}
+
 int CuPCGLinSolver::setSize()
 {
     #ifdef _CUDA
-    // Only update preconditioner on first solve
-    // Subsequent updates are handled in solvePCG() based on updateFrequency
+    // Update preconditioner size if needed
     if (m_preconditioner != nullptr && m_isFirstSolve) {
-        return m_preconditioner->setSize();
+        int result = m_preconditioner->setSize();
+        if (result != 0) return result;
     }
+    
+    // Allocate/reallocate PCG workspace if size changed
+    CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
+    if (theSOE == nullptr) {
+        opserr << "ERROR: CuPCGLinSolver::setSize() - LinearSOE not set" << endln;
+        return -1;
+    }
+    
+    int blockSize = theSOE->getBlockSize();
+    int numBlockRows = theSOE->getNumRowBlocks();
+    int numScalarRows = numBlockRows * blockSize;
+    
+    // Calculate required workspace size
+    size_t vectorSize = numScalarRows * (m_VectorValueType == CUDA_R_64F ? sizeof(double) : sizeof(float));
+    
+    // Determine number of vectors needed
+    // Always need: x, r, p, Ap (4 vectors - x is separate because preconditioner can modify the SOE)
+    // With preconditioner: also need z, temp (6 vectors total)
+    // Without preconditioner: only 4 vectors needed
+    int numVectors = (m_preconditioner != nullptr) ? 6 : 4;
+    size_t requiredSize = numVectors * vectorSize;
+    
+    // Only reallocate if we need more space than currently allocated
+    if (requiredSize > m_allocatedSize) {
+        // Free existing workspace if allocated
+        if (m_d_workspaceBlock != nullptr) {
+            cudaCheckError(cudaFree(m_d_workspaceBlock), "free old PCG workspace block", false);
+            m_d_workspaceBlock = nullptr;
+            m_d_x = nullptr;
+            m_d_r = nullptr;
+            m_d_z = nullptr;
+            m_d_p = nullptr;
+            m_d_Ap = nullptr;
+            m_d_temp = nullptr;
+        }
+        
+        // Allocate new workspace
+        cudaCheckError(cudaMalloc(&m_d_workspaceBlock, requiredSize), "allocate PCG workspace block");
+        m_allocatedSize = requiredSize;
+        
+        if (m_verbose) {
+            double memoryMB = requiredSize / (1024.0 * 1024.0);
+            opserr << "INFO: CuPCGLinSolver::setSize() - Allocated " << memoryMB << " MB for " 
+                   << numVectors << " PCG workspace vectors (size=" << numScalarRows 
+                   << ", " << (m_preconditioner != nullptr ? "preconditioned" : "unpreconditioned") 
+                   << ")" << endln;
+        }
+    }
+    
+    // Set up pointers into the workspace block (always update, even if not reallocating)
+    char* basePtr = static_cast<char*>(m_d_workspaceBlock);
+    m_d_x = basePtr + 0 * vectorSize;
+    m_d_r = basePtr + 1 * vectorSize;
+    m_d_p = basePtr + 2 * vectorSize;
+    m_d_Ap = basePtr + 3 * vectorSize;
+    
+    if (m_preconditioner != nullptr) {
+        m_d_z = basePtr + 4 * vectorSize;
+        m_d_temp = basePtr + 5 * vectorSize;
+    } else {
+        m_d_z = nullptr;
+        m_d_temp = nullptr;
+    }
+    
     #endif
     return 0;
 }
@@ -407,44 +499,13 @@ int CuPCGLinSolver::solvePCG()
 
     // Total number of scalar rows (for vector operations)
     int numScalarRows = numBlockRows * blockSize;
-
-    // Allocate PCG workspace vectors in one contiguous block if needed
-    size_t vectorSize = numScalarRows * (m_VectorValueType == CUDA_R_64F ? sizeof(double) : sizeof(float));
+    
+    // Workspace is allocated in setSize()
+    // Verify allocation is correct
     if (m_d_workspaceBlock == nullptr) {
-        // Determine how many vectors we need
-        // Always need: x, r, p, Ap (4 vectors)
-        // With preconditioner: also need z, temp (6 vectors total)
-        // Without preconditioner: only 4 vectors needed
-        int numVectors = (m_preconditioner != nullptr) ? 6 : 4;
-        size_t totalSize = numVectors * vectorSize;
-        
-        // Allocate single block for all vectors (better cache locality, less fragmentation)
-        cudaCheckError(cudaMalloc(&m_d_workspaceBlock, totalSize), "allocate PCG workspace block");
-        
-        // Set up pointers into the workspace block
-        char* basePtr = static_cast<char*>(m_d_workspaceBlock);
-        m_d_x = basePtr + 0 * vectorSize;
-        m_d_r = basePtr + 1 * vectorSize;
-        m_d_p = basePtr + 2 * vectorSize;
-        m_d_Ap = basePtr + 3 * vectorSize;
-        
-        if (m_preconditioner != nullptr) {
-            m_d_z = basePtr + 4 * vectorSize;
-            m_d_temp = basePtr + 5 * vectorSize;
-        } else {
-            // For unpreconditioned case, we don't need z and temp
-            // Set them to nullptr to make it explicit they're not used
-            m_d_z = nullptr;
-            m_d_temp = nullptr;
-        }
-        
-        if (m_verbose) {
-            double memoryMB = (totalSize) / (1024.0 * 1024.0);
-            opserr << "INFO: CuPCGLinSolver - Allocated " << memoryMB << " MB for " 
-                   << numVectors << " PCG workspace vectors (" 
-                   << (m_preconditioner != nullptr ? "preconditioned" : "unpreconditioned") 
-                   << ")" << endln;
-        }
+        opserr << "ERROR: CuPCGLinSolver::solvePCG() - Workspace not allocated. "
+               << "This should have been allocated in setSize()." << endln;
+        return -1;
     }
 
     // Setup cuSPARSE matrix descriptor if needed
@@ -555,6 +616,7 @@ int CuPCGLinSolver::solvePCG()
 
     // Copy solution from workspace to SOE
     if (result == 0) {
+        size_t vectorSize = numScalarRows * (m_VectorValueType == CUDA_R_64F ? sizeof(double) : sizeof(float));
         cudaCheckError(cudaMemcpy(xValues, m_d_x, vectorSize, cudaMemcpyDeviceToDevice), "copy solution to SOE");
     }
     

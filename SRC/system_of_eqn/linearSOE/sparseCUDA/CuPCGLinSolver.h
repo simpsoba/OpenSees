@@ -66,6 +66,9 @@ public:
     int setSize(void) override;
     int setLinearSOE(CudaGenBcsrLinSOE &theSOE) override;
     
+    // Preconditioner management
+    void setPreconditioner(CudaGenBcsrLinSolver* preconditioner);
+    
     // Query methods
     int getNumIterations() const { return m_lastIterationCount; }
     int getNumRefactorizations() const { return m_numRefactorizations; }
@@ -119,6 +122,9 @@ private:
     void* m_d_p;           // search direction (points into workspace block)
     void* m_d_Ap;          // A * p (points into workspace block)
     void* m_d_temp;        // temporary vector for RHS storage (points into workspace block)
+    
+    // Size tracking for workspace allocation
+    size_t m_allocatedSize; // Track allocated workspace size in bytes
     
     // Precision (matrix and vector types can differ)
     cudaDataType_t m_MatrixValueType;
