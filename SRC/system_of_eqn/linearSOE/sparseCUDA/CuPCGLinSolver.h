@@ -90,9 +90,8 @@ protected:
     // Virtual method for applying preconditioner (can be overridden by derived classes)
     // Uses void* pointers with runtime type dispatch via getPrecision()
     virtual int applyPreconditioner(void* z, void* r, int n, bool updatePreconditioner);
-
-private:
-    // Configuration
+    
+    // Configuration (protected so derived classes can access)
     bool m_verbose;
     int m_maxIterations;
     double m_relativeTolerance;
@@ -108,6 +107,8 @@ private:
     
     // Preconditioner (takes ownership)
     std::unique_ptr<CudaGenBcsrLinSolver> m_preconditioner;
+
+private:
     
     // Helper functions
     int solvePCG();        // PCG solve with preconditioner
