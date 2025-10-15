@@ -1215,6 +1215,7 @@ struct CuPCGConfig {
     int updateFrequency = 1;      // Update preconditioner every N solves (1 = always, default)
     bool updateOnFailure = true;  // Update when PCG fails
     bool verbose = false;
+    int blockSize = 1;            // Block size for BSR format (1 = CSR, >1 = BSR)
 };
 
 class CuPCGParameterParser {
@@ -1283,6 +1284,14 @@ CuPCGParameterParser::configParsers = {
             if (flag != 0 && flag != 1) throw std::invalid_argument("verbose must be 0 or 1");
             config.verbose = (flag == 1);
         }
+    }},
+    {"blockSize", [](CuPCGConfig& config) { 
+        int numData = 1;
+        int val = 0;
+        if (OPS_GetIntInput(&numData, &val) == 0) {
+            if (val < 1 || val > 32) throw std::invalid_argument("blockSize must be between 1 and 32");
+            config.blockSize = val;
+        }
     }}
 };
 
@@ -1332,6 +1341,7 @@ void CuPCGParameterParser::printUsageInfo() {
     opserr << "  -relTol <double>                Relative convergence tolerance (default: 1e-6)" << endln;
     opserr << "  -absTol <double>                Absolute convergence tolerance (default: 1e-12)" << endln;
     opserr << "                                  Convergence: ||r|| < max(relTol*||b||, absTol)" << endln;
+    opserr << "  -blockSize <int>                Block size for BSR format (default: 1, 1=CSR, >1=BSR)" << endln;
     opserr << "  -updateFrequency <N>            Update preconditioner every N solves (default: 1)" << endln;
     opserr << "                                  0 = never update (after first solve)" << endln;
     opserr << "                                  1 = always update (every solve, most robust)" << endln;
@@ -1433,17 +1443,16 @@ void* OPS_CuPCGLinSolver()
             return nullptr;
         }
         
-        const int blockSize = 1;
         const bool paddingEnabled = false;
         
         // Create SOE based on precision mode
         switch(precision) {
             case CudaPrecision::dDDI:
-                return CudaGenBcsrLinSOE::createDouble(*solver, blockSize, paddingEnabled, config.verbose);
+                return CudaGenBcsrLinSOE::createDouble(*solver, config.blockSize, paddingEnabled, config.verbose);
             case CudaPrecision::dFFI:
-                return CudaGenBcsrLinSOE::createFloat(*solver, blockSize, paddingEnabled, config.verbose);
+                return CudaGenBcsrLinSOE::createFloat(*solver, config.blockSize, paddingEnabled, config.verbose);
             case CudaPrecision::dFDI:
-                return CudaGenBcsrLinSOE::createFloatDouble(*solver, blockSize, paddingEnabled, config.verbose);
+                return CudaGenBcsrLinSOE::createFloatDouble(*solver, config.blockSize, paddingEnabled, config.verbose);
             default:
                 opserr << "ERROR: OPS_CuPCGLinSolver() - Unexpected precision mode" << endln;
                 delete solver;
@@ -1527,17 +1536,16 @@ void* OPS_CuPCGLinSolver()
     
     // CuPCG supports both scalar CSR (blockSize = 1) and BSR (blockSize > 1)
     // Note, however, certain preconditioners only support blockSize = 1
-    const int blockSize = 1;
     const bool paddingEnabled = false;
     
     // Create SOE based on precision mode
     switch(precision) {
         case CudaPrecision::dDDI:
-            return CudaGenBcsrLinSOE::createDouble(*solver, blockSize, paddingEnabled, config.verbose);
+            return CudaGenBcsrLinSOE::createDouble(*solver, config.blockSize, paddingEnabled, config.verbose);
         case CudaPrecision::dFFI:
-            return CudaGenBcsrLinSOE::createFloat(*solver, blockSize, paddingEnabled, config.verbose);
+            return CudaGenBcsrLinSOE::createFloat(*solver, config.blockSize, paddingEnabled, config.verbose);
         case CudaPrecision::dFDI:
-            return CudaGenBcsrLinSOE::createFloatDouble(*solver, blockSize, paddingEnabled, config.verbose);
+            return CudaGenBcsrLinSOE::createFloatDouble(*solver, config.blockSize, paddingEnabled, config.verbose);
         default:
             // Should never reach here due to validation above
             opserr << "ERROR: OPS_CuPCGLinSolver() - Unexpected precision mode" << endln;
