@@ -1342,6 +1342,9 @@ void CuPCGParameterParser::printUsageInfo() {
     opserr << "  -absTol <double>                Absolute convergence tolerance (default: 1e-12)" << endln;
     opserr << "                                  Convergence: ||r|| < max(relTol*||b||, absTol)" << endln;
     opserr << "  -blockSize <int>                Block size for BSR format (default: 1, 1=CSR, >1=BSR)" << endln;
+    opserr << "                                  NOTE: Specify blockSize BEFORE -preconditioner option" << endln;
+    opserr << "                                  The preconditioner will inherit this blockSize" << endln;
+    opserr << "                                  Do NOT specify -blockSize in preconditioner options" << endln;
     opserr << "  -updateFrequency <N>            Update preconditioner every N solves (default: 1)" << endln;
     opserr << "                                  0 = never update (after first solve)" << endln;
     opserr << "                                  1 = always update (every solve, most robust)" << endln;
@@ -1370,6 +1373,9 @@ void CuPCGParameterParser::printUsageInfo() {
     opserr << "" << endln;
     opserr << "  # Direct solver preconditioner (most robust)" << endln;
     opserr << "  system CuPCG -maxIter 200 -relTol 1e-8 -preconditioner CuDSS -verbose 1" << endln;
+    opserr << "" << endln;
+    opserr << "  # Using block size > 1 with AmgX preconditioner" << endln;
+    opserr << "  system CuPCG -blockSize 3 -preconditioner AmgX -solver PCG -preconditioner AGGREGATION" << endln;
     opserr << "" << endln;
     opserr << "  # Efficient: never update, but refactorize if PCG fails" << endln;
     opserr << "  system CuPCG -updateFrequency 0 -updateOnFailure 1 -preconditioner CuDSS" << endln;
@@ -1462,6 +1468,7 @@ void* OPS_CuPCGLinSolver()
     
     // Create the preconditioner based on config.preconditioner
     // Remaining OPS arguments are passed to the preconditioner factory
+    // Note: Do NOT specify -blockSize in preconditioner arguments; it will be inherited from CuPCG
     CudaGenBcsrLinSolver* precond = nullptr;
     
     if (config.preconditioner == "CuDSS" || config.preconditioner == "cuDSS" || 

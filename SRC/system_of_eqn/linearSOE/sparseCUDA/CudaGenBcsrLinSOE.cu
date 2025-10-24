@@ -314,12 +314,12 @@ int CudaGenBcsrLinSOE::buildBlockCSR(Graph &theGraph)
         return -1;
     }
     
-    // Compute the padded number of equations
-    const int paddedSize = (originalSize + m_blockSize - 1) / m_blockSize;
-
-    // Compute number of block rows, block columns, and number of non-zero blocks
-    const int numBlockRows = paddedSize / m_blockSize;
-    const int numBlockCols = paddedSize / m_blockSize;
+    // Compute number of block rows and block columns
+    const int numBlockRows = (originalSize + m_blockSize - 1) / m_blockSize;
+    const int numBlockCols = numBlockRows;  // Square matrix
+    
+    // Compute the padded number of equations (in DOFs, not blocks)
+    const int paddedSize = numBlockRows * m_blockSize;
     const int nnzBlock = countNonZeroBlocks(theGraph, m_blockSize, m_paddingEnabled);
     if (nnzBlock <= 0) {
         return nnzBlock;
