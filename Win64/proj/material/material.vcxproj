@@ -234,6 +234,7 @@
     <ClCompile Include="..\..\..\SRC\material\nD\UWmaterials\J2CyclicBoundingSurface.cpp" />
     <ClCompile Include="..\..\..\SRC\material\nD\UWmaterials\J2CyclicBoundingSurface3D.cpp" />
     <ClCompile Include="..\..\..\SRC\material\nD\UWmaterials\J2CyclicBoundingSurfacePlaneStrain.cpp" />
+    <ClCompile Include="..\..\..\SRC\material\nD\UWmaterials\LinearElasticGGmax.cpp" />
     <ClCompile Include="..\..\..\SRC\material\nD\UWmaterials\ManzariDafalias3DRO.cpp" />
     <ClCompile Include="..\..\..\SRC\material\nD\UWmaterials\ManzariDafaliasPlaneStrainRO.cpp" />
     <ClCompile Include="..\..\..\SRC\material\nD\UWmaterials\ManzariDafaliasRO.cpp" />
@@ -718,6 +719,7 @@
     <ClInclude Include="..\..\..\SRC\material\nD\UWmaterials\J2CyclicBoundingSurface.h" />
     <ClInclude Include="..\..\..\SRC\material\nD\UWmaterials\J2CyclicBoundingSurface3D.h" />
     <ClInclude Include="..\..\..\SRC\material\nD\UWmaterials\J2CyclicBoundingSurfacePlaneStrain.h" />
+    <ClInclude Include="..\..\..\SRC\material\nD\UWmaterials\LinearElasticGGmax.h" />
     <ClInclude Include="..\..\..\SRC\material\nD\UWmaterials\ManzariDafalias3DRO.h" />
     <ClInclude Include="..\..\..\SRC\material\nD\UWmaterials\ManzariDafaliasPlaneStrainRO.h" />
     <ClInclude Include="..\..\..\SRC\material\nD\UWmaterials\ManzariDafaliasRO.h" />

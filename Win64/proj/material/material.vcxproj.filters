@@ -1577,6 +1577,9 @@
     <ClCompile Include="..\..\..\SRC\material\uniaxial\TzSandCPT.cpp">
       <Filter>uniaxial</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\..\SRC\material\nD\UWmaterials\LinearElasticGGmax.cpp">
+      <Filter>nD\UWmaterials</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\..\SRC\material\uniaxial\AxialSp.h">
@@ -2962,6 +2965,9 @@
     </ClInclude>
     <ClInclude Include="..\..\..\SRC\material\uniaxial\CreepShrinkageACI209.h">
       <Filter>uniaxial</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\SRC\material\nD\UWmaterials\LinearElasticGGmax.h">
+      <Filter>nD\UWmaterials</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>
