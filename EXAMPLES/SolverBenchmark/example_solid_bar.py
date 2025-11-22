@@ -172,16 +172,12 @@ DEFAULT_MESH_FACTORS = (1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 14.0
 # Default solver list (in the requested order).
 DEFAULT_SOLVERS = (
     "BandSPD",
-    # "BandGeneral",
     "UmfPack",
     "cuDSS",
     "AmgX",
     "CuPyCG",
     "CuPyCG-Jacobi",
     "NvMathDirect",
-    "NvMathDirectHybrid",
-    # "NvMathDirectCPU",
-    # "SciPyCG",
 )
 
 def build_solver_catalog() -> Dict[str, SolverSpec]:
