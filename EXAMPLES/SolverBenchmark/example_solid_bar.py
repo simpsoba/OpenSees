@@ -174,7 +174,7 @@ DEFAULT_SOLVERS = (
     "BandSPD",
     "UmfPack",
     "cuDSS",
-    "AmgX",
+    "AmgX-PCG-JacobiL1",
     "CuPyCG",
     "CuPyCG-Jacobi",
     "NvMathDirect",
@@ -207,7 +207,7 @@ def build_solver_catalog() -> Dict[str, SolverSpec]:
         "norm": "L2",
         "convergence": "COMBINED_REL_INI_ABS",
     }
-    catalog["AmgX"] = SolverSpec(
+    catalog["AmgX-PCG-JacobiL1"] = SolverSpec(
         lambda: ops.system(
             "AmgX",
             {
