@@ -49,20 +49,21 @@ import opensees as ops
 # -----------------------------------------------------------------------------
 
 # Geometric properties
-BAR_LENGTH = 10.0
-BAR_HEIGHT = 2.0
-BAR_THICKNESS = 1.0
+BAR_LENGTH = 10.0 # inches
+BAR_HEIGHT = 2.0 # inches
+BAR_THICKNESS = 1.0 # inches
 
 # Material properties
-ELASTIC_MODULUS = 29_000.0
+ELASTIC_MODULUS = 29_000.0 # kip / in^2
 POISSON_RATIO = 0.3
+STEEL_DENSITY = 0.284e-3 / 386.4 # kip s^2 / in^4
 
 def build_solid_bar_model(nx: int, ny: int, nz: int) -> None:
     """Create a structured hexahedral mesh using ``block3D``."""
 
     ops.wipe()
     ops.model("basic", "-ndm", 3, "-ndf", 3)
-    ops.nDMaterial("ElasticIsotropic", 1, ELASTIC_MODULUS, POISSON_RATIO)
+    ops.nDMaterial("ElasticIsotropic", 1, ELASTIC_MODULUS, POISSON_RATIO, STEEL_DENSITY)
 
     # block3D expects corner coordinates in local order.
     eleType = "stdBrick"
@@ -84,7 +85,8 @@ def build_solid_bar_model(nx: int, ny: int, nz: int) -> None:
 def apply_load_pattern(load_per_node: float) -> None:
     """Apply a vertical load to all nodes on the free face."""
 
-    ops.timeSeries("Linear", 1)
+    tStart, tEnd, period = 0.0, 6.0, 4.0
+    ops.timeSeries('Trig', 1, tStart, tEnd, period, '-factor', 1.0)
     ops.pattern("Plain", 1, 1)
     far_x_nodes = [
         node for node in ops.getNodeTags() if math.isclose(ops.nodeCoord(node, 1), BAR_LENGTH, abs_tol=1e-9)
@@ -96,7 +98,7 @@ def apply_load_pattern(load_per_node: float) -> None:
 # Analysis configuration
 # -----------------------------------------------------------------------------
 
-def configure_analysis(solver: SolverSpec, num_steps: int, tol: float, max_iter: int) -> None:
+def configure_static_analysis(solver: SolverSpec, num_steps: int, tol: float, max_iter: int) -> None:
     """Configure the analysis for a given solver."""
     ops.constraints("Plain")
     ops.numberer(solver.numberer)
@@ -106,6 +108,30 @@ def configure_analysis(solver: SolverSpec, num_steps: int, tol: float, max_iter:
     ops.algorithm("ModifiedNewton", "-FactorOnce")
     # ops.algorithm("KrylovNewton", "-increment", "initial", "-iterate", "noTangent", "-maxDim", 6)
     ops.analysis("Static")
+
+def configure_transient_analysis(solver: SolverSpec, num_steps: int, tol: float, max_iter: int) -> None:
+    """Configure the analysis for a given solver."""
+    zeta = 0.01
+    T1 = estimate_fundamental_period(BAR_THICKNESS, BAR_HEIGHT, BAR_LENGTH, ELASTIC_MODULUS, STEEL_DENSITY)
+    omega1 = 2 * math.pi / T1
+    ops.rayleigh(2 * zeta * omega1, 0.0, 0.0, 0.0)
+    ops.constraints("Plain")
+    ops.numberer(solver.numberer)
+    solver.setup()
+    ops.integrator("Newmark", 0.5, 0.25)
+    ops.test("NormUnbalance", tol, max_iter)
+    ops.algorithm("ModifiedNewton", "-FactorOnce")
+    # ops.algorithm("KrylovNewton", "-increment", "initial", "-iterate", "noTangent", "-maxDim", 6)
+    ops.analysis("Transient")
+
+def estimate_fundamental_period(b: float, h: float, L: float, E: float, rho: float) -> float:
+    """Estimate the fundamental period of a cantilever beam."""
+    A = b * h
+    I = b * h**3 / 12.0
+    m = rho * A
+    beta1 = 1.87510406871196 # Exact cantilever constant
+    C = 2 * math.pi / (beta1**2)
+    return C * math.sqrt((m * L**4) / (E * I)) # Fundamental period
 
 def analyze_case(
     solver_name: str,
@@ -118,19 +144,31 @@ def analyze_case(
     nx, ny, nz = counts
     build_solid_bar_model(nx, ny, nz)
     apply_load_pattern(args.load)
-    configure_analysis(solver, args.num_steps, args.tol, args.max_iter)
+    
+    # Static analysis
+    configure_static_analysis(solver, args.num_steps, args.tol, args.max_iter)
+    start_static = time.perf_counter()
+    status_static = ops.analyze(args.num_steps)
+    runtime_static = time.perf_counter() - start_static
 
-    start = time.perf_counter()
-    status = ops.analyze(args.num_steps)
-    runtime = time.perf_counter() - start
+    # Transient analysis
+    ops.wipeAnalysis()
+    ops.remove("loadPattern", 1)
+    configure_transient_analysis(solver, args.num_steps, args.tol, args.max_iter)
+    T1 = estimate_fundamental_period(BAR_THICKNESS, BAR_HEIGHT, BAR_LENGTH, ELASTIC_MODULUS, STEEL_DENSITY)
+    dt = T1 / args.num_steps
+    start_transient = time.perf_counter()
+    status_transient = ops.analyze(args.num_steps, dt)
+    runtime_transient = time.perf_counter() - start_transient
 
     try:
         neq = ops.systemSize()
     except AttributeError:
         neq = -1
 
+    # Use transient analysis status for displacement check (final state)
     displacement = None
-    if status == 0:
+    if status_transient == 0:
         for node in ops.getNodeTags():
             x = ops.nodeCoord(node, 1)
             y = ops.nodeCoord(node, 2)
@@ -156,8 +194,10 @@ def analyze_case(
         mesh_size,
         solver_name,
         neq,
-        status,
-        runtime,
+        status_static,
+        status_transient,
+        runtime_static,
+        runtime_transient,
         dx,
         dy,
         dz,
@@ -314,8 +354,10 @@ CSV_HEADER = (
     "mesh_factor",
     "mesh_c",
     "num_equations",
-    "status",
-    "time_seconds",
+    "status_static",
+    "status_transient",
+    "time_static_seconds",
+    "time_transient_seconds",
     "displacement_x",
     "displacement_y",
     "displacement_z",
@@ -328,8 +370,10 @@ class BenchmarkRow:
     mesh_size: float
     solver_label: str
     neq: int
-    status: int
-    runtime: float
+    status_static: int
+    status_transient: int
+    runtime_static: float
+    runtime_transient: float
     displacement_x: Optional[float] = None
     displacement_y: Optional[float] = None
     displacement_z: Optional[float] = None
@@ -396,8 +440,10 @@ class CSVLogger:
                 row.mesh_factor,
                 row.mesh_size,
                 row.neq,
-                row.status,
-                row.runtime,
+                row.status_static,
+                row.status_transient,
+                row.runtime_static,
+                row.runtime_transient,
                 dx,
                 dy,
                 dz,
@@ -495,13 +541,15 @@ def print_header(args: argparse.Namespace, width: int) -> None:
     print(f"Number of steps: {args.num_steps}, load per node: {args.load}")
     print(
         f"{'Solver':<{width}}"
-        f"{'mesh factor':>12}{'mesh c':>10}{'neq':>10}{'status':>10}{'time (s)':>12}"
+        f"{'mesh factor':>12}{'mesh c':>10}{'neq':>10}"
+        f"{'stat':>6}{'tran':>6}"
+        f"{'time_static':>12}{'time_transient':>15}"
         f"{'displ (x)':>15}{'displ (y)':>15}{'displ (z)':>15}"
     )
 
 
 def report_row(row: BenchmarkRow, width: int, note: Optional[str] = None) -> None:
-    display = row.solver_label #row.solver_label.replace("-", " ").title()
+    display = row.solver_label
     if row.displacement_x is not None:
         dx = row.displacement_x
         dy = row.displacement_y
@@ -509,14 +557,18 @@ def report_row(row: BenchmarkRow, width: int, note: Optional[str] = None) -> Non
         line = (
             f"{display:<{width}}"
             f"{row.mesh_factor:>12.2f}{row.mesh_size:>10.4f}"
-            f"{row.neq:>10}{row.status:>10}{row.runtime:>12.4f}"
+            f"{row.neq:>10}"
+            f"{row.status_static:>6}{row.status_transient:>6}"
+            f"{row.runtime_static:>12.4f}{row.runtime_transient:>15.4f}"
             f"{dx:>15.6e}{dy:>15.6e}{dz:>15.6e}"
         )
     else:
         line = (
             f"{display:<{width}}"
             f"{row.mesh_factor:>12.2f}{row.mesh_size:>10.4f}"
-            f"{row.neq:>10}{row.status:>10}{row.runtime:>12.4f}"
+            f"{row.neq:>10}"
+            f"{row.status_static:>6}{row.status_transient:>6}"
+            f"{row.runtime_static:>12.4f}{row.runtime_transient:>15.4f}"
             f"{'N/A':>15}{'N/A':>15}{'N/A':>15}"
         )
     if note:
@@ -544,7 +596,10 @@ def main() -> None:
                     row = analyze_case(solver_name, solver, factor, mesh_size, counts, args)
                     report_row(row, solver_col_width)
                 except Exception as exc:  # pylint: disable=broad-except
-                    row = BenchmarkRow(factor, mesh_size, solver_name, -1, -999, float("nan"))
+                    row = BenchmarkRow(
+                        factor, mesh_size, solver_name, -1, -999, -999,
+                        float("nan"), float("nan")
+                    )
                     report_row(row, solver_col_width, note=str(exc))
                 finally:
                     csv_logger.write(row)
