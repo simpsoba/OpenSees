@@ -98,6 +98,11 @@ class PythonModule: public DL_Interpreter
     // methods to run a command in the interpreter
     virtual int runCommand(const char*);
 
+    // Optional helpers used by higher-level commands
+    // Expands a dict argument into CLI-style key-value pairs (e.g., {"key": val} -> "-key", val)
+    virtual bool expandDictArgs() override;
+    virtual void* getVoidPtr() override;
+
     // getwrapper
     PythonWrapper* getWrapper() {return &wrapper;}
     OpenSeesCommands& getCmds() {return cmds;}
@@ -105,7 +110,6 @@ class PythonModule: public DL_Interpreter
   private:
     PythonWrapper wrapper;
     OpenSeesCommands cmds;
-
     const char* trimSpaces(PyObject *o);
 };
 

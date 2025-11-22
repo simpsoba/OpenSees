@@ -1038,8 +1038,11 @@ static AmgXSolverAndConfig createAmgXSolverAndConfigFromParser() {
 
 void* OPS_AmgXLinSolver()
 {
-    // Use helper function to parse and create solver with config
-    // Note: Constructor validates precision and throws if unsupported
+    // Use existing parser-based factory; Python bindings can use OPS_ExpandDictArgs
+    // Expand dict to CLI args if present ({"key": val} -> "-key", val)
+    if (OPS_GetNumRemainingInputArgs() == 1) {
+        (void)OPS_ExpandDictArgs();
+    }
     AmgXSolverAndConfig result = createAmgXSolverAndConfigFromParser();
     
     if (result.solver == nullptr) {

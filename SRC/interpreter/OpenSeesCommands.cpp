@@ -1042,6 +1042,22 @@ int OPS_GetNumRemainingInputArgs()
     return interp->getNumRemainingInputArgs();
 }
 
+void* OPS_GetVoidPtr()
+{
+    if (cmds == 0) return nullptr;
+    DL_Interpreter* interp = cmds->getInterpreter();
+    return interp->getVoidPtr();
+}
+
+// Expands a dict argument into CLI-style key-value pairs (e.g., {"key": val} -> "-key", val)
+int OPS_ExpandDictArgs()
+{
+    if (cmds == 0) return 0;
+    DL_Interpreter* interp = cmds->getInterpreter();
+    if (interp == nullptr) return 0;
+    return interp->expandDictArgs() ? 1 : 0;
+}
+
 int OPS_GetIntInput(int *numData, int*data)
 {
     if (cmds == 0) return 0;

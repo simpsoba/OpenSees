@@ -1410,8 +1410,13 @@ void* OPS_CuPCGLinSolver()
     #else
     
     CuPCGConfig config;
-    
-    // Parse CuPCG-specific parameters (stops at -preconditioner)
+
+    // Expand dict to CLI args if present ({"key": val} -> "-key", val)
+    if (OPS_GetNumRemainingInputArgs() == 1) {
+        (void)OPS_ExpandDictArgs();
+    }
+
+    // Parse CLI-style parameters (after any normalization).
     if (!CuPCGParameterParser::parseParameters(config)) {
         opserr << "WARNING: OPS_CuPCGLinSolver() - "
                << "Failed to parse parameters, using defaults" << endln;

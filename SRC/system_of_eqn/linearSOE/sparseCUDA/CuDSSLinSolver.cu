@@ -607,7 +607,7 @@ bool CuDSSParameterParser::parseParameters(CuDSSConfig& config) {
                        << "Invalid input argument" << endln;
                 return false;
             }
-            
+
             auto it = ParameterUtils::findParameter(key, configParsers);
             if (it != configParsers.end()) {
                 it->second(config);
@@ -697,8 +697,13 @@ CudaGenBcsrLinSolver* createCuDSSSolverFromParser() {
 void* OPS_CuDSSLinSolver()
 {
     CuDSSConfig config;
-    
-    // Parse command-line arguments
+
+    // Expand dict to CLI args if present ({"key": val} -> "-key", val)
+    if (OPS_GetNumRemainingInputArgs() == 1) {
+        (void)OPS_ExpandDictArgs();
+    }
+
+    // Parse CLI-style parameters (after any normalization).
     if (!CuDSSParameterParser::parseParameters(config)) {
         opserr << "WARNING: OPS_CuDSSLinSolver() - "
                << "Failed to parse parameters, using defaults" << endln;

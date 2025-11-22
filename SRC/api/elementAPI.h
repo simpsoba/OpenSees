@@ -211,6 +211,7 @@ extern "C" int         OPS_SetStringLists(std::vector<std::vector<const char*>>&
 extern "C" int         OPS_SetStringDict(std::map<const char*, const char*>& data);
 extern "C" int         OPS_SetStringDictList(std::map<const char*, std::vector<const char*>>& data);
 extern "C" int         OPS_GetStringCopy(char** cArray); // returns a new copy
+extern "C" int         OPS_ExpandDictArgs(); // Expands dict to CLI args ({"key": val} -> "-key", val)
 extern "C" matObj*     OPS_GetMaterial(int* matTag, int* matType);
 extern "C" eleObj*     OPS_GetElement(int* eleTag);
 extern "C" matObj*     OPS_GetMaterialType(char* type, int sizeType);
