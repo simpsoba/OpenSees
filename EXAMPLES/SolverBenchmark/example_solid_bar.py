@@ -196,22 +196,23 @@ def build_solver_catalog() -> Dict[str, SolverSpec]:
     )
 
     import json
-    amgx_config = {
+    amgx_config = json.dumps({
+        "config_version": 2,	
         "solver": "PCG",
-        "preconditioner": "JACOBI_L1",
         "max_iters": 10000,
+        "convergence": "COMBINED_REL_INI_ABS",
         "tolerance": 1e-12,
-        "monitor_residual": 1,
         "alt_rel_tolerance": 1e-7,
         "use_scalar_norm": 1,
         "norm": "L2",
-        "convergence": "COMBINED_REL_INI_ABS",
-    }
+        "monitor_residual": 1,
+        "preconditioner": {"solver": "JACOBI_L1", "max_iters": 1},
+    })
     catalog["AmgX-PCG-JacobiL1"] = SolverSpec(
         lambda: ops.system(
             "AmgX",
             {
-                "configOptions": json.dumps(amgx_config),
+                "configOptions": amgx_config,
                 "precision": "dDDI",
                 "verbose": False,
                 "blockSize": 1,
