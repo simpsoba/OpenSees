@@ -211,12 +211,11 @@ def build_solver_catalog() -> Dict[str, SolverSpec]:
     catalog["AmgX-PCG-JacobiL1"] = SolverSpec(
         lambda: ops.system(
             "AmgX",
-            {
-                "configOptions": amgx_config,
-                "precision": "dDDI",
-                "verbose": False,
-                "blockSize": 1,
-            }
+            dict(
+                configOptions=amgx_config,
+                verbose=False,
+                blockSize=1,
+            ),
         ),
         numberer="RCM",
     )
