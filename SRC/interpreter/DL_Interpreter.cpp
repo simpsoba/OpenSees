@@ -107,6 +107,16 @@ int DL_Interpreter::evalDoubleStringExpression(const char* theExpression, double
 	return -1;
 }
 
+bool DL_Interpreter::expandDictArgs()
+{
+    return false;
+}
+
+void* DL_Interpreter::getVoidPtr()
+{
+    return nullptr;
+}
+
 void
 DL_Interpreter::resetInput(int cArg)
 {
