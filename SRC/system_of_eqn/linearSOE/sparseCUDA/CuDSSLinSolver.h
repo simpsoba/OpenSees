@@ -69,7 +69,7 @@ public:
         bool hybridExecuteMode = false,
         bool multiThreadingMode = false,
         const char* threadingLibPath = nullptr,
-        CuDSSMatrixType matrixType = CuDSSMatrixType::FULL
+        CuDSSMatrixType cudssMatType = CuDSSMatrixType::FULL
     );
     
     // Destructor
@@ -100,7 +100,7 @@ private:
     std::string m_threadingLibPath;
 
     // Matrix type: full, symmetric, or SPD (affects cuDSS mtype; symmetric/SPD use lower storage)
-    CuDSSMatrixType m_matrixType;
+    CuDSSMatrixType m_cudssMatType;
 
     // cuDSS initializer (to be used by constructors only)
     void init(CudaPrecision precision);

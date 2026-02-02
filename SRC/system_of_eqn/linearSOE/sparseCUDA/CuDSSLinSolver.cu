@@ -72,7 +72,7 @@ CuDSSLinSolver::CuDSSLinSolver(CudaPrecision precision, bool verbose,
                                bool hybridMemoryMode, size_t hybridDeviceMemoryLimit, 
                                bool hybridExecuteMode, bool multiThreadingMode,
                                const char* threadingLibPath,
-                               CuDSSMatrixType matrixType)
+                               CuDSSMatrixType cudssMatType)
     :CudaGenBcsrLinSolver(SOLVER_TAGS_CuDSSLinSolver, precision), 
     m_verbose(verbose),
     m_hybridMemoryMode(hybridMemoryMode),
@@ -80,7 +80,7 @@ CuDSSLinSolver::CuDSSLinSolver(CudaPrecision precision, bool verbose,
     m_hybridExecuteMode(hybridExecuteMode),
     m_multiThreadingMode(multiThreadingMode),
     m_threadingLibPath(threadingLibPath ? threadingLibPath : ""),
-    m_matrixType(matrixType)
+    m_cudssMatType(cudssMatType)
 {
     #ifdef _CUDSS
     // CuDSS currently only supports uniform precision (dDDI or dFFI)
@@ -491,10 +491,10 @@ int CuDSSLinSolver::setupMatrices() {
     /* Create the cuDSS CSR matrix (full, symmetric, or SPD; symmetric/SPD use lower storage) */
     cudssMatrixType_t mtype = CUDSS_MTYPE_GENERAL;
     cudssMatrixViewType_t mview = CUDSS_MVIEW_FULL;
-    if (m_matrixType == CuDSSMatrixType::SYMMETRIC) {
+    if (m_cudssMatType == CuDSSMatrixType::SYMMETRIC) {
         mtype = CUDSS_MTYPE_SYMMETRIC;
         mview = CUDSS_MVIEW_LOWER;
-    } else if (m_matrixType == CuDSSMatrixType::SPD) {
+    } else if (m_cudssMatType == CuDSSMatrixType::SPD) {
         mtype = CUDSS_MTYPE_SPD;
         mview = CUDSS_MVIEW_LOWER;
     }
@@ -540,7 +540,7 @@ struct CuDSSConfig {
     bool hybridExecuteMode = false;       // Hybrid host/device execute mode
     bool multiThreadingMode = false;      // OpenMP multi-threading mode (requires OpenMP at build time)
     std::string threadingLibPath = "/usr/lib/x86_64-linux-gnu/libcudss_mtlayer_gomp.so";  // Threading layer library path ("NULL" = pass NULL to cuDSS)
-    std::string matrixType = "full";      // full | symmetric | spd (symmetric/spd use lower storage in SOE)
+    std::string cudssMatTypeStr = "full"; // full | symmetric | spd (symmetric/spd use lower storage in SOE)
 };
 
 class CuDSSParameterParser {
@@ -611,7 +611,7 @@ CuDSSParameterParser::configParsers = {
         if (value) {
             std::string s(value);
             if (s == "full" || s == "symmetric" || s == "spd") {
-                config.matrixType = s;
+                config.cudssMatTypeStr = s;
             } else {
                 throw std::invalid_argument("matrixType must be full, symmetric, or spd");
             }
@@ -676,9 +676,9 @@ CudaGenBcsrLinSolver* createCuDSSSolverFromConfig(const CuDSSConfig& config) {
         precision = CudaPrecision::dDDI;
     }
     
-    CuDSSMatrixType matrixType = CuDSSMatrixType::FULL;
-    if (config.matrixType == "symmetric") matrixType = CuDSSMatrixType::SYMMETRIC;
-    else if (config.matrixType == "spd") matrixType = CuDSSMatrixType::SPD;
+    CuDSSMatrixType cudssMatType = CuDSSMatrixType::FULL;
+    if (config.cudssMatTypeStr == "symmetric") cudssMatType = CuDSSMatrixType::SYMMETRIC;
+    else if (config.cudssMatTypeStr == "spd") cudssMatType = CuDSSMatrixType::SPD;
 
     return new CuDSSLinSolver(
         precision, 
@@ -688,7 +688,7 @@ CudaGenBcsrLinSolver* createCuDSSSolverFromConfig(const CuDSSConfig& config) {
         config.hybridExecuteMode,
         config.multiThreadingMode,
         config.threadingLibPath.c_str(),
-        matrixType
+        cudssMatType
     );
 }
 
@@ -774,7 +774,7 @@ void* OPS_CuDSSLinSolver()
     
     // Create and return SOE based on precision (only uniform modes reach here)
     CudaPrecision precision = solver->getPrecision();
-    const bool symmetricStorage = (config.matrixType == "symmetric" || config.matrixType == "spd");
+    const bool symmetricStorage = (config.cudssMatTypeStr == "symmetric" || config.cudssMatTypeStr == "spd");
     switch(precision) {
         case CudaPrecision::dDDI:
             return CudaGenBcsrLinSOE::createDouble(*solver, blockSize, paddingEnabled, config.verbose, symmetricStorage);
