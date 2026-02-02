@@ -153,26 +153,16 @@ void CuDSSLinSolver::init(CudaPrecision precision)
     cudssAlgType_t reorderAlgorithm = CUDSS_ALG_DEFAULT;
     cudssConfigSet(m_Config, CUDSS_CONFIG_REORDERING_ALG, &reorderAlgorithm, sizeof(cudssAlgType_t));
     
-    /* Configure hybrid modes (must be set before analysis phase) */
+    /* Configure hybrid mode (must be set before analysis phase).
+     * Device memory limit is set after ANALYSIS in setupMatrices(). */
     if (m_hybridMemoryMode) {
         int hybridMemoryModeEnabled = 1;
         cuDSSCheckError(cudssConfigSet(m_Config, CUDSS_CONFIG_HYBRID_MODE, &hybridMemoryModeEnabled, sizeof(int)), 
                        "enable hybrid memory mode");
         
-        // Optionally set device memory limit
-        if (m_hybridDeviceMemoryLimit > 0) {
-            cuDSSCheckError(cudssConfigSet(m_Config, CUDSS_CONFIG_HYBRID_DEVICE_MEMORY_LIMIT, 
-                                          &m_hybridDeviceMemoryLimit, sizeof(size_t)), 
-                           "set hybrid device memory limit");
-        }
-        
         if (m_verbose) {
             opserr << "INFO: CuDSSLinSolver::init() - "
-                   << "Hybrid memory mode enabled";
-            if (m_hybridDeviceMemoryLimit > 0) {
-                opserr << " with device memory limit = " << m_hybridDeviceMemoryLimit << " bytes";
-            }
-            opserr << endln;
+                   << "Hybrid memory mode enabled (device limit set after analysis)" << endln;
         }
     }
     
@@ -520,6 +510,43 @@ int CuDSSLinSolver::setupMatrices() {
         m_Matrix, m_Solution, m_RHS
     ), "cuDSS symbolic factorization");
 
+    /* Set hybrid device memory limit after ANALYSIS, before FACTORIZATION.
+     * Optionally query minimal device memory; then set limit from user value or min. */
+    if (m_hybridMemoryMode) {
+        size_t sizeWritten = 0;
+        int64_t deviceMemoryMin = 0;
+        cudssStatus_t status = cudssDataGet(m_Handle, m_Data, CUDSS_DATA_HYBRID_DEVICE_MEMORY_MIN,
+                                            &deviceMemoryMin, sizeof(deviceMemoryMin), &sizeWritten);
+        if (status == CUDSS_STATUS_SUCCESS && m_verbose) {
+            opserr << "INFO: CuDSSLinSolver::setupMatrices() - "
+                   << "Hybrid mode minimal device memory = " << deviceMemoryMin << " bytes" << endln;
+        }
+
+        int64_t limitBytes = 0;
+        if (m_hybridDeviceMemoryLimit > 0) {
+            limitBytes = static_cast<int64_t>(m_hybridDeviceMemoryLimit);
+            if (limitBytes < deviceMemoryMin && m_verbose) {
+                opserr << "WARNING: CuDSSLinSolver::setupMatrices() - "
+                       << "User device memory limit (" << limitBytes << ") < minimal required ("
+                       << deviceMemoryMin << "); using minimal" << endln;
+                limitBytes = deviceMemoryMin;
+            }
+        } else {
+            /* User did not set limit: use queried minimum (or leave to heuristic if query failed) */
+            limitBytes = (status == CUDSS_STATUS_SUCCESS) ? deviceMemoryMin : 0;
+        }
+
+        if (limitBytes > 0) {
+            cuDSSCheckError(cudssConfigSet(m_Config, CUDSS_CONFIG_HYBRID_DEVICE_MEMORY_LIMIT,
+                                          &limitBytes, sizeof(limitBytes)),
+                           "set hybrid device memory limit");
+            if (m_verbose) {
+                opserr << "INFO: CuDSSLinSolver::setupMatrices() - "
+                       << "Hybrid device memory limit set to " << limitBytes << " bytes" << endln;
+            }
+        }
+    }
+
     if (m_verbose) {
         opserr << "INFO: CuDSSLinSolver::setupMatrices() - "
                << "All matrices created and symbolic factorization complete" << endln;
@@ -651,7 +678,7 @@ void CuDSSParameterParser::printUsageInfo() {
     opserr << "  -precision <dDDI|dFFI>          Precision mode (default: dDDI)" << endln;
     opserr << "  -verbose <0|1>                  Enable verbose output (default: 0)" << endln;
     opserr << "  -hybridMemoryMode <0|1>         Hybrid host/device memory mode (default: 0)" << endln;
-    opserr << "  -hybridDeviceMemoryLimit <bytes> Device memory limit for hybrid mode (default: 0=auto)" << endln;
+    opserr << "  -hybridDeviceMemoryLimit <bytes> Device memory limit for hybrid mode (0=min required)" << endln;
     opserr << "  -hybridExecuteMode <0|1>        Hybrid host/device execute mode (default: 0)" << endln;
     opserr << "  -multiThreadingMode <0|1>       OpenMP multi-threading mode (default: 0)" << endln;
     opserr << "                                  (requires OpenMP at build time)" << endln;
