@@ -87,9 +87,10 @@ public:
         CudaGenBcsrLinSolver &theSolver, 
         int blockSize = DEFAULT_BLOCK_SIZE, 
         bool paddingEnabled = true,
-        bool verbose = false
+        bool verbose = false,
+        bool symmetricStorage = false
     )
-    : CudaGenBcsrLinSOE(CudaGenBcsrLinSOEImpl<MatrixType, VectorType>::getClassTagForType(), theSolver, blockSize, paddingEnabled, verbose),
+    : CudaGenBcsrLinSOE(CudaGenBcsrLinSOEImpl<MatrixType, VectorType>::getClassTagForType(), theSolver, blockSize, paddingEnabled, verbose, symmetricStorage),
       m_deviceAValues(), m_deviceX(), m_deviceB()
     {
         // Now that the derived class is fully constructed, we can safely call setLinearSOE

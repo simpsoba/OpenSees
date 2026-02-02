@@ -48,6 +48,10 @@
 // C++ includes
 #include <string>
 
+// Matrix type for cuDSS: full, symmetric, or SPD (symmetric positive definite).
+// symmetric and spd both use symmetric lower storage in CudaGenBcsrLinSOE.
+enum class CuDSSMatrixType { FULL, SYMMETRIC, SPD };
+
 // cuDSS includes
 #ifdef _CUDSS
 #include <cudss.h>
@@ -64,7 +68,8 @@ public:
         size_t hybridDeviceMemoryLimit = 0,
         bool hybridExecuteMode = false,
         bool multiThreadingMode = false,
-        const char* threadingLibPath = nullptr
+        const char* threadingLibPath = nullptr,
+        CuDSSMatrixType matrixType = CuDSSMatrixType::FULL
     );
     
     // Destructor
@@ -93,6 +98,9 @@ private:
     // Multi-threading settings
     bool m_multiThreadingMode;
     std::string m_threadingLibPath;
+
+    // Matrix type: full, symmetric, or SPD (affects cuDSS mtype; symmetric/SPD use lower storage)
+    CuDSSMatrixType m_matrixType;
 
     // cuDSS initializer (to be used by constructors only)
     void init(CudaPrecision precision);

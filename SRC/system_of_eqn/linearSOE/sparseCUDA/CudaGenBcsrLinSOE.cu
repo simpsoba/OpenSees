@@ -75,8 +75,9 @@ inline T* raw_pointer_cast(T* ptr) { return ptr; }
 
 namespace {
 
-    // Count the number of non-zero elements
-    int countNonZeroElements(Graph &theGraph)
+    // Count the number of non-zero elements (full or symmetric lower triangle).
+    // symmetricLower: when true, nnz = numVertices + numEdges (one entry per edge in lower triangle).
+    int countNonZeroElements(Graph &theGraph, bool symmetricLower = false)
     {
         const int numVertices = theGraph.getNumVertex();
         if (numVertices < 0) {
@@ -91,36 +92,32 @@ namespace {
             return -1;
         }
 
-        /* Each edge contributes 2 non-zero elements (one for each vertex) while
-         * each vertex contributes 1 non-zero element (the diagonal entry)
-         */
+        if (symmetricLower) {
+            /* Symmetric lower: each vertex contributes 1 (diagonal), each edge 1 (stored in row max(i,j)) */
+            return numVertices + numEdges;
+        }
+        /* Full: each edge contributes 2 non-zero elements, each vertex 1 (diagonal) */
         return 2 * numEdges + numVertices;
     }
 
-    // Count the number of non-zero square blocks in the graph.
-    int countNonZeroBlocks(Graph &theGraph, int blockSize, bool paddingEnabled = true)
+    // Count the number of non-zero square blocks in the graph (full or symmetric lower).
+    int countNonZeroBlocks(Graph &theGraph, int blockSize, bool paddingEnabled = true, bool symmetricLower = false)
     {
-        // Default to countNonZeroElements() if blockSize is 1
         if (blockSize == 1) {
-            return countNonZeroElements(theGraph);
+            return countNonZeroElements(theGraph, symmetricLower);
         }
 
-        // Get the number of equations in the graph
         int size = theGraph.getNumVertex();
-
-        // Check for invalid graph size or block size
         if (size < 0) {
             opserr << "WARNING: CudaGenBcsrLinSOE::countNonZeroBlocks() - "
                    << "Graph size (" << size << ") < 0" << endln;
             return -1;
         }
-
         if (blockSize < 1) {
             opserr << "WARNING: CudaGenBcsrLinSOE::countNonZeroBlocks() - "
                    << "Block size (" << blockSize << ") < 1" << endln;
             return -1;
         }
-
         if (size % blockSize != 0 && !paddingEnabled) {
             opserr << "WARNING: CudaGenBcsrLinSOE::countNonZeroBlocks() - "
                    << "Graph size (" << size << ") not divisible by "
@@ -133,8 +130,6 @@ namespace {
         std::vector<int> mask(numBlockCols, -1);
         int totalNumBlocks = 0;
 
-        // Note: graph vertices need to be processed ordered by their tags for 
-        // the following loop to work correctly.
         for (int i = 0; i < size; i++) {
             const int blockRow = i / blockSize;
             Vertex* theVertex = theGraph.getVertexPtr(i);
@@ -143,19 +138,17 @@ namespace {
                        << "Vertex (" << i << ") not found in graph!" << endln;
                 return -1;
             }
-            const ID& adjacency = theVertex->getAdjacency(); // col indices
-                
-            // Insert the diagonal block
+            const ID& adjacency = theVertex->getAdjacency();
+
             if (mask[blockRow] != blockRow) {
                 mask[blockRow] = blockRow;
                 totalNumBlocks++;
             }
 
-            // Insert other adjacency blocks
             for (int j = 0; j < adjacency.Size(); j++) {
-                const int blockCol = adjacency(j) / blockSize; 
+                const int blockCol = adjacency(j) / blockSize;
+                if (symmetricLower && blockCol > blockRow) continue; /* lower triangle only */
                 if (mask[blockCol] != blockRow) {
-                    // if this block-col hasn't seen this block-row
                     mask[blockCol] = blockRow;
                     totalNumBlocks++;
                 }
@@ -168,14 +161,15 @@ namespace {
 
 CudaGenBcsrLinSOE::CudaGenBcsrLinSOE(int classTag, CudaGenBcsrLinSolver &theSolver, 
                              int blockSize, bool paddingEnabled,
-                             bool verbose)
+                             bool verbose, bool symmetricStorage)
     : LinearSOE(theSolver, classTag), 
     m_X(), m_B(), m_hostX(), m_hostB(), m_hostAValues(), 
     m_hostCsrIndices(), m_deviceCsrIndices(),
     m_blockSize(blockSize),
     m_matrixStatus(MatrixStatus::STRUCTURE_CHANGED),
     m_paddingEnabled(paddingEnabled),
-    m_verbose(verbose)
+    m_verbose(verbose),
+    m_storageMode(symmetricStorage ? MatrixStorageMode::SYMMETRIC_LOWER : MatrixStorageMode::FULL)
 {   
     // Note: theSolver.setLinearSOE(*this) should be called in derived class constructor
 }
@@ -186,8 +180,19 @@ CudaGenBcsrLinSOE::CudaGenBcsrLinSOE(int classTag): LinearSOE(classTag),
     m_blockSize(DEFAULT_BLOCK_SIZE),
     m_matrixStatus(MatrixStatus::STRUCTURE_CHANGED),
     m_paddingEnabled(true),
-    m_verbose(false)
+    m_verbose(false),
+    m_storageMode(MatrixStorageMode::FULL)
 {
+}
+
+CudaGenBcsrLinSOE::MatrixStorageMode CudaGenBcsrLinSOE::getMatrixStorageMode(void) const
+{
+    return m_storageMode;
+}
+
+bool CudaGenBcsrLinSOE::isSymmetricStorage(void) const
+{
+    return m_storageMode == MatrixStorageMode::SYMMETRIC_LOWER;
 }
 
 CudaGenBcsrLinSOE::~CudaGenBcsrLinSOE() 
@@ -213,7 +218,6 @@ int CudaGenBcsrLinSOE::getNumEqn(void) const
 
 int CudaGenBcsrLinSOE::buildStandardCSR(Graph &theGraph)
 {
-    // Compute the number of equations
     int size = theGraph.getNumVertex();
     if (size < 0) {
         opserr << "WARNING: CudaGenBcsrLinSOE::buildStandardCSR() - "
@@ -221,19 +225,17 @@ int CudaGenBcsrLinSOE::buildStandardCSR(Graph &theGraph)
         return -1;
     }
 
-    // Compute the number of non-zero elements
-    int nnz = countNonZeroElements(theGraph);
+    const bool symmetricLower = (m_storageMode == MatrixStorageMode::SYMMETRIC_LOWER);
+    int nnz = countNonZeroElements(theGraph, symmetricLower);
     if (nnz <= 0) {
         return nnz;
     }
 
-    // Reserve space for row pointers and column indices of matrix A in CSR format
     m_hostCsrIndices.resize(size + 1 + nnz);
     int *ArowPtr = raw_pointer_cast(m_hostCsrIndices.data());
     int *AcolIdx = raw_pointer_cast(m_hostCsrIndices.data()) + size + 1;
 
-    // Fill in rowPtr and colIdx
-    ArowPtr[0] = 0; // Start of first row
+    ArowPtr[0] = 0;
     for (int row = 0; row < size; ++row) {
         Vertex *theVertex = theGraph.getVertexPtr(row);
         if (theVertex == nullptr) {
@@ -243,35 +245,29 @@ int CudaGenBcsrLinSOE::buildStandardCSR(Graph &theGraph)
         }
 
         const ID& theAdjacency = theVertex->getAdjacency();
-        ID localColIdx(0, theAdjacency.Size() + 1); // +1 for the diagonal
+        ID localColIdx(0, theAdjacency.Size() + 1);
 
-        // Add diagonal first
         localColIdx.insert(theVertex->getTag());
 
-        // Add adjacency entries in order
         for (int j = 0; j < theAdjacency.Size(); ++j) {
-            localColIdx.insert(theAdjacency(j));
+            const int col = theAdjacency(j);
+            if (symmetricLower && col > row) continue; /* lower triangle: only col <= row */
+            localColIdx.insert(col);
         }
 
-        // Append this row's col indices to the global col indices
         std::copy_n(&localColIdx(0), localColIdx.Size(), AcolIdx + ArowPtr[row]);
-
-        // Update row pointer
         ArowPtr[row + 1] = ArowPtr[row] + localColIdx.Size();
     }
 
-    // Check that we built row pointers correctly
     if (nnz != ArowPtr[size]) {
         opserr << "WARNING: CudaGenBcsrLinSOE::buildStandardCSR() - "
                << "nnz (" << nnz << ") != ArowPtr[" << size << "]" << endln;
         return -1;
     }
 
-    // Reserve space for values of matrix A, and vectors b and x
     m_hostAValues.resize(nnz, 0.0);
     m_hostB.resize(size, 0.0);
     m_hostX.resize(size, 0.0);
-
 
     return 0;
 }
@@ -320,7 +316,8 @@ int CudaGenBcsrLinSOE::buildBlockCSR(Graph &theGraph)
     
     // Compute the padded number of equations (in DOFs, not blocks)
     const int paddedSize = numBlockRows * m_blockSize;
-    const int nnzBlock = countNonZeroBlocks(theGraph, m_blockSize, m_paddingEnabled);
+    const bool symmetricLower = (m_storageMode == MatrixStorageMode::SYMMETRIC_LOWER);
+    const int nnzBlock = countNonZeroBlocks(theGraph, m_blockSize, m_paddingEnabled, symmetricLower);
     if (nnzBlock <= 0) {
         return nnzBlock;
     }
@@ -359,10 +356,10 @@ int CudaGenBcsrLinSOE::buildBlockCSR(Graph &theGraph)
             
             const ID& theAdjacency = theVertex->getAdjacency();  // connected columns
 
-            // Insert other adjacency blocks in order
             for (int k = 0; k < theAdjacency.Size(); ++k) {
                 const int col = theAdjacency(k);
                 const int blockCol = col / m_blockSize;
+                if (symmetricLower && blockCol > blockRow) continue; /* lower triangle only */
                 if (mask[blockCol] != blockRow) {
                     mask[blockCol] = blockRow;
                     localColIdx.insert(blockCol);
@@ -451,6 +448,13 @@ int CudaGenBcsrLinSOE::addAMatrixElement(int globalRow, int globalCol, double va
 {
     if (!isValidGlobalIndex(globalRow) || !isValidGlobalIndex(globalCol)) {
         return -1;
+    }
+
+    // Symmetric lower storage: only store entries where row >= col.
+    if (m_storageMode == MatrixStorageMode::SYMMETRIC_LOWER) {
+        if (globalRow < globalCol) {
+            return 0; // Skip upper triangle
+        }
     }
 
     if (m_blockSize > 1) {
@@ -1083,10 +1087,11 @@ CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createDouble(
     CudaGenBcsrLinSolver &theSolver, 
     int blockSize, 
     bool paddingEnabled,
-    bool verbose
+    bool verbose,
+    bool symmetricStorage
 ) {
     return new CudaGenBcsrLinSOEImpl<double, double>(
-        theSolver, blockSize, paddingEnabled, verbose
+        theSolver, blockSize, paddingEnabled, verbose, symmetricStorage
     );
 }
 
@@ -1094,10 +1099,11 @@ CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloat(
     CudaGenBcsrLinSolver &theSolver,
     int blockSize, 
     bool paddingEnabled,
-    bool verbose
+    bool verbose,
+    bool symmetricStorage
 ) {
     return new CudaGenBcsrLinSOEImpl<float, float>(
-        theSolver, blockSize, paddingEnabled, verbose
+        theSolver, blockSize, paddingEnabled, verbose, symmetricStorage
     );
 }
 
@@ -1105,10 +1111,11 @@ CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createDoubleFloat(
     CudaGenBcsrLinSolver &theSolver,
     int blockSize, 
     bool paddingEnabled,
-    bool verbose
+    bool verbose,
+    bool symmetricStorage
 ) {
     return new CudaGenBcsrLinSOEImpl<double, float>(
-        theSolver, blockSize, paddingEnabled, verbose
+        theSolver, blockSize, paddingEnabled, verbose, symmetricStorage
     );
 }
 
@@ -1116,10 +1123,11 @@ CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloatDouble(
     CudaGenBcsrLinSolver &theSolver,
     int blockSize, 
     bool paddingEnabled,
-    bool verbose
+    bool verbose,
+    bool symmetricStorage
 ) {
     return new CudaGenBcsrLinSOEImpl<float, double>(
-        theSolver, blockSize, paddingEnabled, verbose
+        theSolver, blockSize, paddingEnabled, verbose, symmetricStorage
     );
 }
 
@@ -1143,8 +1151,10 @@ CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createDouble(
     CudaGenBcsrLinSolver &theSolver, 
     int blockSize, 
     bool paddingEnabled,
-    bool verbose
+    bool verbose,
+    bool symmetricStorage
 ) {
+    (void)symmetricStorage;
     opserr << "WARNING: CudaGenBcsrLinSOE::createDouble() - CUDA not available, cannot create SOE\n";
     return nullptr;
 }
@@ -1153,8 +1163,10 @@ CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloat(
     CudaGenBcsrLinSolver &theSolver,
     int blockSize, 
     bool paddingEnabled,
-    bool verbose
+    bool verbose,
+    bool symmetricStorage
 ) {
+    (void)symmetricStorage;
     opserr << "WARNING: CudaGenBcsrLinSOE::createFloat() - CUDA not available, cannot create SOE\n";
     return nullptr;
 }
@@ -1163,8 +1175,10 @@ CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createDoubleFloat(
     CudaGenBcsrLinSolver &theSolver,
     int blockSize, 
     bool paddingEnabled,
-    bool verbose
+    bool verbose,
+    bool symmetricStorage
 ) {
+    (void)symmetricStorage;
     opserr << "WARNING: CudaGenBcsrLinSOE::createDoubleFloat() - CUDA not available, cannot create SOE\n";
     return nullptr;
 }
@@ -1173,8 +1187,10 @@ CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloatDouble(
     CudaGenBcsrLinSolver &theSolver,
     int blockSize, 
     bool paddingEnabled,
-    bool verbose
+    bool verbose,
+    bool symmetricStorage
 ) {
+    (void)symmetricStorage;
     opserr << "WARNING: CudaGenBcsrLinSOE::createFloatDouble() - CUDA not available, cannot create SOE\n";
     return nullptr;
 }

@@ -71,14 +71,16 @@ using namespace CudaUtils;
 CuDSSLinSolver::CuDSSLinSolver(CudaPrecision precision, bool verbose, 
                                bool hybridMemoryMode, size_t hybridDeviceMemoryLimit, 
                                bool hybridExecuteMode, bool multiThreadingMode,
-                               const char* threadingLibPath)
+                               const char* threadingLibPath,
+                               CuDSSMatrixType matrixType)
     :CudaGenBcsrLinSolver(SOLVER_TAGS_CuDSSLinSolver, precision), 
     m_verbose(verbose),
     m_hybridMemoryMode(hybridMemoryMode),
     m_hybridDeviceMemoryLimit(hybridDeviceMemoryLimit),
     m_hybridExecuteMode(hybridExecuteMode),
     m_multiThreadingMode(multiThreadingMode),
-    m_threadingLibPath(threadingLibPath ? threadingLibPath : "")
+    m_threadingLibPath(threadingLibPath ? threadingLibPath : ""),
+    m_matrixType(matrixType)
 {
     #ifdef _CUDSS
     // CuDSS currently only supports uniform precision (dDDI or dFFI)
@@ -486,9 +488,16 @@ int CuDSSLinSolver::setupMatrices() {
         m_Solution = nullptr;
     }
     
-    /* Create the cuDSS CSR matrix */
+    /* Create the cuDSS CSR matrix (full, symmetric, or SPD; symmetric/SPD use lower storage) */
     cudssMatrixType_t mtype = CUDSS_MTYPE_GENERAL;
     cudssMatrixViewType_t mview = CUDSS_MVIEW_FULL;
+    if (m_matrixType == CuDSSMatrixType::SYMMETRIC) {
+        mtype = CUDSS_MTYPE_SYMMETRIC;
+        mview = CUDSS_MVIEW_LOWER;
+    } else if (m_matrixType == CuDSSMatrixType::SPD) {
+        mtype = CUDSS_MTYPE_SPD;
+        mview = CUDSS_MVIEW_LOWER;
+    }
     cudssIndexBase_t ibase = CUDSS_BASE_ZERO;
     cuDSSCheckError(cudssMatrixCreateCsr(
         &m_Matrix, numRows, numCols, numNZ, 
@@ -531,6 +540,7 @@ struct CuDSSConfig {
     bool hybridExecuteMode = false;       // Hybrid host/device execute mode
     bool multiThreadingMode = false;      // OpenMP multi-threading mode (requires OpenMP at build time)
     std::string threadingLibPath = "/usr/lib/x86_64-linux-gnu/libcudss_mtlayer_gomp.so";  // Threading layer library path ("NULL" = pass NULL to cuDSS)
+    std::string matrixType = "full";      // full | symmetric | spd (symmetric/spd use lower storage in SOE)
 };
 
 class CuDSSParameterParser {
@@ -595,6 +605,17 @@ CuDSSParameterParser::configParsers = {
     {"threadingLibPath", [](CuDSSConfig& config) { 
         const char* value = OPS_GetString();
         if (value) config.threadingLibPath = value;
+    }},
+    {"matrixType", [](CuDSSConfig& config) { 
+        const char* value = OPS_GetString();
+        if (value) {
+            std::string s(value);
+            if (s == "full" || s == "symmetric" || s == "spd") {
+                config.matrixType = s;
+            } else {
+                throw std::invalid_argument("matrixType must be full, symmetric, or spd");
+            }
+        }
     }}
 };
 
@@ -637,6 +658,8 @@ void CuDSSParameterParser::printUsageInfo() {
     opserr << "  -threadingLibPath <path|NULL>   Path to threading layer library" << endln;
     opserr << "                                  (default: /usr/lib/x86_64-linux-gnu/libcudss_mtlayer_gomp.so," << endln;
     opserr << "                                   use 'NULL' to let cuDSS choose via CUDSS_THREADING_LIB env var)" << endln;
+    opserr << "  -matrixType <full|symmetric|spd> Matrix type: full (default), symmetric, or spd" << endln;
+    opserr << "                                  (symmetric and spd use lower storage; halves matrix memory)" << endln;
     opserr << "Notes:" << endln;
     opserr << "  - hybridMemoryMode and hybridExecuteMode are mutually exclusive" << endln;
     opserr << "  - To control thread count: export OMP_NUM_THREADS=<n> before running OpenSees" << endln;
@@ -653,6 +676,10 @@ CudaGenBcsrLinSolver* createCuDSSSolverFromConfig(const CuDSSConfig& config) {
         precision = CudaPrecision::dDDI;
     }
     
+    CuDSSMatrixType matrixType = CuDSSMatrixType::FULL;
+    if (config.matrixType == "symmetric") matrixType = CuDSSMatrixType::SYMMETRIC;
+    else if (config.matrixType == "spd") matrixType = CuDSSMatrixType::SPD;
+
     return new CuDSSLinSolver(
         precision, 
         config.verbose,
@@ -660,7 +687,8 @@ CudaGenBcsrLinSolver* createCuDSSSolverFromConfig(const CuDSSConfig& config) {
         config.hybridDeviceMemoryLimit,
         config.hybridExecuteMode,
         config.multiThreadingMode,
-        config.threadingLibPath.c_str()
+        config.threadingLibPath.c_str(),
+        matrixType
     );
 }
 
@@ -746,11 +774,12 @@ void* OPS_CuDSSLinSolver()
     
     // Create and return SOE based on precision (only uniform modes reach here)
     CudaPrecision precision = solver->getPrecision();
+    const bool symmetricStorage = (config.matrixType == "symmetric" || config.matrixType == "spd");
     switch(precision) {
         case CudaPrecision::dDDI:
-            return CudaGenBcsrLinSOE::createDouble(*solver, blockSize, paddingEnabled, config.verbose);
+            return CudaGenBcsrLinSOE::createDouble(*solver, blockSize, paddingEnabled, config.verbose, symmetricStorage);
         case CudaPrecision::dFFI:
-            return CudaGenBcsrLinSOE::createFloat(*solver, blockSize, paddingEnabled, config.verbose);
+            return CudaGenBcsrLinSOE::createFloat(*solver, blockSize, paddingEnabled, config.verbose, symmetricStorage);
         default:
             // Should never reach here - constructor rejects mixed precision
             opserr << "ERROR: OPS_CuDSSLinSolver() - Unexpected precision mode" << endln;

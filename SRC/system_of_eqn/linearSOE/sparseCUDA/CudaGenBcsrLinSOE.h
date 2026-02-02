@@ -26,6 +26,8 @@
 // Description: This file contains the class definition for 
 // CudaGenBcsrLinSOE. It stores the sparse matrix A in a fashion
 // required by the CudaGenBcsrLinSolver object.
+// "Gen" denotes a general interface that supports both full and
+// symmetric (lower-triangle) storage; solvers can query and exploit symmetry.
 //
 // This is the ONLY public interface users should interact with.
 // We use type erasure to hide the template implementation details from users.
@@ -77,10 +79,17 @@ public:
     static constexpr double DEFAULT_EFFICIENCY_THRESHOLD = 0.7;
     static constexpr double MIN_DIAGONAL_VALUE_FACTOR = 1e-3;
 
+    // Storage mode: full matrix or symmetric (lower triangle only; matches Matrix Market and Cholesky).
+    enum class MatrixStorageMode {
+        FULL,              // Store full matrix (default)
+        SYMMETRIC_LOWER    // Store only lower triangle; addA(i,j) and addA(j,i) both update (max(i,j), min(i,j))
+    };
+
     CudaGenBcsrLinSOE(int classTag, CudaGenBcsrLinSolver &theSolver, 
                       int blockSize = DEFAULT_BLOCK_SIZE, 
                       bool paddingEnabled = true,
-                      bool verbose = false);
+                      bool verbose = false,
+                      bool symmetricStorage = false);
     CudaGenBcsrLinSOE(int classTag);
 
     ~CudaGenBcsrLinSOE();
@@ -91,14 +100,16 @@ public:
         CudaGenBcsrLinSolver &theSolver, 
         int blockSize = DEFAULT_BLOCK_SIZE, 
         bool paddingEnabled = true,
-        bool verbose = false
+        bool verbose = false,
+        bool symmetricStorage = false
     );
     
     static CudaGenBcsrLinSOE* createFloat(
         CudaGenBcsrLinSolver &theSolver,
         int blockSize = DEFAULT_BLOCK_SIZE, 
         bool paddingEnabled = true,
-        bool verbose = false
+        bool verbose = false,
+        bool symmetricStorage = false
     );
     
     // Mixed-precision modes (available, but most solvers don't support these yet)
@@ -106,14 +117,16 @@ public:
         CudaGenBcsrLinSolver &theSolver,
         int blockSize = DEFAULT_BLOCK_SIZE, 
         bool paddingEnabled = true,
-        bool verbose = false
+        bool verbose = false,
+        bool symmetricStorage = false
     );
     
     static CudaGenBcsrLinSOE* createFloatDouble(
         CudaGenBcsrLinSolver &theSolver,
         int blockSize = DEFAULT_BLOCK_SIZE, 
         bool paddingEnabled = true,
-        bool verbose = false
+        bool verbose = false,
+        bool symmetricStorage = false
     );
     
     // This method is used by the object broker to create instances from class tags.
@@ -144,6 +157,10 @@ public:
     int getNumRowBlocks(void) const;
     int getNumNonZeroBlocks(void) const;
     int getNumNonZeroValues(void) const;
+
+    // Symmetric storage: when true, only the lower triangle is stored (Matrix Market / Cholesky convention).
+    bool isSymmetricStorage(void) const;
+    MatrixStorageMode getMatrixStorageMode(void) const;
 
     // Track changes in the matrix
     enum class MatrixStatus {
@@ -216,6 +233,9 @@ protected:
 
     // Whether to print verbose output
     bool m_verbose;
+
+    // Storage mode: full matrix or symmetric lower triangle
+    MatrixStorageMode m_storageMode;
 
     // Set size helper methods
     int buildStandardCSR(Graph &theGraph);
