@@ -18,4 +18,8 @@ namespace ParameterUtils {
     }
 }
 
+// Returns number of MPI processes (1 if sequential or not set). Works for both Tcl and Python.
+// Implemented in ParameterUtils.cpp so interpreters are not touched.
+int getNumProcesses();
+
 #endif // ParameterUtils_h

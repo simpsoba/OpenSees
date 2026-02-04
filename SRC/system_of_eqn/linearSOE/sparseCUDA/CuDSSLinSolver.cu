@@ -568,6 +568,9 @@ struct CuDSSConfig {
     bool multiThreadingMode = false;      // OpenMP multi-threading mode (requires OpenMP at build time)
     std::string threadingLibPath = "/usr/lib/x86_64-linux-gnu/libcudss_mtlayer_gomp.so";  // Threading layer library path ("NULL" = pass NULL to cuDSS)
     std::string cudssMatTypeStr = "full"; // full | symmetric | spd (symmetric/spd use lower storage in SOE)
+    std::string parallelMode = "single";  // single | multiGPU | MGMN (parallelism across processes/GPUs)
+    int distributed = 0;                  // For MGMN: 0 = root-only (gather-scatter), 1 = row-wise distributed
+    std::vector<int> deviceIndices;       // For multiGPU: empty = use all devices; else list of device IDs
 };
 
 class CuDSSParameterParser {
@@ -643,6 +646,39 @@ CuDSSParameterParser::configParsers = {
                 throw std::invalid_argument("matrixType must be full, symmetric, or spd");
             }
         }
+    }},
+    {"parallelMode", [](CuDSSConfig& config) { 
+        const char* value = OPS_GetString();
+        if (value) {
+            std::string s(value);
+            if (s == "single" || s == "multiGPU" || s == "MGMN") {
+                config.parallelMode = s;
+            } else {
+                throw std::invalid_argument("parallelMode must be single, multiGPU, or MGMN");
+            }
+        }
+    }},
+    {"distributed", [](CuDSSConfig& config) { 
+        int numData = 1;
+        int flag = 0;
+        if (OPS_GetIntInput(&numData, &flag) == 0) {
+            if (flag != 0 && flag != 1) throw std::invalid_argument("distributed must be 0 or 1");
+            config.distributed = flag;
+        }
+    }},
+    {"devices", [](CuDSSConfig& config) { 
+        const char* value = OPS_GetString();
+        if (!value) return;
+        config.deviceIndices.clear();
+        if (strcmp(value, "all") == 0) return;  // empty = use all devices
+        int id = atoi(value);
+        config.deviceIndices.push_back(id);
+        int numData = 1;
+        while (OPS_GetNumRemainingInputArgs() > 0) {
+            int next = 0;
+            if (OPS_GetIntInput(&numData, &next) != 0) break;
+            config.deviceIndices.push_back(next);
+        }
     }}
 };
 
@@ -663,6 +699,26 @@ bool CuDSSParameterParser::parseParameters(CuDSSConfig& config) {
                 continue;
             }
         }
+
+        // Validation: parallelMode vs single-process vs OpenSeesMP (works for Tcl and Python)
+        int np = getNumProcesses();
+        bool isParallel = (np > 1);
+        if (config.parallelMode == "MGMN" && !isParallel) {
+            opserr << "ERROR: CuDSSParameterParser::parseParameters() - "
+                   << "parallelMode MGMN requires OpenSeesMP (multiple processes). Use single or multiGPU for single-process runs." << endln;
+            return false;
+        }
+        if (config.parallelMode == "multiGPU" && isParallel) {
+            opserr << "ERROR: CuDSSParameterParser::parseParameters() - "
+                   << "parallelMode multiGPU is for single-process multi-GPU only. In OpenSeesMP use parallelMode MGMN." << endln;
+            return false;
+        }
+        if (config.parallelMode == "MGMN" && (config.hybridMemoryMode || config.hybridExecuteMode)) {
+            opserr << "ERROR: CuDSSParameterParser::parseParameters() - "
+                   << "hybridMemoryMode and hybridExecuteMode are not allowed with parallelMode MGMN." << endln;
+            return false;
+        }
+
         return true;
     } catch (const std::exception& e) {
         opserr << "WARNING: CuDSSParameterParser::parseParameters() - "
@@ -675,21 +731,27 @@ void CuDSSParameterParser::printUsageInfo() {
     opserr << "CuDSSParameterParser::printUsageInfo() - " << endln;
     opserr << "Usage: system CuDSS [options]" << endln;
     opserr << "Options:" << endln;
-    opserr << "  -precision <dDDI|dFFI>          Precision mode (default: dDDI)" << endln;
+    opserr << "  -precision <dDDI|dFFI>          Precision (default: dDDI)" << endln;
     opserr << "  -verbose <0|1>                  Enable verbose output (default: 0)" << endln;
+    opserr << "  -parallelMode <single|multiGPU|MGMN>  Parallelism across processes/GPUs (default: single)" << endln;
+    opserr << "                                  single: one process, one GPU" << endln;
+    opserr << "                                  multiGPU: one process, multiple GPUs" << endln;
+    opserr << "                                  MGMN: OpenSeesMP, multi-GPU multi-node (requires getNP > 1)" << endln;
+    opserr << "  -distributed <0|1>               For MGMN only: 0 = root-only gather-scatter (default), 1 = row-wise distributed" << endln;
+    opserr << "  -devices <all|id1 [id2 ...]>     For multiGPU only: GPU IDs to use (default: all)" << endln;
     opserr << "  -hybridMemoryMode <0|1>         Hybrid host/device memory mode (default: 0)" << endln;
-    opserr << "  -hybridDeviceMemoryLimit <bytes> Device memory limit for hybrid mode (0=min required)" << endln;
+    opserr << "  -hybridDeviceMemoryLimit <bytes> Device memory limit for hybrid memory mode (0=min required)" << endln;
     opserr << "  -hybridExecuteMode <0|1>        Hybrid host/device execute mode (default: 0)" << endln;
-    opserr << "  -multiThreadingMode <0|1>       OpenMP multi-threading mode (default: 0)" << endln;
-    opserr << "                                  (requires OpenMP at build time)" << endln;
-    opserr << "  -threadingLibPath <path|NULL>   Path to threading layer library" << endln;
+    opserr << "  -multiThreadingMode <0|1>       OpenMP multi-threading mode (default: 0; requires OpenMP at build time)" << endln;
+    opserr << "  -threadingLibPath <path|NULL>   Path to threading layer (when multiThreadingMode is enabled)" << endln;
     opserr << "                                  (default: /usr/lib/x86_64-linux-gnu/libcudss_mtlayer_gomp.so," << endln;
-    opserr << "                                   use 'NULL' to let cuDSS choose via CUDSS_THREADING_LIB env var)" << endln;
+    opserr << "                                   use 'NULL' to let cuDSS use CUDSS_THREADING_LIB env var)" << endln;
     opserr << "  -matrixType <full|symmetric|spd> Matrix type: full (default), symmetric, or spd" << endln;
     opserr << "                                  (symmetric and spd use lower storage; halves matrix memory)" << endln;
     opserr << "Notes:" << endln;
-    opserr << "  - hybridMemoryMode and hybridExecuteMode are mutually exclusive" << endln;
-    opserr << "  - To control thread count: export OMP_NUM_THREADS=<n> before running OpenSees" << endln;
+    opserr << "  - hybridMemoryMode and hybridExecuteMode are mutually exclusive; hybridExecute mode is not allowed with parallelMode MGMN" << endln;
+    opserr << "  - MGMN is only valid in OpenSeesMP (getNP > 1); multiGPU is only valid for single process" << endln;
+    opserr << "  - When multiThreadingMode is enabled: export OMP_NUM_THREADS=<n> to control thread count" << endln;
 }
 
 // Factory function to create CuDSS solver from parsed config

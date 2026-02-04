@@ -720,6 +720,7 @@ if(HAVE_CUDA)
   add_library(OPS_Cuda OBJECT
     ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaGenBcsrLinSOE.cu
     ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaGenBcsrLinSolver.cu
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/ParameterUtils.cpp
   )
   
   # Configure CUDA for the OPS_Cuda library
