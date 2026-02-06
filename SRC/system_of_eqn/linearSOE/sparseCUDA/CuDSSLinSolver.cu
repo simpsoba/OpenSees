@@ -58,30 +58,32 @@
 #include <stdexcept>
 
 #ifdef _CUDSS
-// Static member initialization
-bool CuDSSLinSolver::m_CuDSSInitialized = false;
-int CuDSSLinSolver::m_ActiveSolverInstances = 0;
-cudssHandle_t CuDSSLinSolver::m_Handle = nullptr;
-cudaStream_t CuDSSLinSolver::m_cudaStream = nullptr;
-
 // Use CudaUtils namespace for error checking
 using namespace CudaUtils;
 #endif // _CUDSS
 
 CuDSSLinSolver::CuDSSLinSolver(CudaPrecision precision, bool verbose, 
-                               bool hybridMemoryMode, size_t hybridDeviceMemoryLimit, 
+                               bool hybridMemoryMode, const std::vector<size_t>& hybridDeviceMemoryLimits, 
                                bool hybridExecuteMode, bool multiThreadingMode,
                                const char* threadingLibPath,
-                               CuDSSMatrixType cudssMatType)
+                               CuDSSMatrixType cudssMatType,
+                               bool useMultiGPU,
+                               const std::vector<int>& deviceIndices)
     :CudaGenBcsrLinSolver(SOLVER_TAGS_CuDSSLinSolver, precision), 
     m_verbose(verbose),
     m_hybridMemoryMode(hybridMemoryMode),
-    m_hybridDeviceMemoryLimit(hybridDeviceMemoryLimit),
+    m_hybridDeviceMemoryLimits(hybridDeviceMemoryLimits),
     m_hybridExecuteMode(hybridExecuteMode),
     m_multiThreadingMode(multiThreadingMode),
     m_threadingLibPath(threadingLibPath ? threadingLibPath : ""),
-    m_cudssMatType(cudssMatType)
+    m_cudssMatType(cudssMatType),
+    m_useMultiGPU(useMultiGPU),
+    m_deviceIndices(deviceIndices)
 {
+    #ifdef _CUDSS
+    m_Handle = nullptr;
+    m_cudaStream = nullptr;
+    #endif
     #ifdef _CUDSS
     // CuDSS currently only supports uniform precision (dDDI or dFFI)
     if (!isUniformPrecision(precision)) {
@@ -97,57 +99,73 @@ CuDSSLinSolver::CuDSSLinSolver(CudaPrecision precision, bool verbose,
 void CuDSSLinSolver::init(CudaPrecision precision)
 {
     #ifdef _CUDSS
-    if (!m_CuDSSInitialized) {
-        
-        /* Create a CUDA stream */
-        cudaCheckError(cudaStreamCreate(&m_cudaStream), "create CUDA stream");
+    /* Per-instance stream and handle (single-GPU or MG) */
+    cudaCheckError(cudaStreamCreate(&m_cudaStream), "create CUDA stream");
 
-        /* Create the cuDSS handle */
-        cuDSSCheckError(cudssCreate(&m_Handle), "create cuDSS handle");
-        
-        /* Set the CUDA stream */
-        cuDSSCheckError(cudssSetStream(m_Handle, m_cudaStream), "set CUDA stream");
-
-        /* Setup OpenMP multi-threading */
-        #ifdef CUDSS_USE_OPENMP
-        if (m_multiThreadingMode) {
-            // Determine threading library path
-            // If "NULL" -> pass NULL to cudssSetThreadingLayer (let cuDSS use CUDSS_THREADING_LIB env var)
-            // Otherwise use provided path (default is set in config struct)
-            const char* threadingLib = (m_threadingLibPath == "NULL") ? nullptr : m_threadingLibPath.c_str();
-            
-            // Set the threading layer in cuDSS
-            cudssStatus_t status = cudssSetThreadingLayer(m_Handle, threadingLib);
-            if (status != CUDSS_STATUS_SUCCESS) {
-                opserr << "WARNING: CuDSSLinSolver::init() - "
-                       << "cudssSetThreadingLayer failed with status " << status << endln;
-                opserr << "Continuing without multi-threading support" << endln;
-            } else if (m_verbose) {
-                opserr << "INFO: CuDSSLinSolver::init() - "
-                       << "OpenMP multi-threading mode enabled" << endln;
-                if (threadingLib) {
-                    opserr << "Threading library: " << threadingLib << endln;
-                } else {
-                    opserr << "Threading library: NULL ";
-                    opserr << "(cuDSS will use the threading layer library name ";
-                    opserr << "from the environment variable 'CUDSS_THREADING_LIB')" << endln;
-                }
+    if (m_useMultiGPU) {
+        std::vector<int> devs = m_deviceIndices;
+        if (devs.empty()) {
+            int count = 0;
+            cudaCheckError(cudaGetDeviceCount(&count), "get device count");
+            if (count <= 0) {
+                opserr << "ERROR: CuDSSLinSolver::init() - no CUDA devices available for multi-GPU" << endln;
+                throw std::runtime_error("no CUDA devices");
             }
+            devs.resize(static_cast<size_t>(count));
+            for (int i = 0; i < count; i++) devs[i] = i;
+            m_deviceIndices = devs;
         }
-        #else
-        if (m_multiThreadingMode && m_verbose) {
-            opserr << "INFO: CuDSSLinSolver::init() - "
-                   << "OpenMP multi-threading support not available (OpenMP not found at build time)" << endln;
+        int deviceCount = static_cast<int>(devs.size());
+        int firstDevice = devs[0];
+        cudaCheckError(cudaSetDevice(firstDevice), "set device for multi-GPU");
+        cuDSSCheckError(cudssCreateMg(&m_Handle, deviceCount, devs.data()), "create cuDSS MG handle");
+        cuDSSCheckError(cudssSetStream(m_Handle, m_cudaStream), "set CUDA stream on MG handle");
+        if (m_verbose) {
+            opserr << "INFO: CuDSSLinSolver::init() - multi-GPU mode, devices:";
+            for (int d : m_deviceIndices) opserr << " " << d;
+            opserr << endln;
         }
-        #endif // CUDSS_USE_OPENMP
-
-        /* Initialize cuDSS */
-        m_CuDSSInitialized = true;
+    } else {
+        cuDSSCheckError(cudssCreate(&m_Handle), "create cuDSS handle");
+        cuDSSCheckError(cudssSetStream(m_Handle, m_cudaStream), "set CUDA stream");
     }
+
+    /* Setup OpenMP multi-threading (single-GPU and MG) */
+    #ifdef CUDSS_USE_OPENMP
+    if (m_multiThreadingMode) {
+        const char* threadingLib = (m_threadingLibPath == "NULL") ? nullptr : m_threadingLibPath.c_str();
+        cudssStatus_t status = cudssSetThreadingLayer(m_Handle, threadingLib);
+        if (status != CUDSS_STATUS_SUCCESS) {
+            opserr << "WARNING: CuDSSLinSolver::init() - "
+                   << "cudssSetThreadingLayer failed with status " << status << endln;
+            opserr << "Continuing without multi-threading support" << endln;
+        } else if (m_verbose) {
+            opserr << "INFO: CuDSSLinSolver::init() - OpenMP multi-threading mode enabled" << endln;
+        }
+    }
+    #else
+    if (m_multiThreadingMode && m_verbose) {
+        opserr << "INFO: CuDSSLinSolver::init() - OpenMP not available at build time" << endln;
+    }
+    #endif
 
     /* Create cuDSS solver configuration and data objects */
     cuDSSCheckError(cudssConfigCreate(&m_Config), "create cuDSS solver configuration");
     cuDSSCheckError(cudssDataCreate(m_Handle, &m_Data), "create cuDSS solver data");
+
+    if (m_useMultiGPU) {
+        int deviceCount = static_cast<int>(m_deviceIndices.empty() ? 0 : m_deviceIndices.size());
+        std::vector<int> devs = m_deviceIndices;
+        if (devs.empty()) {
+            int count = 0;
+            cudaGetDeviceCount(&count);
+            devs.resize(static_cast<size_t>(count));
+            for (int i = 0; i < count; i++) devs[i] = i;
+            deviceCount = count;
+        }
+        cuDSSCheckError(cudssConfigSet(m_Config, CUDSS_CONFIG_DEVICE_COUNT, &deviceCount, sizeof(deviceCount)), "set device count");
+        cuDSSCheckError(cudssConfigSet(m_Config, CUDSS_CONFIG_DEVICE_INDICES, devs.data(), deviceCount * sizeof(int)), "set device indices");
+    }
     
     // (optional) Modifying solver settings, e.g., reordering algorithm
     cudssAlgType_t reorderAlgorithm = CUDSS_ALG_DEFAULT;
@@ -193,9 +211,6 @@ void CuDSSLinSolver::init(CudaPrecision precision)
     } else {  // CudaPrecision::dDDI
         m_ValueType = CUDA_R_64F; // Double precision
     }
-
-    /* Increment counter */
-    m_ActiveSolverInstances++;
     #endif // _CUDSS
 
     return;
@@ -204,7 +219,6 @@ void CuDSSLinSolver::init(CudaPrecision precision)
 CuDSSLinSolver::~CuDSSLinSolver()
 {
     #ifdef _CUDSS
-    /* Destroy opaque objects, matrix wrappers and the cuDSS handle */
     if (m_Matrix != nullptr) {
         cuDSSCheckError(cudssMatrixDestroy(m_Matrix), "destroy cuDSS matrix", false);
     }
@@ -214,18 +228,11 @@ CuDSSLinSolver::~CuDSSLinSolver()
     if (m_Solution != nullptr) {
         cuDSSCheckError(cudssMatrixDestroy(m_Solution), "destroy cuDSS solution", false);
     }
-    cuDSSCheckError(cudssDataDestroy(m_Handle, m_Data), "destroy cuDSS solver configuration", false);
-    cuDSSCheckError(cudssConfigDestroy(m_Config), "destroy cuDSS solver data", false);
-    
-    if (m_ActiveSolverInstances == 1) {
-        cuDSSCheckError(cudssDestroy(m_Handle), "destroy cuDSS handle", false);
-        cudaCheckError(cudaStreamSynchronize(m_cudaStream), "synchronize CUDA stream", false);
-        m_CuDSSInitialized = false;
-    }
-    /* Decrement counter */
-    if (m_ActiveSolverInstances > 0) {
-        m_ActiveSolverInstances--;
-    }
+    cuDSSCheckError(cudssDataDestroy(m_Handle, m_Data), "destroy cuDSS solver data", false);
+    cuDSSCheckError(cudssConfigDestroy(m_Config), "destroy cuDSS config", false);
+    cuDSSCheckError(cudssDestroy(m_Handle), "destroy cuDSS handle", false);
+    cudaCheckError(cudaStreamSynchronize(m_cudaStream), "synchronize CUDA stream", false);
+    cudaStreamDestroy(m_cudaStream);
     #endif // _CUDSS
 
     return;
@@ -257,6 +264,9 @@ int CuDSSLinSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE) {
 
 int CuDSSLinSolver::solve(void) {
     #ifdef _CUDSS
+    if (m_useMultiGPU && !m_deviceIndices.empty()) {
+        cudaCheckError(cudaSetDevice(m_deviceIndices[0]), "set device for solve");
+    }
     CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
     if (theSOE == nullptr) {
         opserr << "WARNING: CuDSSLinSolver::solve() - "
@@ -349,6 +359,9 @@ int CuDSSLinSolver::solve(void) {
 
 int CuDSSLinSolver::solveNoRefact(void) {
     #ifdef _CUDSS
+    if (m_useMultiGPU && !m_deviceIndices.empty()) {
+        cudaCheckError(cudaSetDevice(m_deviceIndices[0]), "set device for solveNoRefact");
+    }
     CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
     if (theSOE == nullptr) {
         opserr << "WARNING: CuDSSLinSolver::solveNoRefact() - "
@@ -408,6 +421,9 @@ int CuDSSLinSolver::setSize() {
 
 int CuDSSLinSolver::setupMatrices() {
     #ifdef _CUDSS
+    if (m_useMultiGPU && !m_deviceIndices.empty()) {
+        cudaCheckError(cudaSetDevice(m_deviceIndices[0]), "set device for setupMatrices");
+    }
     CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
     if (theSOE == nullptr) {
         opserr << "WARNING: CuDSSLinSolver::setupMatrices() - "
@@ -511,39 +527,59 @@ int CuDSSLinSolver::setupMatrices() {
     ), "cuDSS symbolic factorization");
 
     /* Set hybrid device memory limit after ANALYSIS, before FACTORIZATION.
-     * Optionally query minimal device memory; then set limit from user value or min. */
+     * CUDSS_DATA_HYBRID_DEVICE_MEMORY_MIN and CUDSS_CONFIG_HYBRID_DEVICE_MEMORY_LIMIT must be
+     * queried/set per device: call cudaSetDevice(dev) before each cudssDataGet/cudssConfigSet. */
     if (m_hybridMemoryMode) {
-        size_t sizeWritten = 0;
-        int64_t deviceMemoryMin = 0;
-        cudssStatus_t status = cudssDataGet(m_Handle, m_Data, CUDSS_DATA_HYBRID_DEVICE_MEMORY_MIN,
-                                            &deviceMemoryMin, sizeof(deviceMemoryMin), &sizeWritten);
-        if (status == CUDSS_STATUS_SUCCESS && m_verbose) {
-            opserr << "INFO: CuDSSLinSolver::setupMatrices() - "
-                   << "Hybrid mode minimal device memory = " << deviceMemoryMin << " bytes" << endln;
-        }
-
-        int64_t limitBytes = 0;
-        if (m_hybridDeviceMemoryLimit > 0) {
-            limitBytes = static_cast<int64_t>(m_hybridDeviceMemoryLimit);
-            if (limitBytes < deviceMemoryMin && m_verbose) {
-                opserr << "WARNING: CuDSSLinSolver::setupMatrices() - "
-                       << "User device memory limit (" << limitBytes << ") < minimal required ("
-                       << deviceMemoryMin << "); using minimal" << endln;
-                limitBytes = deviceMemoryMin;
+        const int numDev = m_useMultiGPU ? static_cast<int>(m_deviceIndices.size()) : 1;
+        std::vector<int64_t> minPerDevice(static_cast<size_t>(numDev), 0);
+        for (int i = 0; i < numDev; i++) {
+            int dev = m_useMultiGPU ? m_deviceIndices[i] : 0;
+            if (m_useMultiGPU) {
+                cudaCheckError(cudaSetDevice(dev), "set device for hybrid memory query");
             }
-        } else {
-            /* User did not set limit: use queried minimum (or leave to heuristic if query failed) */
-            limitBytes = (status == CUDSS_STATUS_SUCCESS) ? deviceMemoryMin : 0;
+            size_t sizeWritten = 0;
+            int64_t minThisDev = 0;
+            cudssStatus_t status = cudssDataGet(m_Handle, m_Data, CUDSS_DATA_HYBRID_DEVICE_MEMORY_MIN,
+                                                &minThisDev, sizeof(minThisDev), &sizeWritten);
+            if (status == CUDSS_STATUS_SUCCESS) {
+                minPerDevice[static_cast<size_t>(i)] = minThisDev;
+                if (m_verbose) {
+                    opserr << "INFO: CuDSSLinSolver::setupMatrices() - "
+                           << "dev " << dev << " CUDSS_DATA_HYBRID_DEVICE_MEMORY_MIN = " << minThisDev << " bytes" << endln;
+                }
+            }
+        }
+        if (m_useMultiGPU && numDev > 0) {
+            cudaCheckError(cudaSetDevice(m_deviceIndices[0]), "restore first device after hybrid query");
         }
 
-        if (limitBytes > 0) {
+        for (int i = 0; i < numDev; i++) {
+            int64_t limitBytes = minPerDevice[static_cast<size_t>(i)];
+            // One value in list = same limit for all devices; else per-device by index
+            size_t limitIdx = (m_hybridDeviceMemoryLimits.size() == 1) ? 0 : static_cast<size_t>(i);
+            if (limitIdx < m_hybridDeviceMemoryLimits.size() && m_hybridDeviceMemoryLimits[limitIdx] > 0) {
+                limitBytes = static_cast<int64_t>(m_hybridDeviceMemoryLimits[limitIdx]);
+                if (limitBytes < minPerDevice[static_cast<size_t>(i)] && m_verbose) {
+                    opserr << "WARNING: CuDSSLinSolver::setupMatrices() - dev " << i
+                           << " user limit (" << limitBytes << ") < min (" << minPerDevice[static_cast<size_t>(i)]
+                           << "); using min" << endln;
+                    limitBytes = minPerDevice[static_cast<size_t>(i)];
+                }
+            }
+            if (limitBytes <= 0) continue;
+            if (m_useMultiGPU) {
+                cudaCheckError(cudaSetDevice(m_deviceIndices[i]), "set device for hybrid limit");
+            }
             cuDSSCheckError(cudssConfigSet(m_Config, CUDSS_CONFIG_HYBRID_DEVICE_MEMORY_LIMIT,
                                           &limitBytes, sizeof(limitBytes)),
                            "set hybrid device memory limit");
             if (m_verbose) {
-                opserr << "INFO: CuDSSLinSolver::setupMatrices() - "
-                       << "Hybrid device memory limit set to " << limitBytes << " bytes" << endln;
+                opserr << "INFO: CuDSSLinSolver::setupMatrices() - dev " << (m_useMultiGPU ? m_deviceIndices[i] : 0)
+                       << " hybrid limit = " << limitBytes << " bytes" << endln;
             }
+        }
+        if (m_useMultiGPU && numDev > 0) {
+            cudaCheckError(cudaSetDevice(m_deviceIndices[0]), "restore first device after hybrid limit");
         }
     }
 
@@ -563,7 +599,7 @@ struct CuDSSConfig {
     std::string precision = "dDDI";
     bool verbose = false;
     bool hybridMemoryMode = false;        // Hybrid host/device memory mode
-    size_t hybridDeviceMemoryLimit = 0;   // Device memory limit for hybrid memory mode (0 = use internal heuristic)
+    std::vector<size_t> hybridDeviceMemoryLimits;   // Per-device limit for hybrid memory (empty = use heuristic; one value = same for all)
     bool hybridExecuteMode = false;       // Hybrid host/device execute mode
     bool multiThreadingMode = false;      // OpenMP multi-threading mode (requires OpenMP at build time)
     std::string threadingLibPath = "/usr/lib/x86_64-linux-gnu/libcudss_mtlayer_gomp.so";  // Threading layer library path ("NULL" = pass NULL to cuDSS)
@@ -609,11 +645,16 @@ CuDSSParameterParser::configParsers = {
         }
     }},
     {"hybridDeviceMemoryLimit", [](CuDSSConfig& config) { 
+        config.hybridDeviceMemoryLimits.clear();
         int numData = 1;
         double limit = 0.0;
-        if (OPS_GetDoubleInput(&numData, &limit) == 0) {
-            if (limit < 0.0) throw std::invalid_argument("hybridDeviceMemoryLimit cannot be negative");
-            config.hybridDeviceMemoryLimit = static_cast<size_t>(limit);
+        if (OPS_GetDoubleInput(&numData, &limit) != 0) return;
+        if (limit < 0.0) throw std::invalid_argument("hybridDeviceMemoryLimit cannot be negative");
+        config.hybridDeviceMemoryLimits.push_back(static_cast<size_t>(limit));
+        while (OPS_GetNumRemainingInputArgs() > 0) {
+            if (OPS_GetDoubleInput(&numData, &limit) != 0) break;
+            if (limit < 0.0) throw std::invalid_argument("hybridDeviceMemoryLimit value cannot be negative");
+            config.hybridDeviceMemoryLimits.push_back(static_cast<size_t>(limit));
         }
     }},
     {"hybridExecuteMode", [](CuDSSConfig& config) { 
@@ -740,7 +781,7 @@ void CuDSSParameterParser::printUsageInfo() {
     opserr << "  -distributed <0|1>               For MGMN only: 0 = root-only gather-scatter (default), 1 = row-wise distributed" << endln;
     opserr << "  -devices <all|id1 [id2 ...]>     For multiGPU only: GPU IDs to use (default: all)" << endln;
     opserr << "  -hybridMemoryMode <0|1>         Hybrid host/device memory mode (default: 0)" << endln;
-    opserr << "  -hybridDeviceMemoryLimit <bytes> Device memory limit for hybrid memory mode (0=min required)" << endln;
+    opserr << "  -hybridDeviceMemoryLimit <bytes1 [bytes2 ...]> Per-device limit for hybrid memory (one value=all devices; 0=min)" << endln;
     opserr << "  -hybridExecuteMode <0|1>        Hybrid host/device execute mode (default: 0)" << endln;
     opserr << "  -multiThreadingMode <0|1>       OpenMP multi-threading mode (default: 0; requires OpenMP at build time)" << endln;
     opserr << "  -threadingLibPath <path|NULL>   Path to threading layer (when multiThreadingMode is enabled)" << endln;
@@ -769,15 +810,18 @@ CudaGenBcsrLinSolver* createCuDSSSolverFromConfig(const CuDSSConfig& config) {
     if (config.cudssMatTypeStr == "symmetric") cudssMatType = CuDSSMatrixType::SYMMETRIC;
     else if (config.cudssMatTypeStr == "spd") cudssMatType = CuDSSMatrixType::SPD;
 
+    bool useMultiGPU = (config.parallelMode == "multiGPU");
     return new CuDSSLinSolver(
         precision, 
         config.verbose,
         config.hybridMemoryMode,
-        config.hybridDeviceMemoryLimit,
+        config.hybridDeviceMemoryLimits,
         config.hybridExecuteMode,
         config.multiThreadingMode,
         config.threadingLibPath.c_str(),
-        cudssMatType
+        cudssMatType,
+        useMultiGPU,
+        config.deviceIndices
     );
 }
 
@@ -801,8 +845,8 @@ CudaGenBcsrLinSolver* createCuDSSSolverFromParser() {
         return nullptr;
     }
     
-    // Validate that hybridDeviceMemoryLimit is only used with hybridMemoryMode
-    if (config.hybridDeviceMemoryLimit > 0 && !config.hybridMemoryMode) {
+    // Validate that hybridDeviceMemoryLimits is only used with hybridMemoryMode
+    if (!config.hybridDeviceMemoryLimits.empty() && !config.hybridMemoryMode) {
         opserr << "WARNING: createCuDSSSolverFromParser() - "
                << "hybridDeviceMemoryLimit is only valid with hybridMemoryMode enabled. "
                << "Ignoring hybridDeviceMemoryLimit." << endln;
@@ -836,8 +880,8 @@ void* OPS_CuDSSLinSolver()
         return nullptr;
     }
     
-    // Validate that hybridDeviceMemoryLimit is only used with hybridMemoryMode
-    if (config.hybridDeviceMemoryLimit > 0 && !config.hybridMemoryMode) {
+    // Validate that hybridDeviceMemoryLimits is only used with hybridMemoryMode
+    if (!config.hybridDeviceMemoryLimits.empty() && !config.hybridMemoryMode) {
         opserr << "WARNING: OPS_CuDSSLinSolver() - "
                << "hybridDeviceMemoryLimit is only valid with hybridMemoryMode enabled. "
                << "Ignoring hybridDeviceMemoryLimit." << endln;

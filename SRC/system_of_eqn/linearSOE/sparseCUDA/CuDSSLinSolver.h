@@ -47,6 +47,7 @@
 
 // C++ includes
 #include <string>
+#include <vector>
 
 // Matrix type for cuDSS: full, symmetric, or SPD (symmetric positive definite).
 // symmetric and spd both use symmetric lower storage in CudaGenBcsrLinSOE.
@@ -61,15 +62,18 @@ class CuDSSLinSolver : public CudaGenBcsrLinSolver
 {
 public:
     // Constructor with default parameters
+    // useMultiGPU: use cuDSS multi-GPU (MG) mode; deviceIndices: GPU IDs (empty = use all)
     CuDSSLinSolver(
         CudaPrecision precision = CudaPrecision::dDDI,
         bool verbose = false,
         bool hybridMemoryMode = false,
-        size_t hybridDeviceMemoryLimit = 0,
+        const std::vector<size_t>& hybridDeviceMemoryLimits = {},
         bool hybridExecuteMode = false,
         bool multiThreadingMode = false,
         const char* threadingLibPath = nullptr,
-        CuDSSMatrixType cudssMatType = CuDSSMatrixType::FULL
+        CuDSSMatrixType cudssMatType = CuDSSMatrixType::FULL,
+        bool useMultiGPU = false,
+        const std::vector<int>& deviceIndices = {}
     );
     
     // Destructor
@@ -92,7 +96,7 @@ private:
     
     // Hybrid mode settings
     bool m_hybridMemoryMode;
-    size_t m_hybridDeviceMemoryLimit;
+    std::vector<size_t> m_hybridDeviceMemoryLimits;  // Per-device limit (empty = use heuristic)
     bool m_hybridExecuteMode;
     
     // Multi-threading settings
@@ -102,6 +106,10 @@ private:
     // Matrix type: full, symmetric, or SPD (affects cuDSS mtype; symmetric/SPD use lower storage)
     CuDSSMatrixType m_cudssMatType;
 
+    // Multi-GPU (MG) mode: when true, use cudssCreateMg; otherwise cudssCreate
+    bool m_useMultiGPU;
+    std::vector<int> m_deviceIndices;
+
     // cuDSS initializer (to be used by constructors only)
     void init(CudaPrecision precision);
     
@@ -109,11 +117,9 @@ private:
     int setupMatrices();
 
     #ifdef _CUDSS
-    // Static members
-    static bool m_CuDSSInitialized;
-    static int m_ActiveSolverInstances;
-    static cudssHandle_t m_Handle;      ///< library handle
-    static cudaStream_t m_cudaStream;    ///< CUDA stream
+    // Per-instance handle and stream (same member for single-GPU and MG)
+    cudssHandle_t m_Handle;
+    cudaStream_t m_cudaStream;
     
     // cuDSS objects
     cudssConfig_t m_Config;      ///< solver configuration
