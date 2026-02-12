@@ -11,6 +11,7 @@ target_sources(OPS_SysOfEqn
         CudaGenBcsrLinSolver.h
         AmgXLinSolver.h
         CuDSSLinSolver.h
+        DistributedCudaGenBcsrLinSOE.h
         CuPCGLinSolver.h
         CuJacobiPCGLinSolver.h
 )

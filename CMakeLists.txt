@@ -737,6 +737,7 @@ if(HAVE_CUDA)
   if(HAVE_CUDSS)
     target_sources(OPS_Cuda PRIVATE
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuDSSLinSolver.cu
+      ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/DistributedCudaGenBcsrLinSOE.cu
     )
   endif()
   

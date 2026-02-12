@@ -4,7 +4,7 @@ include ../../../../Makefile.def
 # sparseCuda Makefile
 #==============================================================================
 
-OBJS       = CudaGenBcsrLinSOE.o CudaGenBcsrLinSolver.o AmgXLinSolver.o CuDSSLinSolver.o ParameterUtils.o
+OBJS       = CudaGenBcsrLinSOE.o CudaGenBcsrLinSolver.o AmgXLinSolver.o CuDSSLinSolver.o DistributedCudaGenBcsrLinSOE.o ParameterUtils.o
 
 # Include directories
 INCLUDES   += -I$(CORE)/system_of_eqn/linearSOE/sparseCuda

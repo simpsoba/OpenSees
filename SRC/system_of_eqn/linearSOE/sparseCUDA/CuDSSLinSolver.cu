@@ -36,6 +36,8 @@
 // Solve core classes
 #include <CudaGenBcsrLinSOE.h>
 #include <CuDSSLinSolver.h>
+#include <DistributedCudaGenBcsrLinSOE.h>
+#include "ParameterUtils.h"
 
 // CUDA utilities
 #include "CudaUtils.h"
@@ -855,8 +857,12 @@ CudaGenBcsrLinSolver* createCuDSSSolverFromParser() {
     return createCuDSSSolverFromConfig(config);
 }
 
-void* OPS_CuDSSLinSolver()
+// Entry point for parallel build: when multiple processes and not MGMN, returns
+// DistributedCudaGenBcsrLinSOE and sets *needSetChannels=1 so caller can setProcessID/setChannels.
+void* OPS_CuDSSLinSolverEx(int* needSetChannels)
 {
+    if (needSetChannels) *needSetChannels = 0;
+
     CuDSSConfig config;
 
     // Expand dict to CLI args if present ({"key": val} -> "-key", val)
@@ -866,59 +872,77 @@ void* OPS_CuDSSLinSolver()
 
     // Parse CLI-style parameters (after any normalization).
     if (!CuDSSParameterParser::parseParameters(config)) {
-        opserr << "WARNING: OPS_CuDSSLinSolver() - "
+        opserr << "WARNING: OPS_CuDSSLinSolverEx() - "
                << "Failed to parse parameters, using defaults" << endln;
         opserr << "For valid parameters, use:" << endln;
         CuDSSParameterParser::printUsageInfo();
     }
-    
+
     // Validate that hybrid modes are mutually exclusive
     if (config.hybridMemoryMode && config.hybridExecuteMode) {
-        opserr << "ERROR: OPS_CuDSSLinSolver() - "
+        opserr << "ERROR: OPS_CuDSSLinSolverEx() - "
                << "hybridMemoryMode and hybridExecuteMode are mutually exclusive. "
                << "Only one can be enabled at a time." << endln;
         return nullptr;
     }
-    
+
     // Validate that hybridDeviceMemoryLimits is only used with hybridMemoryMode
     if (!config.hybridDeviceMemoryLimits.empty() && !config.hybridMemoryMode) {
-        opserr << "WARNING: OPS_CuDSSLinSolver() - "
+        opserr << "WARNING: OPS_CuDSSLinSolverEx() - "
                << "hybridDeviceMemoryLimit is only valid with hybridMemoryMode enabled. "
                << "Ignoring hybridDeviceMemoryLimit." << endln;
     }
-    
-    // Create solver using factory (constructor validates precision)
+
+#ifdef _PARALLEL_PROCESSING
+    int np = getNumProcesses();
+    if (np > 1 && config.parallelMode != "MGMN") {
+        // Create distributed gather-scatter SOE (solve on root)
+        CudaGenBcsrLinSolver* solver = nullptr;
+        try {
+            solver = createCuDSSSolverFromConfig(config);
+        } catch (const std::exception& e) {
+            opserr << "ERROR: OPS_CuDSSLinSolverEx() - "
+                   << "Failed to create solver: " << e.what() << endln;
+            return nullptr;
+        }
+        if (solver == nullptr) return nullptr;
+        const bool symmetricStorage = (config.cudssMatTypeStr == "symmetric" || config.cudssMatTypeStr == "spd");
+        LinearSOE* distSOE = new DistributedCudaGenBcsrLinSOE(*solver, 1, false, symmetricStorage);
+        if (needSetChannels) *needSetChannels = 1;
+        return (void*)distSOE;
+    }
+#endif
+
+    // Serial or MGMN: create normal SOE
     CudaGenBcsrLinSolver* solver = nullptr;
     try {
         solver = createCuDSSSolverFromConfig(config);
     } catch (const std::exception& e) {
-        opserr << "ERROR: OPS_CuDSSLinSolver() - "
+        opserr << "ERROR: OPS_CuDSSLinSolverEx() - "
                << "Failed to create solver: " << e.what() << endln;
         return nullptr;
     }
-    
-    if (solver == nullptr) {
-        return nullptr;
-    }
-    
-    // CuDSS only supports scalar CSR (blockSize = 1, no padding)
+    if (solver == nullptr) return nullptr;
+
     const int blockSize = 1;
     const bool paddingEnabled = false;
-    
-    // Create and return SOE based on precision (only uniform modes reach here)
     CudaPrecision precision = solver->getPrecision();
     const bool symmetricStorage = (config.cudssMatTypeStr == "symmetric" || config.cudssMatTypeStr == "spd");
-    switch(precision) {
+    switch (precision) {
         case CudaPrecision::dDDI:
             return CudaGenBcsrLinSOE::createDouble(*solver, blockSize, paddingEnabled, config.verbose, symmetricStorage);
         case CudaPrecision::dFFI:
             return CudaGenBcsrLinSOE::createFloat(*solver, blockSize, paddingEnabled, config.verbose, symmetricStorage);
         default:
-            // Should never reach here - constructor rejects mixed precision
-            opserr << "ERROR: OPS_CuDSSLinSolver() - Unexpected precision mode" << endln;
+            opserr << "ERROR: OPS_CuDSSLinSolverEx() - Unexpected precision mode" << endln;
             delete solver;
             return nullptr;
     }
+}
+
+void* OPS_CuDSSLinSolver()
+{
+    return OPS_CuDSSLinSolverEx(nullptr);
 }
 #else // _CUDSS
 void* OPS_CuDSSLinSolver() {

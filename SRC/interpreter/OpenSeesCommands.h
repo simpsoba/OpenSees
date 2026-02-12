@@ -509,6 +509,7 @@ void* OPS_AmgXLinSolver();
 #endif // _AMGX
 #ifdef _CUDSS
 void* OPS_CuDSSLinSolver();
+void* OPS_CuDSSLinSolverEx(int* needSetChannels);
 #endif // _CUDSS
 #ifdef _CUDA
 void* OPS_CuPCGLinSolver();
