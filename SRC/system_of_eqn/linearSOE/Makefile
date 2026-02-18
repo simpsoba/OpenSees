@@ -17,7 +17,8 @@ all:         $(OBJS)
 	@$(CD) $(FE)/system_of_eqn/linearSOE/petsc; $(MAKE);
 	@$(CD) $(FE)/system_of_eqn/linearSOE/mumps; $(MAKE);
 	@$(CD) $(FE)/system_of_eqn/linearSOE/itpack; $(MAKE);
-	@$(CD) $(FE)/system_of_eqn/linearSOE/amgx; $(MAKE);
+	@$(CD) $(FE)/system_of_eqn/linearSOE/sparseCUDA; $(MAKE);
+	@$(CD) $(FE)/system_of_eqn/linearSOE/sparsePython; $(MAKE);
 
 
 
@@ -42,6 +43,7 @@ spotless: clean
 	@$(CD) $(FE)/system_of_eqn/linearSOE/mumps; $(MAKE) wipe;
 	@$(CD) $(FE)/system_of_eqn/linearSOE/amgx; $(MAKE) wipe;
 	@$(CD) $(FE)/system_of_eqn/linearSOE/itpack; $(MAKE) wipe;
+	@$(CD) $(FE)/system_of_eqn/linearSOE/sparsePython; $(MAKE) wipe;
 
 wipe: spotless
 

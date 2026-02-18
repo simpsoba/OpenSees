@@ -821,6 +821,18 @@ static PyObject *Py_ops_equalDOF(PyObject *self, PyObject *args)
     return wrapper->getResults();
 }
 
+static PyObject *Py_ops_equationConstraint(PyObject *self, PyObject *args)
+{
+    wrapper->resetCommandLine(PyTuple_Size(args), 1, args);
+
+    if (OPS_EquationConstraint() < 0) {
+	opserr<<(void*)0;
+	return NULL;
+    }
+
+    return wrapper->getResults();
+}
+
 static PyObject *Py_ops_nodeEigenvector(PyObject *self, PyObject *args)
 {
     wrapper->resetCommandLine(PyTuple_Size(args), 1, args);
@@ -1798,6 +1810,18 @@ static PyObject *Py_ops_sectionWeight(PyObject *self, PyObject *args)
     wrapper->resetCommandLine(PyTuple_Size(args), 1, args);
 
     if (OPS_sectionWeight() < 0) {
+	opserr<<(void*)0;
+	return NULL;
+    }
+
+    return wrapper->getResults();
+}
+
+static PyObject *Py_ops_sectionResponseType(PyObject *self, PyObject *args)
+{
+    wrapper->resetCommandLine(PyTuple_Size(args), 1, args);
+
+    if (OPS_sectionResponseType() < 0) {
 	opserr<<(void*)0;
 	return NULL;
     }
@@ -3047,6 +3071,7 @@ PythonWrapper::addOpenSeesCommands()
     addCommand("remove", &Py_ops_remove);
     addCommand("mass", &Py_ops_mass);
     addCommand("equalDOF", &Py_ops_equalDOF);
+    addCommand("equationConstraint", &Py_ops_equationConstraint);
     addCommand("nodeEigenvector", &Py_ops_nodeEigenvector);
     addCommand("getTime", &Py_ops_getTime);
     addCommand("setCreep", &Py_ops_setCreep);
@@ -3130,6 +3155,7 @@ PythonWrapper::addOpenSeesCommands()
     addCommand("sectionLocation", &Py_ops_sectionLocation);
     addCommand("sectionWeight", &Py_ops_sectionWeight);
     addCommand("sectionTag", &Py_ops_sectionTag);
+    addCommand("sectionResponseType", &Py_ops_sectionResponseType);
     addCommand("sectionDisplacement", &Py_ops_sectionDisplacement);
     addCommand("cbdiDisplacement", &Py_ops_cbdiDisplacement);        
     addCommand("basicDeformation", &Py_ops_basicDeformation);

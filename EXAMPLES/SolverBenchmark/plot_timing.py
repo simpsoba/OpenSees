@@ -1,223 +1,94 @@
 #!/usr/bin/env python3
-
 """
-Plot timing results from a CSV file using pandas.
-
-Usage
------
-    python plot_timing.py solid_bar_v3.csv timing_plot.png
-
-The CSV file is expected to have at least the following columns:
-    solver, num_equations, time_seconds [, status]
-
-Multiple solvers are plotted on the same figure using different axis scalings
-in a 2x2 subplot layout:
-
-    linear y / linear x   |   linear y / log x
-    log y / linear x      |   log y / log x
-
-Only rows with status == 0 are plotted if a 'status' column is present.
+Plot timing results from benchmark CSV file.
+Plots num_equations vs time_seconds for different solvers.
 """
 
-import os
 import sys
-from typing import Dict, List, Tuple
-
-import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
+import os
 import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.ticker import EngFormatter
 
-
-def read_timing_csv(path: str) -> Dict[str, Tuple[List[float], List[float]]]:
-    """
-    Read timing CSV and return data grouped by solver.
-
-    Returns
-    -------
-    dict
-        {solver_name: ([num_equations], [time_seconds])}
-    """
-    df = pd.read_csv(path)
-
-    # If 'status' column exists, keep only rows with status == 0
-    if "status" in df.columns:
-        df = df[df["status"] == 0]
-
-    # Ensure required columns exist
-    required_cols = ["solver", "num_equations", "time_seconds"]
-    missing = [c for c in required_cols if c not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required column(s) in CSV: {', '.join(missing)}")
-
-    # Group by solver, sort by num_equations, and convert to lists
-    data: Dict[str, Tuple[List[float], List[float]]] = {}
-    for solver, g in df.groupby("solver"):
-        g_sorted = g.sort_values("num_equations")
-        data[solver] = (
-            g_sorted["num_equations"].to_list(),
-            g_sorted["time_seconds"].to_list(),
-        )
-
-    return data
-
-
-def plot_timing(
-    data: Dict[str, Tuple[List[float], List[float]]], output_path: str
-) -> None:
-    """Create and save a 2x2 grid of timing plots with linear/log axes."""
-    if not data:
-        raise ValueError("No data to plot.")
-
-    # Separate axes so each subplot can have independent x/y scales
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-    ax_lin_lin, ax_lin_logx, ax_logy_lin, ax_logy_logx = axes.ravel()
-
-    # Cycle through matplotlib default colors and markers
-    markers = ["o", "s", "D", "^", "v", "<", ">", "P", "X"]
-
-    for idx, (solver, (xs, ys)) in enumerate(sorted(data.items())):
-        if not xs or not ys:
-            continue
-        marker = markers[idx % len(markers)]
-        # Plot on all four subplots; only give labels on the first to avoid duplicate legends
-        ax_lin_lin.plot(
-            xs,
-            ys,
-            marker=marker,
-            linestyle="-",
-            linewidth=1.5,
-            markersize=5,
-            label=solver,
-        )
-        ax_lin_logx.plot(
-            xs,
-            ys,
-            marker=marker,
-            linestyle="-",
-            linewidth=1.5,
-            markersize=5,
-        )
-        ax_logy_lin.plot(
-            xs,
-            ys,
-            marker=marker,
-            linestyle="-",
-            linewidth=1.5,
-            markersize=5,
-        )
-        ax_logy_logx.plot(
-            xs,
-            ys,
-            marker=marker,
-            linestyle="-",
-            linewidth=1.5,
-            markersize=5,
-        )
-
-    # Set axis scales
-    ax_lin_lin.set_xscale("linear")
-    ax_lin_lin.set_yscale("linear")
-
-    ax_lin_logx.set_xscale("log")
-    ax_lin_logx.set_yscale("linear")
-
-    ax_logy_lin.set_xscale("linear")
-    ax_logy_lin.set_yscale("log")
-
-    ax_logy_logx.set_xscale("log")
-    ax_logy_logx.set_yscale("log")
-
-    # Format x-axis in "k" units (e.g. 50k instead of 50000)
-    def _format_k(value: float, _pos: int) -> str:
-        if value == 0:
-            return "0"
-        abs_val = abs(value)
-        if abs_val >= 1000:
-            val_k = value / 1000.0
-            # Keep labels compact; usually around tens of k here
-            if abs(val_k) >= 100:
-                return f"{val_k:.0f}k"
-            elif abs(val_k) >= 10:
-                return f"{val_k:.1f}k"
-            else:
-                return f"{val_k:.2f}k"
-        # Below 1000, just show the integer
-        return f"{value:.0f}"
-
-    k_formatter = FuncFormatter(_format_k)
-
-    for ax in [ax_lin_lin, ax_lin_logx, ax_logy_lin, ax_logy_logx]:
-        ax.grid(True, which="both", linestyle="--", alpha=0.3)
-
-    # Apply "k" formatting only to plots with linear x scaling
-    for ax in [ax_lin_lin, ax_logy_lin]:
-        ax.xaxis.set_major_formatter(k_formatter)
-
-    # Global labels instead of per-axis titles
-    fig.supxlabel("Number of equations")
-    fig.supylabel("Time [s]")
-
-    ax_lin_lin.legend(title="Solver")
-
-    fig.tight_layout()
-
-    ext = os.path.splitext(output_path)[1].lower()
-    # Use higher DPI for raster formats
-    if ext in {".png", ".jpg", ".jpeg", ".tif", ".tiff"}:
-        fig.savefig(output_path, dpi=300)
-    else:
-        fig.savefig(output_path)
-
-    plt.close(fig)
-
-
-def main(argv: List[str]) -> int:
-    if len(argv) != 3:
-        script = os.path.basename(argv[0]) if argv else "plot_timing.py"
-        print(f"Usage: python {script} input.csv output.(png|svg)", file=sys.stderr)
-        return 1
-
+def main():
+    if len(sys.argv) != 3:
+        print("Usage: python plot_timing.py <input.csv> <output.png>")
+        sys.exit(1)
+    
+    # Get script directory
     script_dir = os.path.dirname(os.path.abspath(__file__))
-
-    # Resolve CSV path:
-    # - If absolute, use as-is.
-    # - If relative and exists in current working directory, use as-is.
-    # - Otherwise, look for it relative to the script directory.
-    csv_arg = argv[1]
-    if os.path.isabs(csv_arg):
-        csv_path = csv_arg
-    elif os.path.isfile(csv_arg):
-        csv_path = csv_arg
+    
+    input_csv_arg = sys.argv[1]
+    output_png_arg = sys.argv[2]
+    
+    # Resolve input CSV path
+    if os.path.isabs(input_csv_arg):
+        input_csv = input_csv_arg
     else:
-        csv_candidate = os.path.join(script_dir, csv_arg)
-        csv_path = csv_candidate
-
-    # Resolve output image path:
-    # - If absolute, use as-is.
-    # - If relative, place it next to the script.
-    out_arg = argv[2]
-    if os.path.isabs(out_arg):
-        out_path = out_arg
+        # Check in script directory
+        input_csv = os.path.join(script_dir, input_csv_arg)
+        if not os.path.exists(input_csv):
+            # If not found, try the path as-is (might be relative to current working directory)
+            input_csv = input_csv_arg
+    
+    if not os.path.exists(input_csv):
+        print(f"Error: Input file not found: {input_csv}")
+        sys.exit(1)
+    
+    # Get directory of input CSV file
+    csv_dir = os.path.dirname(os.path.abspath(input_csv))
+    
+    # Resolve output PNG path
+    if os.path.isabs(output_png_arg):
+        output_png = output_png_arg
+    elif os.path.dirname(output_png_arg):
+        # Has a directory component, treat as relative to current working directory
+        output_png = output_png_arg
     else:
-        out_path = os.path.join(script_dir, out_arg)
+        # Just a filename, store in same directory as input CSV
+        output_png = os.path.join(csv_dir, output_png_arg)
+    
+    # Read CSV
+    df = pd.read_csv(input_csv)
+    
+    # Filter out skipped runs (status == -999)
+    df = df[df['status'] != -999]
+    
+    # Filter out rows with invalid num_equations or time_seconds
+    df = df[(df['num_equations'] > 0) & (df['time_seconds'].notna())]
+    
+    # Get unique solvers
+    solvers = df['solver'].unique()
+    
+    # Create plot
+    plt.figure(figsize=(10, 6))
+    
+    # Plot each solver
+    for solver in sorted(solvers):
+        solver_data = df[df['solver'] == solver]
+        solver_data = solver_data.sort_values('num_equations')
+        plt.plot(solver_data['num_equations'], solver_data['time_seconds'], 
+                marker='o', label=solver, linewidth=2, markersize=6)
+    
+    # Set labels and title
+    plt.xlabel('Number of Equations', fontsize=12)
+    plt.ylabel('Time (seconds)', fontsize=12)
+    plt.title('Solver Performance: Number of Equations vs Time', fontsize=14)
+    plt.legend(fontsize=10)
+    plt.grid(True, alpha=0.3)
+    
+    # Apply engineering notation to x-axis
+    ax = plt.gca()
+    ax.xaxis.set_major_formatter(EngFormatter(unit=''))
+    
+    # Use log scale for better visualization if needed
+    # Uncomment the following lines if you want log scale:
+    # plt.xscale('log')
+    # plt.yscale('log')
+    
+    plt.tight_layout()
+    plt.savefig(output_png, dpi=300, bbox_inches='tight')
+    print(f"Plot saved to {os.path.abspath(output_png)}")
 
-    if not os.path.isfile(csv_path):
-        print(f"Error: CSV file not found: {csv_path}", file=sys.stderr)
-        return 1
-
-    try:
-        data = read_timing_csv(csv_path)
-        plot_timing(data, out_path)
-    except Exception as exc:  # noqa: BLE001
-        print(f"Error while processing '{csv_path}': {exc}", file=sys.stderr)
-        return 1
-
-    print("-"*80)
-    print(f"CSV file:    {csv_path}")
-    print(f"Output file: {out_path}")
-    print("Status: Done")
-    print("-"*80)
-    return 0
-
-if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
+if __name__ == '__main__':
+    main()
