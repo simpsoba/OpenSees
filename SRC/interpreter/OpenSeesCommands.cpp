@@ -1183,13 +1183,6 @@ const char * OPS_GetStringFromAll(char* buffer, int len)
     return res;
 }
 
-void *OPS_GetVoidPtr(void)
-{
-    if (cmds == 0) return nullptr;
-    DL_Interpreter* interp = cmds->getInterpreter();
-    return interp->getVoidPtr();
-}
-
 int OPS_SetString(const char* str)
 {
     if (cmds == 0) return 0;
