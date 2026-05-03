@@ -892,7 +892,7 @@ void* OPS_CuDSSLinSolverEx(int* needSetChannels)
                << "Ignoring hybridDeviceMemoryLimit." << endln;
     }
 
-#ifdef _PARALLEL_PROCESSING
+#if defined(_PARALLEL_PROCESSING) || defined(_PARALLEL_INTERPRETERS)
     int np = getNumProcesses();
     if (np > 1 && config.parallelMode != "MGMN") {
         // Create distributed gather-scatter SOE (solve on root)

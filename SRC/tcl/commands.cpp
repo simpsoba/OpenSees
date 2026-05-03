@@ -3111,7 +3111,7 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
     || strcmp(argv[1],"CUDSS") == 0 || strcmp(argv[1],"cudss") == 0) {
 
   OPS_ResetInputNoBuilder(clientData, interp, 2, argc, argv, &theDomain);
-#ifdef _PARALLEL_PROCESSING
+#if defined(_PARALLEL_PROCESSING) || defined(_PARALLEL_INTERPRETERS)
   {
     int needSetChannels = 0;
     theSOE = (LinearSOE*)OPS_CuDSSLinSolverEx(&needSetChannels);

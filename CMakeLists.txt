@@ -627,38 +627,70 @@ endif()
 
 message(STATUS "SCALAPACK_LIBRARIES=${SCALAPACK_LIBRARIES}")
 
-# Helper function to configure CUDA, AMGX, and CUDSS for targets
-function(configure_cuda_for_target target_name)
-  if(HAVE_CUDA)
-    target_compile_definitions(${target_name} PUBLIC ${CUDA_FLAG})
-    target_link_libraries(${target_name} ${CUDA_LIBRARIES})
-    
-    # Link to OPS_Cuda for CUDA functionality (contains the CUDA sources)
-    if(NOT ${target_name} STREQUAL "OPS_Cuda")
-      target_link_libraries(${target_name} OPS_Cuda)
-    endif()
-    
-    if(DEFINED AMGX_NO_MPI_DIR)
-      target_include_directories(${target_name} PUBLIC ${AMGX_INCLUDE_DIR})
-      target_compile_definitions(${target_name} PUBLIC ${AMGX_FLAG})
-      target_link_libraries(${target_name} ${AMGX_LIBRARIES})
-    endif()
-    
-    if(HAVE_CUDSS)
-      target_compile_definitions(${target_name} PUBLIC ${CUDSS_FLAG})
-      target_link_libraries(${target_name} cudss)
-      
-      # Add OpenMP support for cuDSS multi-threading if available
-      if(HAVE_CUDSS_OPENMP)
-        target_compile_definitions(${target_name} PUBLIC ${CUDSS_OPENMP_FLAG})
-        if(TARGET OpenMP::OpenMP_CXX)
-          target_link_libraries(${target_name} OpenMP::OpenMP_CXX)
-        elseif(TARGET OpenMP::OpenMP_C)
-          target_link_libraries(${target_name} OpenMP::OpenMP_C)
-        endif()
+# CUDA toolchain (flags + libs) applied to any CUDA-enabled target
+macro(ops_cuda_apply_toolchain target_name)
+  target_compile_definitions(${target_name} PUBLIC ${CUDA_FLAG})
+  target_link_libraries(${target_name} ${CUDA_LIBRARIES})
+
+  if(DEFINED AMGX_NO_MPI_DIR)
+    target_include_directories(${target_name} PUBLIC ${AMGX_INCLUDE_DIR})
+    target_compile_definitions(${target_name} PUBLIC ${AMGX_FLAG})
+    target_link_libraries(${target_name} ${AMGX_LIBRARIES})
+  endif()
+
+  if(HAVE_CUDSS)
+    target_compile_definitions(${target_name} PUBLIC ${CUDSS_FLAG})
+    target_link_libraries(${target_name} cudss)
+
+    if(HAVE_CUDSS_OPENMP)
+      target_compile_definitions(${target_name} PUBLIC ${CUDSS_OPENMP_FLAG})
+      if(TARGET OpenMP::OpenMP_CXX)
+        target_link_libraries(${target_name} OpenMP::OpenMP_CXX)
+      elseif(TARGET OpenMP::OpenMP_C)
+        target_link_libraries(${target_name} OpenMP::OpenMP_C)
       endif()
     endif()
   endif()
+endmacro()
+
+# Links OPS_Cuda plus optional cuDSS solver objects.
+# PARALLEL_CUDSS: use OPS_Cuda_Parallel (OpenSeesSP/MPI Tcl + gather/scatter cuDSS).
+# Interpreter targets (OPS_INTERPRETER, OPS_InterpTcl) link only OPS_Cuda so the
+# final executable supplies exactly one cuDSS object library (serial vs parallel).
+function(configure_cuda_for_target target_name)
+  cmake_parse_arguments(PARSE_ARGV 1 ARG "PARALLEL_CUDSS" "" "")
+  if(NOT HAVE_CUDA)
+    return()
+  endif()
+
+  ops_cuda_apply_toolchain(${target_name})
+
+  if(${target_name} STREQUAL "OPS_Cuda")
+    return()
+  endif()
+
+  if(${target_name} STREQUAL "OPS_Cuda_Serial" OR ${target_name} STREQUAL "OPS_Cuda_Parallel")
+    target_link_libraries(${target_name} PUBLIC OPS_Cuda)
+    return()
+  endif()
+
+  if(${target_name} STREQUAL "OPS_INTERPRETER" OR ${target_name} STREQUAL "OPS_InterpTcl")
+    target_link_libraries(${target_name} PRIVATE OPS_Cuda)
+    return()
+  endif()
+
+  target_link_libraries(${target_name} OPS_Cuda)
+  if(HAVE_CUDSS)
+    if(ARG_PARALLEL_CUDSS)
+      target_link_libraries(${target_name} OPS_Cuda_Parallel)
+    else()
+      target_link_libraries(${target_name} OPS_Cuda_Serial)
+    endif()
+  endif()
+endfunction()
+
+function(configure_cuda_for_parallel_target target_name)
+  configure_cuda_for_target(${target_name} PARALLEL_CUDSS)
 endfunction()
 
 #get_cmake_property(_variableNames VARIABLES)
@@ -740,10 +772,6 @@ if(NOT EXISTS "${CMAKE_BINARY_DIR}/conanbuildinfo.cmake")
   target_include_directories(OPS_InterpTcl PUBLIC ${TCL_INCLUDE_PATH})
   target_link_libraries(OPS_InterpTcl PRIVATE ${TCL_LIBRARIES})
 endif()
-
-# Configure CUDA for interpreter modules (to detect the appropriate OPS_* commands)
-configure_cuda_for_target(OPS_INTERPRETER)
-configure_cuda_for_target(OPS_InterpTcl)
 
 #
 # OpenSees G3 Library - a slimmed down OpenSees
@@ -835,13 +863,30 @@ if(HAVE_CUDA)
     )
   endif()
   
-  # Add cuDSS-specific sources if CUDSS is available
+  # cuDSS: separate serial vs parallel translation units so MPI interpreters link the
+  # gather/scatter-capable OPS_CuDSSLinSolver without mixing preprocessor state into OPS_Cuda.
   if(HAVE_CUDSS)
-    target_sources(OPS_Cuda PRIVATE
+    add_library(OPS_Cuda_Serial OBJECT
+      ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuDSSLinSolver.cu
+    )
+    ops_cuda_apply_toolchain(OPS_Cuda_Serial)
+    target_link_libraries(OPS_Cuda_Serial PUBLIC OPS_Cuda)
+
+    add_library(OPS_Cuda_Parallel OBJECT
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuDSSLinSolver.cu
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/DistributedCudaGenBcsrLinSOE.cu
     )
+    target_compile_definitions(OPS_Cuda_Parallel PRIVATE
+      _PARALLEL_PROCESSING
+      _PARALLEL_INTERPRETERS
+    )
+    ops_cuda_apply_toolchain(OPS_Cuda_Parallel)
+    target_link_libraries(OPS_Cuda_Parallel PUBLIC OPS_Cuda)
   endif()
+
+  # After OPS_Cuda exists (interpreter objects reference OPS_* entry points at link time)
+  configure_cuda_for_target(OPS_INTERPRETER)
+  configure_cuda_for_target(OPS_InterpTcl)
 endif()
 
 # ########################################################################
@@ -977,7 +1022,7 @@ if(MPI_FOUND)
     )
 
     # Configure CUDA for OpenSeesSP
-    configure_cuda_for_target(OpenSeesSP)
+    configure_cuda_for_parallel_target(OpenSeesSP)
 
 endif()
 
@@ -1045,7 +1090,7 @@ if(MPI_FOUND)
     )
     
     # Configure CUDA for OpenSeesMP
-    configure_cuda_for_target(OpenSeesMP)
+    configure_cuda_for_parallel_target(OpenSeesMP)
 endif()
 
 
