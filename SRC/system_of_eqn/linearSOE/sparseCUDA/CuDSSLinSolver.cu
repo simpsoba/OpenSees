@@ -798,7 +798,6 @@ void CuDSSParameterParser::printUsageInfo() {
 }
 
 // Factory function to create CuDSS solver from parsed config
-// This allows reuse in composite solvers like CuPCG
 CudaGenBcsrLinSolver* createCuDSSSolverFromConfig(const CuDSSConfig& config) {
     // Convert string precision to enum
     CudaPrecision precision;

@@ -882,66 +882,6 @@ CudaGenBcsrLinSolver* createAmgXSolver(const AmgXSimpleConfig& config) {
     );
 }
 
-// Factory function that parses OPS arguments and creates solver (for use in composite solvers like CuPCG)
-// Note: For composite solvers (like CuPCG), this returns just the solver with default SOE parameters
-CudaGenBcsrLinSolver* createAmgXSolverFromParser() {
-    // Handle case with no arguments - use default configuration
-    if (OPS_GetNumRemainingInputArgs() == 0) {
-        AmgXSimpleConfig simpleConfig; // Use default values
-        return createAmgXSolver(simpleConfig);
-    }
-    
-    // Check argument count for cases with arguments
-    if (OPS_GetNumRemainingInputArgs() % 2 != 0) {
-        opserr << "WARNING: createAmgXSolverFromParser() - "
-               << "Incorrect number of arguments for AmgX. " << endln;
-        AmgXParameterParser::printGeneralUsageInfo();
-        opserr << "Alternatively, use the simple constructor: " << endln;
-        AmgXParameterParser::printSimpleUsageInfo();
-        return nullptr;
-    }
-
-    // Try to parse as general config parameters first
-    AmgXGeneralConfig generalConfig;
-    generalConfig.callbackStream = (OPS_Stream*)&opserr; // Default callback
-    
-    // Store original argument count for fallback
-    int originalArgCount = OPS_GetNumRemainingInputArgs();
-    
-    if (AmgXParameterParser::parseGeneralConfigParameters(generalConfig)) {
-        // Check if we have config file parameters
-        if (!generalConfig.configFile.empty() || !generalConfig.configOptions.empty()) {
-            // Note: File callback handling would need to be done by caller if needed
-            return createAmgXSolver(generalConfig);
-        }
-    }
-    
-    // Reset arguments and try simple config
-    OPS_ResetCurrentInputArg(-originalArgCount);
-    
-    AmgXSimpleConfig simpleConfig;
-    if (AmgXParameterParser::parseSimpleConfigParameters(simpleConfig)) {
-        // Validate block size for JACOBI_L1
-        if ((simpleConfig.preconditioner == "JACOBI_L1" || 
-             simpleConfig.smoother == "JACOBI_L1") && simpleConfig.blockSize != 1) {
-            opserr << "WARNING: createAmgXSolverFromParser() - "
-                   << "JACOBI_L1 smoother/preconditioner only supports blockSize = 1. "
-                   << "Setting blockSize to 1..." << endln;
-            simpleConfig.blockSize = 1;
-        }
-        
-        return createAmgXSolver(simpleConfig);
-    }
-    
-    // If we get here, parsing failed
-    opserr << "WARNING: createAmgXSolverFromParser() - "
-           << "Failed to parse AmgX parameters" << endln;
-    AmgXParameterParser::printGeneralUsageInfo();
-    opserr << "Alternatively, use the simple constructor: " << endln;
-    AmgXParameterParser::printSimpleUsageInfo();
-    return nullptr;
-}
-
 // Helper struct to return both solver and SOE config from parsing
 struct AmgXSolverAndConfig {
     CudaGenBcsrLinSolver* solver;

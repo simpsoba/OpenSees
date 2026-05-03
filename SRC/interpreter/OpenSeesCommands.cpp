@@ -1566,9 +1566,6 @@ int OPS_System()
         theSOE = (LinearSOE*)OPS_CuDSSLinSolver();
 #endif
 #endif // _CUDSS
-    } else if (strcmp(type,"CuPCG") == 0 || strcmp(type,"cupcg") == 0 
-                || strcmp(type,"CUPCG") == 0 || strcmp(type,"cuPCG") == 0) {
-        theSOE = (LinearSOE*)OPS_CuPCGLinSolver();
 #endif // _CUDA
 
     } else if (strcmp(type,"FullGeneral") == 0) {

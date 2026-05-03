@@ -364,7 +364,6 @@ extern void OPS_SetReliabilityDomain(ReliabilityDomain *);
 extern void *OPS_AmgXLinSolver(void);
 extern void *OPS_CuDSSLinSolver(void);
 extern void *OPS_CuDSSLinSolverEx(int *needSetChannels);
-extern void *OPS_CuPCGLinSolver(void);
 #ifdef _CUDA
 #ifdef _AMGX
 #include <AmgXLinSolver.h>
@@ -377,8 +376,6 @@ extern void *OPS_CuPCGLinSolver(void);
 #include <DistributedCudaGenBcsrLinSOE.h>
 #endif
 #endif
-#include <CuPCGLinSolver.h>
-#include <CuJacobiPCGLinSolver.h>
 #endif
 
 #include <SparseGenRowLinSOE.h>
@@ -3129,12 +3126,6 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
 #endif
   }
 #endif // _CUDSS
-  else if (strcmp(argv[1],"CuPCG") == 0 || strcmp(argv[1],"cuPCG") == 0 
-    || strcmp(argv[1],"CUPCG") == 0 || strcmp(argv[1],"cupcg") == 0) {
-
-  OPS_ResetInputNoBuilder(clientData, interp, 2, argc, argv, &theDomain);
-  theSOE = (LinearSOE*)OPS_CuPCGLinSolver();
-  }
 #endif // _CUDA
 
   // BAND SPD SOE & SOLVER
