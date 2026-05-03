@@ -18,8 +18,8 @@ namespace ParameterUtils {
     }
 }
 
-// Returns number of MPI processes (1 if sequential or not set). Works for both Tcl and Python.
-// Implemented in ParameterUtils.cpp so interpreters are not touched.
+// Returns MPI_COMM_WORLD size when ParameterUtils.cpp is built with OPS_CUDA_PARALLEL_MPI_SIZE
+// (OPS_Cuda_Parallel); otherwise 1.
 int getNumProcesses();
 
 #endif // ParameterUtils_h

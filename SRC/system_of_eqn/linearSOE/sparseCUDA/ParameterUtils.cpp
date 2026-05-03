@@ -12,17 +12,18 @@
 **                                                                    **
 ** ****************************************************************** */
 
-// ParameterUtils.cpp -- getNumProcesses() implementation (sparseCUDA scope only)
+// ParameterUtils.cpp -- getNumProcesses() for CuDSS (compiled into OPS_Cuda_Serial and/or
+// OPS_Cuda_Parallel with different macros; see CMakeLists.txt).
 
 #include "ParameterUtils.h"
 
-#ifdef _PARALLEL_INTERPRETERS
+#if defined(OPS_CUDA_PARALLEL_MPI_SIZE)
 #include <mpi.h>
 #endif
 
 int getNumProcesses()
 {
-#ifdef _PARALLEL_INTERPRETERS
+#if defined(OPS_CUDA_PARALLEL_MPI_SIZE)
     int np = 1;
     MPI_Comm_size(MPI_COMM_WORLD, &np);
     return np;

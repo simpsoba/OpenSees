@@ -850,7 +850,6 @@ if(HAVE_CUDA)
   add_library(OPS_Cuda OBJECT
     ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaGenBcsrLinSOE.cu
     ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaGenBcsrLinSolver.cu
-    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/ParameterUtils.cpp
   )
   
   # Configure CUDA for the OPS_Cuda library
@@ -868,6 +867,7 @@ if(HAVE_CUDA)
   if(HAVE_CUDSS)
     add_library(OPS_Cuda_Serial OBJECT
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuDSSLinSolver.cu
+      ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/ParameterUtils.cpp
     )
     ops_cuda_apply_toolchain(OPS_Cuda_Serial)
     target_link_libraries(OPS_Cuda_Serial PUBLIC OPS_Cuda)
@@ -875,11 +875,17 @@ if(HAVE_CUDA)
     add_library(OPS_Cuda_Parallel OBJECT
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuDSSLinSolver.cu
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/DistributedCudaGenBcsrLinSOE.cu
+      ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/ParameterUtils.cpp
     )
     target_compile_definitions(OPS_Cuda_Parallel PRIVATE
       _PARALLEL_PROCESSING
       _PARALLEL_INTERPRETERS
     )
+    # MPI process count for OPS_CuDSSLinSolverEx / parser (not implied by _PARALLEL_* on these TUs)
+    if(MPI_FOUND)
+      target_compile_definitions(OPS_Cuda_Parallel PRIVATE OPS_CUDA_PARALLEL_MPI_SIZE)
+      target_include_directories(OPS_Cuda_Parallel PRIVATE ${MPI_CXX_INCLUDE_DIRS})
+    endif()
     ops_cuda_apply_toolchain(OPS_Cuda_Parallel)
     target_link_libraries(OPS_Cuda_Parallel PUBLIC OPS_Cuda)
   endif()
