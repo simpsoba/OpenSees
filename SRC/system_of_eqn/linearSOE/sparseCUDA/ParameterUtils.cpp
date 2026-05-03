@@ -13,17 +13,18 @@
 ** ****************************************************************** */
 
 // ParameterUtils.cpp -- getNumProcesses() for CuDSS (compiled into OPS_Cuda_Serial and/or
-// OPS_Cuda_Parallel with different macros; see CMakeLists.txt).
+// OPS_Cuda_Parallel). Same MPI guard pattern as SRC/tcl/commands.cpp and OPS_getNP() in
+// OpenSeesMiscCommands.cpp (MPI_Comm_size); avoids relying on Tcl-only globals like OPS_np.
 
 #include "ParameterUtils.h"
 
-#if defined(OPS_CUDA_PARALLEL_MPI_SIZE)
+#if defined(_PARALLEL_PROCESSING) || defined(_PARALLEL_INTERPRETERS)
 #include <mpi.h>
 #endif
 
 int getNumProcesses()
 {
-#if defined(OPS_CUDA_PARALLEL_MPI_SIZE)
+#if defined(_PARALLEL_PROCESSING) || defined(_PARALLEL_INTERPRETERS)
     int np = 1;
     MPI_Comm_size(MPI_COMM_WORLD, &np);
     return np;

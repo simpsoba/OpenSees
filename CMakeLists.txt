@@ -682,7 +682,11 @@ function(configure_cuda_for_target target_name)
   target_link_libraries(${target_name} OPS_Cuda)
   if(HAVE_CUDSS)
     if(ARG_PARALLEL_CUDSS)
-      target_link_libraries(${target_name} OPS_Cuda_Parallel)
+      if(TARGET OPS_Cuda_Parallel)
+        target_link_libraries(${target_name} OPS_Cuda_Parallel)
+      else()
+        message(FATAL_ERROR "configure_cuda_for_parallel_target: OPS_Cuda_Parallel missing (need MPI + cuDSS)")
+      endif()
     else()
       target_link_libraries(${target_name} OPS_Cuda_Serial)
     endif()
@@ -872,22 +876,21 @@ if(HAVE_CUDA)
     ops_cuda_apply_toolchain(OPS_Cuda_Serial)
     target_link_libraries(OPS_Cuda_Serial PUBLIC OPS_Cuda)
 
-    add_library(OPS_Cuda_Parallel OBJECT
-      ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuDSSLinSolver.cu
-      ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/DistributedCudaGenBcsrLinSOE.cu
-      ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/ParameterUtils.cpp
-    )
-    target_compile_definitions(OPS_Cuda_Parallel PRIVATE
-      _PARALLEL_PROCESSING
-      _PARALLEL_INTERPRETERS
-    )
-    # MPI process count for OPS_CuDSSLinSolverEx / parser (not implied by _PARALLEL_* on these TUs)
+    # MPI Tcl/Python interpreters only; matches _PARALLEL_* guards in ParameterUtils.cpp / commands.cpp
     if(MPI_FOUND)
-      target_compile_definitions(OPS_Cuda_Parallel PRIVATE OPS_CUDA_PARALLEL_MPI_SIZE)
+      add_library(OPS_Cuda_Parallel OBJECT
+        ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuDSSLinSolver.cu
+        ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/DistributedCudaGenBcsrLinSOE.cu
+        ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/ParameterUtils.cpp
+      )
+      target_compile_definitions(OPS_Cuda_Parallel PRIVATE
+        _PARALLEL_PROCESSING
+        _PARALLEL_INTERPRETERS
+      )
       target_include_directories(OPS_Cuda_Parallel PRIVATE ${MPI_CXX_INCLUDE_DIRS})
+      ops_cuda_apply_toolchain(OPS_Cuda_Parallel)
+      target_link_libraries(OPS_Cuda_Parallel PUBLIC OPS_Cuda)
     endif()
-    ops_cuda_apply_toolchain(OPS_Cuda_Parallel)
-    target_link_libraries(OPS_Cuda_Parallel PUBLIC OPS_Cuda)
   endif()
 
   # After OPS_Cuda exists (interpreter objects reference OPS_* entry points at link time)
