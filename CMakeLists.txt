@@ -952,7 +952,7 @@ else()
 endif()
 
 
-target_link_libraries(OpenSees
+target_link_libraries(OpenSees PRIVATE
   OPS_InterpTcl
   coordTransformation
   OpenSeesLIB
@@ -1009,7 +1009,7 @@ if(MPI_FOUND)
         PUBLIC _PARALLEL_PROCESSING ${MUMPS_FLAG})
     endif()
 
-    target_link_libraries(OpenSeesSP
+    target_link_libraries(OpenSeesSP PRIVATE
        OPS_InterpTcl
        OpenSeesLIB
        OPS_Reliability
@@ -1077,7 +1077,7 @@ if(MPI_FOUND)
         PUBLIC _PARALLEL_INTERPRETERS ${MUMPS_FLAG})
     endif()
 
-    target_link_libraries(OpenSeesMP
+    target_link_libraries(OpenSeesMP PRIVATE
        OPS_InterpTcl
        OpenSeesLIB
        OPS_Reliability
@@ -1118,7 +1118,7 @@ target_include_directories(OpenSeesPy PUBLIC ${Python_INCLUDE_DIRS})
 
 # Configure CUDA for OpenSeesPy
 configure_cuda_for_target(OpenSeesPy)
-target_link_libraries(OpenSeesPy
+target_link_libraries(OpenSeesPy PRIVATE
    OpenSeesLIB
    OPS_SysOfEqnPython   
    OPS_Reliability
