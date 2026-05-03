@@ -18,9 +18,7 @@ namespace ParameterUtils {
     }
 }
 
-// Process count for CuDSS parsing / OPS_CuDSSLinSolverEx. When compiled with
-// _PARALLEL_PROCESSING or _PARALLEL_INTERPRETERS (OPS_Cuda_Parallel), uses MPI_Comm_size
-// like OPS_getNP(); otherwise returns 1.
+// Process count for CuDSS parsing. With MPI, uses MPI_Comm_size; otherwise 1.
 int getNumProcesses();
 
 #endif // ParameterUtils_h

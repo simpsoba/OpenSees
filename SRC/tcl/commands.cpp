@@ -363,18 +363,12 @@ extern void OPS_SetReliabilityDomain(ReliabilityDomain *);
 // Cuda Solvers
 extern void *OPS_AmgXLinSolver(void);
 extern void *OPS_CuDSSLinSolver(void);
-extern void *OPS_CuDSSLinSolverEx(int *needSetChannels);
 #ifdef _CUDA
 #ifdef _AMGX
 #include <AmgXLinSolver.h>
 #endif
 #ifdef _CUDSS
 #include <CuDSSLinSolver.h>
-#endif
-#ifdef _PARALLEL_PROCESSING
-#ifdef _CUDSS
-#include <DistributedCudaGenBcsrLinSOE.h>
-#endif
 #endif
 #endif
 
@@ -3111,19 +3105,7 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
     || strcmp(argv[1],"CUDSS") == 0 || strcmp(argv[1],"cudss") == 0) {
 
   OPS_ResetInputNoBuilder(clientData, interp, 2, argc, argv, &theDomain);
-#if defined(_PARALLEL_PROCESSING) || defined(_PARALLEL_INTERPRETERS)
-  {
-    int needSetChannels = 0;
-    theSOE = (LinearSOE*)OPS_CuDSSLinSolverEx(&needSetChannels);
-    if (needSetChannels && theSOE != 0) {
-      DistributedCudaGenBcsrLinSOE *theDistSOE = (DistributedCudaGenBcsrLinSOE*)theSOE;
-      theDistSOE->setProcessID(OPS_rank);
-      theDistSOE->setChannels(numChannels, theChannels);
-    }
-  }
-#else
   theSOE = (LinearSOE*)OPS_CuDSSLinSolver();
-#endif
   }
 #endif // _CUDSS
 #endif // _CUDA

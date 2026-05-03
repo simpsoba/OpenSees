@@ -202,7 +202,6 @@ public:
 
     // Friend declarations
     friend class CudaGenBcsrLinSolver;
-    friend class DistributedCudaGenBcsrLinSOE;
     
     // Required methods for subclasses
     // These are pure virtual methods that provide type-erased access to device data without exposing the template nature.

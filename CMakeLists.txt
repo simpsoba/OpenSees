@@ -400,7 +400,8 @@ endif()
 
 find_package(MPI)
 find_package(MKL)
-find_package(CUDAToolkit)
+# Do not find CUDAToolkit here: FindCUDAToolkit must run after enable_language(CUDA)
+# or CUDA::cusparse etc. may never be created (configure fails on fresh cache).
 
 #set (LAPACK_FOUND FALSE)
 #set (BLAS_FOUND FALSE)
@@ -484,19 +485,35 @@ else()
 
 endif()
 
+# CUDA toolkit selection (before check_language / find_package):
+# - If CUDAToolkit_ROOT is set (e.g. -DCUDAToolkit_ROOT=/usr/local/cuda), use that tree only:
+#   set CMAKE_CUDA_COMPILER to <root>/bin/nvcc so PATH (e.g. conda) does not win.
+# - Otherwise, let CMake discover nvcc via check_language (PATH, defaults, etc.).
+if(CUDAToolkit_ROOT)
+  if(CMAKE_HOST_WIN32)
+    set(_OpenSees_nvcc "${CUDAToolkit_ROOT}/bin/nvcc.exe")
+  else()
+    set(_OpenSees_nvcc "${CUDAToolkit_ROOT}/bin/nvcc")
+  endif()
+  if(NOT EXISTS "${_OpenSees_nvcc}")
+    message(FATAL_ERROR "CUDAToolkit_ROOT='${CUDAToolkit_ROOT}' but '${_OpenSees_nvcc}' does not exist.")
+  endif()
+  set(CMAKE_CUDA_COMPILER "${_OpenSees_nvcc}" CACHE FILEPATH "CUDA compiler" FORCE)
+  message(STATUS "CUDAToolkit_ROOT set — using CUDA compiler: ${_OpenSees_nvcc}")
+endif()
+
 include(CheckLanguage)
 check_language(CUDA)
-if (CUDAToolkit_FOUND)
-  if(CMAKE_CUDA_COMPILER)
-    message(STATUS "CUDA compiler found: ${CMAKE_CUDA_COMPILER}")
-    enable_language(CUDA)
-    set(HAVE_CUDA TRUE)
-  else()
-    message(STATUS "CUDA compiler not found")
-    set(HAVE_CUDA FALSE)
-  endif()
+if(CMAKE_CUDA_COMPILER)
+  message(STATUS "CUDA compiler found: ${CMAKE_CUDA_COMPILER}")
+  enable_language(CUDA)
+  # IMPORTED targets CUDA::cusparse, etc. — must run after enable_language(CUDA).
+  # A prior find_package(CUDAToolkit) before enable_language can skip this pass and
+  # leave CUDA:: targets undefined on a fresh configure.
+  find_package(CUDAToolkit REQUIRED)
+  set(HAVE_CUDA TRUE)
 else()
-  message(STATUS "CUDAToolkit NOT found")
+  message(STATUS "CUDA compiler not found")
   set(HAVE_CUDA FALSE)
 endif()
 
@@ -653,12 +670,9 @@ macro(ops_cuda_apply_toolchain target_name)
   endif()
 endmacro()
 
-# Links OPS_Cuda plus optional cuDSS solver objects.
-# PARALLEL_CUDSS: use OPS_Cuda_Parallel (OpenSeesSP/MPI Tcl + gather/scatter cuDSS).
-# Interpreter targets (OPS_INTERPRETER, OPS_InterpTcl) link only OPS_Cuda so the
-# final executable supplies exactly one cuDSS object library (serial vs parallel).
+# Links OPS_Cuda plus OPS_Cuda_Serial (cuDSS + ParameterUtils) when HAVE_CUDSS.
+# Same CUDA object libs for serial OpenSees, OpenSeesSP, and OpenSeesMP.
 function(configure_cuda_for_target target_name)
-  cmake_parse_arguments(PARSE_ARGV 1 ARG "PARALLEL_CUDSS" "" "")
   if(NOT HAVE_CUDA)
     return()
   endif()
@@ -669,7 +683,7 @@ function(configure_cuda_for_target target_name)
     return()
   endif()
 
-  if(${target_name} STREQUAL "OPS_Cuda_Serial" OR ${target_name} STREQUAL "OPS_Cuda_Parallel")
+  if(${target_name} STREQUAL "OPS_Cuda_Serial")
     target_link_libraries(${target_name} PUBLIC OPS_Cuda)
     return()
   endif()
@@ -681,20 +695,8 @@ function(configure_cuda_for_target target_name)
 
   target_link_libraries(${target_name} PRIVATE OPS_Cuda)
   if(HAVE_CUDSS)
-    if(ARG_PARALLEL_CUDSS)
-      if(TARGET OPS_Cuda_Parallel)
-        target_link_libraries(${target_name} PRIVATE OPS_Cuda_Parallel)
-      else()
-        message(FATAL_ERROR "configure_cuda_for_parallel_target: OPS_Cuda_Parallel missing (need MPI + cuDSS)")
-      endif()
-    else()
-      target_link_libraries(${target_name} PRIVATE OPS_Cuda_Serial)
-    endif()
+    target_link_libraries(${target_name} PRIVATE OPS_Cuda_Serial)
   endif()
-endfunction()
-
-function(configure_cuda_for_parallel_target target_name)
-  configure_cuda_for_target(${target_name} PARALLEL_CUDSS)
 endfunction()
 
 #get_cmake_property(_variableNames VARIABLES)
@@ -865,9 +867,7 @@ if(HAVE_CUDA)
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/AmgXLinSolver.cu
     )
   endif()
-  
-  # cuDSS: separate serial vs parallel translation units so MPI interpreters link the
-  # gather/scatter-capable OPS_CuDSSLinSolver without mixing preprocessor state into OPS_Cuda.
+
   if(HAVE_CUDSS)
     add_library(OPS_Cuda_Serial OBJECT
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuDSSLinSolver.cu
@@ -875,22 +875,6 @@ if(HAVE_CUDA)
     )
     ops_cuda_apply_toolchain(OPS_Cuda_Serial)
     target_link_libraries(OPS_Cuda_Serial PUBLIC OPS_Cuda)
-
-    # MPI Tcl/Python interpreters only; matches _PARALLEL_* guards in ParameterUtils.cpp / commands.cpp
-    if(MPI_FOUND)
-      add_library(OPS_Cuda_Parallel OBJECT
-        ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuDSSLinSolver.cu
-        ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/DistributedCudaGenBcsrLinSOE.cu
-        ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/ParameterUtils.cpp
-      )
-      target_compile_definitions(OPS_Cuda_Parallel PRIVATE
-        _PARALLEL_PROCESSING
-        _PARALLEL_INTERPRETERS
-      )
-      target_include_directories(OPS_Cuda_Parallel PRIVATE ${MPI_CXX_INCLUDE_DIRS})
-      ops_cuda_apply_toolchain(OPS_Cuda_Parallel)
-      target_link_libraries(OPS_Cuda_Parallel PUBLIC OPS_Cuda)
-    endif()
   endif()
 
   # After OPS_Cuda exists (interpreter objects reference OPS_* entry points at link time)
@@ -1030,8 +1014,7 @@ if(MPI_FOUND)
        ${MPI_CXX_LINK_FLAGS}
     )
 
-    # Configure CUDA for OpenSeesSP
-    configure_cuda_for_parallel_target(OpenSeesSP)
+    configure_cuda_for_target(OpenSeesSP)
 
 endif()
 
@@ -1098,8 +1081,7 @@ if(MPI_FOUND)
        ${MPI_CXX_LINK_FLAGS}
     )
     
-    # Configure CUDA for OpenSeesMP
-    configure_cuda_for_parallel_target(OpenSeesMP)
+    configure_cuda_for_target(OpenSeesMP)
 endif()
 
 

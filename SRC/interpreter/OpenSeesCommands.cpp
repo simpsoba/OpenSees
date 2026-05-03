@@ -135,9 +135,6 @@ bool setMPIDSOEFlag = false;
 #define MPIPP_H
 #include <DistributedSuperLU.h>
 #include <DistributedProfileSPDLinSOE.h>
-#ifdef _CUDSS
-#include <DistributedCudaGenBcsrLinSOE.h>
-#endif
 #ifdef _MUMPS
 #include <MumpsParallelSOE.h>
 #include <MumpsParallelSolver.h>
@@ -1548,23 +1545,7 @@ int OPS_System()
 #ifdef _CUDSS
     } else if (strcmp(type,"CuDSS") == 0 || strcmp(type,"cudss") == 0 
                 || strcmp(type,"CUDSS") == 0 || strcmp(type,"cuDSS") == 0) {
-#ifdef _PARALLEL_INTERPRETERS
-        {
-            int needSetChannels = 0;
-            theSOE = (LinearSOE*)OPS_CuDSSLinSolverEx(&needSetChannels);
-            if (needSetChannels && theSOE != 0) {
-                DistributedCudaGenBcsrLinSOE* theDistSOE = (DistributedCudaGenBcsrLinSOE*)theSOE;
-                auto theMachineBroker = cmds->getMachineBroker();
-                int rank = theMachineBroker->getPID();
-                int numChannels = cmds->getNumChannels();
-                Channel** theChannels = cmds->getChannels();
-                theDistSOE->setProcessID(rank);
-                theDistSOE->setChannels(numChannels, theChannels);
-            }
-        }
-#else
         theSOE = (LinearSOE*)OPS_CuDSSLinSolver();
-#endif
 #endif // _CUDSS
 #endif // _CUDA
 

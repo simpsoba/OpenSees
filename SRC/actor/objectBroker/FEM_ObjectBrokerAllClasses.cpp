@@ -770,9 +770,6 @@
 #include "StaticDomainDecompositionAnalysis.h"
 #include "TransientDomainDecompositionAnalysis.h"
 #include "DistributedDiagonalSOE.h"
-#ifdef _CUDSS
-#include "DistributedCudaGenBcsrLinSOE.h"
-#endif
 #endif
 
 //#include "TclFeViewer.h"
@@ -3254,12 +3251,6 @@ FEM_ObjectBrokerAllClasses::getNewLinearSOE(int classTagSOE)
 
 	  theSOE = new DistributedSparseGenColLinSOE();
 	  return theSOE;
-
-#ifdef _CUDSS
-	case LinSOE_TAGS_DistributedCudaGenBcsrLinSOE:
-	  theSOE = new DistributedCudaGenBcsrLinSOE();
-	  return theSOE;
-#endif
 
 #endif
 
