@@ -3262,6 +3262,7 @@ FEM_ObjectBrokerAllClasses::getNewLinearSOE(int classTagSOE)
 	  
       
     }
+    return theSOE;
 }
 
 

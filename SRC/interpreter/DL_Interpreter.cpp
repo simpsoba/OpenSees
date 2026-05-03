@@ -118,11 +118,6 @@ bool DL_Interpreter::expandDictArgs()
     return false;
 }
 
-void* DL_Interpreter::getVoidPtr()
-{
-    return nullptr;
-}
-
 void
 DL_Interpreter::resetInput(int cArg)
 {

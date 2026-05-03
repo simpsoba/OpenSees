@@ -77,7 +77,7 @@ class PythonModule: public DL_Interpreter
     virtual const char* getString();
     virtual const char* getStringFromAll(char* buffer, int len);
     virtual int getStringCopy(char **stringPtr);
-    virtual void* getVoidPtr();
+    virtual void* getVoidPtr() override;
     virtual int evalDoubleStringExpression(const char* theExpression, double& current_val);
     virtual void resetInput(int cArg);
 
@@ -103,7 +103,6 @@ class PythonModule: public DL_Interpreter
     // Optional helpers used by higher-level commands
     // Expands a dict argument into CLI-style key-value pairs (e.g., {"key": val} -> "-key", val)
     virtual bool expandDictArgs() override;
-    virtual void* getVoidPtr() override;
 
     // getwrapper
     PythonWrapper* getWrapper() {return &wrapper;}

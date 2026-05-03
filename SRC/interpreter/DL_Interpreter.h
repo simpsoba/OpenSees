@@ -78,9 +78,6 @@ class DL_Interpreter
     // Expands a dict argument into CLI-style key-value pairs (e.g., {"key": val} -> "-key", val)
     // Default implementation is a no-op and returns false.
     virtual bool expandDictArgs();
-    // Optional helper to fetch a raw pointer argument.
-    // Default implementation returns nullptr.
-    virtual void* getVoidPtr();
 
     // methods for interpreters to output results
     virtual int setInt(int *, int numArgs, bool scalar);
