@@ -55,10 +55,6 @@ public:
     // Abstract methods that must be implemented by subclasses
     int solve(void) override = 0;
     virtual int setSize(void) override;
-    
-    // Solve without refactorization (uses existing factorization/preconditioner state)
-    // Default implementation just calls solve(). Subclasses can override for efficiency.
-    virtual int solveNoRefact(void) { return solve(); }
 
     // Parallel communication methods
     int sendSelf(int commitTag, Channel &theChannel) override;   

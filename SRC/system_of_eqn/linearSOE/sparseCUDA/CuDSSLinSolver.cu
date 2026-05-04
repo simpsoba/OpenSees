@@ -358,62 +358,6 @@ int CuDSSLinSolver::solve(void) {
     return 0;
 }
 
-int CuDSSLinSolver::solveNoRefact(void) {
-    #ifdef _CUDSS
-    if (m_useMultiGPU && !m_deviceIndices.empty()) {
-        cudaCheckError(cudaSetDevice(m_deviceIndices[0]), "set device for solveNoRefact");
-    }
-    CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
-    if (theSOE == nullptr) {
-        opserr << "WARNING: CuDSSLinSolver::solveNoRefact() - "
-               << "LinearSOE not set" << endln;
-        return -1;
-    }
-    
-    void* xValues = theSOE->getDeviceX();
-    void* bValues = theSOE->getDeviceB();
-
-    // Check if device pointers are valid
-    if (!xValues) {
-        opserr << "ERROR: CuDSSLinSolver::solveNoRefact() - getDeviceX() returned nullptr" << endln;
-        return -1;
-    }
-    if (!bValues) {
-        opserr << "ERROR: CuDSSLinSolver::solveNoRefact() - getDeviceB() returned nullptr" << endln;
-        return -1;
-    }
-    
-    // Ensure matrices are set up
-    if (m_Matrix == nullptr || m_RHS == nullptr || m_Solution == nullptr) {
-        opserr << "ERROR: CuDSSLinSolver::solveNoRefact() - "
-               << "Matrices not initialized. Call solve() first to perform factorization." << endln;
-        return -1;
-    }
-
-    /* Update only RHS and solution pointers (no factorization) */
-    cuDSSCheckError(cudssMatrixSetValues(m_RHS, bValues), "update cuDSS RHS values");
-    cuDSSCheckError(cudssMatrixSetValues(m_Solution, xValues), "update cuDSS solution values");
-
-    // Solve using existing factorization
-    cudssStatus_t status = cudssExecute(
-        m_Handle, CUDSS_PHASE_SOLVE, m_Config, m_Data,
-        m_Matrix, m_Solution, m_RHS
-    );
-    
-    if (status != CUDSS_STATUS_SUCCESS) {
-        opserr << "WARNING: CuDSSLinSolver::solveNoRefact() - "
-               << "cuDSS solve failed with status " << status << endln;
-        return -1;
-    }
-
-    // Synchronize the CUDA stream
-    cudaCheckError(cudaStreamSynchronize(m_cudaStream), "synchronize CUDA stream after solve");
-
-    #endif // _CUDSS
-
-    return 0;
-}
-
 int CuDSSLinSolver::setSize() {
     // In OpenSees, setSize() is called before data is ready on the GPU
     // Matrix initialization is done in solve() via setupMatrices()

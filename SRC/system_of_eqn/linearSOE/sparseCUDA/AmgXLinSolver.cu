@@ -467,67 +467,6 @@ int AmgXLinSolver::solve() {
     return 0;
 }
 
-int AmgXLinSolver::solveNoRefact() {
-    #ifdef _AMGX
-    CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
-    if (theSOE == nullptr) {
-        opserr << "WARNING: AmgXLinSolver::solveNoRefact() - "
-               << "LinearSOE not set" << endln;
-        return -1;
-    }
-
-    // Extract only what we need: dimensions and RHS/solution vectors
-    int numRowBlocks = theSOE->getNumRowBlocks();
-    int blockSize = theSOE->getBlockSize();
-    void* xValues = theSOE->getDeviceX();
-    void* bValues = theSOE->getDeviceB();
-    
-    if (!xValues) {
-        opserr << "ERROR: AmgXLinSolver::solveNoRefact() - getDeviceX() returned nullptr" << endln;
-        return -1;
-    }
-    if (!bValues) {
-        opserr << "ERROR: AmgXLinSolver::solveNoRefact() - getDeviceB() returned nullptr" << endln;
-        return -1;
-    }
-
-    // Upload the rhs data to the GPU
-    AMGX_vector_upload(m_RHS, numRowBlocks, blockSize, bValues);
-
-    /* Solve with 0-vector initial guess */
-    AMGX_vector_set_zero(m_Solution, numRowBlocks, blockSize);
-
-    // Solve the system of equations with existing solver setup
-    double initialResidualNorm = this->getResidualNorm();
-    AMGX_solver_solve_with_0_initial_guess(m_Solver, m_RHS, m_Solution);
-    double finalResidualNorm = this->getResidualNorm();
-
-    /* Download the solution vector from the GPU */
-    AMGX_vector_download(m_Solution, xValues);
-
-    /* AMGX check status */
-    AMGX_SOLVE_STATUS status;
-    AMGX_solver_get_status(m_Solver, &status);
-
-    if (status != AMGX_SOLVE_SUCCESS) {
-        opserr << "WARNING: AmgXLinSolver::solveNoRefact() - "
-               << "Solver failed with status " << status << endln;
-        if (status != AMGX_SOLVE_FAILED) {
-            reportAmgXSolveStats(this->getNumIterations(), initialResidualNorm, finalResidualNorm);
-        }
-        return -1;
-    }
-
-    if (m_verbose) {
-        opserr << "INFO: AmgXLinSolver::solveNoRefact() - "
-               << "Solve successful (without refactorization)" << endln;
-        reportAmgXSolveStats(this->getNumIterations(), initialResidualNorm, finalResidualNorm);
-    }
-    #endif // _AMGX
-
-    return 0;
-}
-
 int AmgXLinSolver::setSize()
 {
     return 0;

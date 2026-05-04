@@ -83,11 +83,7 @@ public:
     int solve(void) override;
     int setSize(void) override;
     int setLinearSOE(CudaGenBcsrLinSOE &theSOE) override;
-    
-    // Solve without factorization (uses existing factorization)
-    // Useful for using cuDSS as a preconditioner
-    int solveNoRefact(void) override;
-    
+
 protected:
 
 private:
