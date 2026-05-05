@@ -195,23 +195,6 @@ bool CudaGenBcsrLinSOE::isSymmetricStorage(void) const
     return m_storageMode == MatrixStorageMode::SYMMETRIC_LOWER;
 }
 
-CudaGenBcsrLinSOE::SyncSource CudaGenBcsrLinSOE::getSyncSource(void) const
-{
-    return m_syncSource;
-}
-
-void CudaGenBcsrLinSOE::setSyncSource(SyncSource source)
-{
-    m_syncSource = source;
-}
-
-void CudaGenBcsrLinSOE::syncHostFromDevice(void)
-{
-    downloadAValuesFromDevice();
-    downloadBFromDevice();
-    downloadSolutionFromDevice();
-}
-
 CudaGenBcsrLinSOE::~CudaGenBcsrLinSOE() 
 {
     
@@ -789,16 +772,11 @@ const Vector & CudaGenBcsrLinSOE::getX(void)
 
 const Vector & CudaGenBcsrLinSOE::getB(void)
 {
-    if (m_syncSource == SyncSource::DEVICE) {
-        downloadBFromDevice();
-    }
     return m_B;
 }
 
 double CudaGenBcsrLinSOE::normRHS(void)
 {
-    if (m_syncSource == SyncSource::DEVICE)
-        return computeNormBOnDevice();
     return m_B.Norm();
 }
 
@@ -867,22 +845,13 @@ int CudaGenBcsrLinSOE::solve(void)
         }
     }
 
-    // Upload data to device (or only ensure sizes when device is authoritative)
-    if (m_syncSource == SyncSource::HOST) {
-        uploadVectorsToDevice();
-        if (m_matrixStatus == MatrixStatus::STRUCTURE_CHANGED) {
-            uploadAValuesToDevice();
-            uploadAIndicesToDevice();
-        } else if (m_matrixStatus == MatrixStatus::COEFFICIENTS_CHANGED) {
-            uploadAValuesToDevice();
-        } else { /* pass */ }
-    } else {
-        // SyncSource::DEVICE: do not overwrite device A/B; ensure device vectors have correct size
-        ensureDeviceVectorSizes();
-        if (m_matrixStatus == MatrixStatus::STRUCTURE_CHANGED) {
-            uploadAIndicesToDevice();
-        }
-    }
+    uploadVectorsToDevice();
+    if (m_matrixStatus == MatrixStatus::STRUCTURE_CHANGED) {
+        uploadAValuesToDevice();
+        uploadAIndicesToDevice();
+    } else if (m_matrixStatus == MatrixStatus::COEFFICIENTS_CHANGED) {
+        uploadAValuesToDevice();
+    } else { /* pass */ }
     
     // Get the cuda solver
     CudaGenBcsrLinSolver* theCudaSolver = getCudaGenBcsrLinSolver();
@@ -908,9 +877,6 @@ int CudaGenBcsrLinSOE::solve(void)
 
 int CudaGenBcsrLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
 {
-    if (m_syncSource == SyncSource::DEVICE) {
-        downloadAValuesFromDevice();
-    }
     if (isMatrixEmpty()) {
         opserr << "WARNING: CudaGenBcsrLinSOE::saveSparseA() - "
                << "Matrix data is empty" << endln;

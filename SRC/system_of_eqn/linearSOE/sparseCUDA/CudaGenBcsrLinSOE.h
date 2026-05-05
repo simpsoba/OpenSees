@@ -85,13 +85,6 @@ public:
         SYMMETRIC_LOWER    // Store only lower triangle; addA(i,j) and addA(j,i) both update (max(i,j), min(i,j))
     };
 
-    // Which side is the source of truth for A and B (and thus for sync direction).
-    // HOST: assembly on host; solve() uploads host -> device. DEVICE: assembly on device; solve() does not overwrite device A/B.
-    enum class SyncSource {
-        HOST,    // Default: host holds authoritative A and B
-        DEVICE  // Device holds authoritative A and B; call syncHostFromDevice() when host data is needed
-    };
-
     CudaGenBcsrLinSOE(int classTag, CudaGenBcsrLinSolver &theSolver, 
                       int blockSize = DEFAULT_BLOCK_SIZE, 
                       bool paddingEnabled = true,
@@ -169,14 +162,6 @@ public:
     bool isSymmetricStorage(void) const;
     MatrixStorageMode getMatrixStorageMode(void) const;
 
-    // SyncSource: which side is authoritative for A and B (see SyncSource enum).
-    SyncSource getSyncSource(void) const;
-    void setSyncSource(SyncSource source);
-
-    // Copy device A values, B, and X to host. Call when SyncSource is DEVICE and host data is needed (e.g. before getB() or saveSparseA()).
-    // When SyncSource is HOST, host is already current; this is a no-op for correctness but may still perform the copy if called.
-    void syncHostFromDevice(void);
-
     // Track changes in the matrix
     enum class MatrixStatus {
         UNCHANGED, // Matrix is the same as the last solve
@@ -220,13 +205,10 @@ public:
     virtual void uploadVectorsToDevice(void) = 0;
     virtual void downloadSolutionFromDevice(void) = 0;
     virtual void uploadAValuesToDevice(void) = 0;
-    virtual void downloadBFromDevice(void) = 0;
     virtual void downloadAValuesFromDevice(void) = 0;
     virtual void ensureDeviceVectorSizes(void) = 0;
     // Copy host B data to device and add into device B (async when stream non-null). For overlapped recv in Distributed.
     virtual void addToDeviceBFromHost(int n, const double* hostData, void* stream = nullptr) = 0;
-    // 2-norm of B computed on device (no host download). Only valid when SyncSource is DEVICE.
-    virtual double computeNormBOnDevice(void) = 0;
     void uploadAIndicesToDevice(void);
 
 protected:    
@@ -262,9 +244,6 @@ protected:
 
     // Storage mode: full matrix or symmetric lower triangle
     MatrixStorageMode m_storageMode;
-
-    // Which side is the source of truth for A and B (HOST = upload to device before solve; DEVICE = do not overwrite device A/B)
-    SyncSource m_syncSource = SyncSource::HOST;
 
     // Set size helper methods
     int buildStandardCSR(Graph &theGraph);

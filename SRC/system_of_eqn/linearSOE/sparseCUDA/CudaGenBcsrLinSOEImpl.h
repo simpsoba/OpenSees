@@ -77,10 +77,6 @@ template<typename VectorType>
 struct AddDoubleToB {
     __device__ __host__ VectorType operator()(double a, VectorType b) const { return b + static_cast<VectorType>(a); }
 };
-template<typename VectorType>
-struct SquareForNorm {
-    __device__ __host__ double operator()(VectorType x) const { double t = static_cast<double>(x); return t * t; }
-};
 struct CompareTupleByFirst {
     __device__ __host__ bool operator()(const thrust::tuple<int,int,int,double>& a, const thrust::tuple<int,int,int,double>& b) const {
         return thrust::get<0>(a) < thrust::get<0>(b);
@@ -322,24 +318,6 @@ public:
         #endif
     }
 
-    inline void downloadBFromDevice(void) override {
-        #ifdef _CUDA
-        this->CudaGenBcsrLinSOE::m_hostB = m_deviceB;
-        #else
-        this->CudaGenBcsrLinSOE::m_hostB.resize(m_deviceB.size());
-        std::transform(
-            m_deviceB.begin(),
-            m_deviceB.end(),
-            this->CudaGenBcsrLinSOE::m_hostB.begin(),
-            [](VectorType val){ return static_cast<double>(val); }
-        );
-        #endif
-        this->CudaGenBcsrLinSOE::m_B.setData(
-            raw_pointer_cast(this->CudaGenBcsrLinSOE::m_hostB.data()),
-            this->CudaGenBcsrLinSOE::m_B.Size()
-        );
-    }
-
     inline void downloadAValuesFromDevice(void) override {
         #ifdef _CUDA
         this->CudaGenBcsrLinSOE::m_hostAValues = m_deviceAValues;
@@ -384,22 +362,6 @@ public:
         (void)stream;
         for (int i = 0; i < n && i < static_cast<int>(m_deviceB.size()); i++)
             m_deviceB[static_cast<size_t>(i)] += static_cast<VectorType>(hostData[i]);
-        #endif
-    }
-
-    inline double computeNormBOnDevice(void) override {
-        #ifdef _CUDA
-        if (m_deviceB.empty()) return 0.0;
-        double sumSq = thrust::transform_reduce(m_deviceB.begin(), m_deviceB.end(),
-            SquareForNorm<VectorType>(), 0.0, thrust::plus<double>());
-        return std::sqrt(sumSq);
-        #else
-        double sumSq = 0.0;
-        for (size_t i = 0; i < m_deviceB.size(); i++) {
-            double t = static_cast<double>(m_deviceB[i]);
-            sumSq += t * t;
-        }
-        return std::sqrt(sumSq);
         #endif
     }
 
