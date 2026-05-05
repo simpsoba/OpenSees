@@ -45,14 +45,6 @@
 #include <thrust/execution_policy.h>
 #include <thrust/memory.h>
 #include <thrust/system/cuda/execution_policy.h>
-#include <thrust/transform_reduce.h>
-#include <thrust/functional.h>
-#include <thrust/sort.h>
-#include <thrust/reduce.h>
-#include <thrust/copy.h>
-#include <thrust/iterator/zip_iterator.h>
-#include <thrust/tuple.h>
-#include <iterator>
 
 // Bring thrust::raw_pointer_cast into scope for CUDA builds
 using thrust::raw_pointer_cast;
@@ -77,70 +69,6 @@ template<typename VectorType>
 struct AddDoubleToB {
     __device__ __host__ VectorType operator()(double a, VectorType b) const { return b + static_cast<VectorType>(a); }
 };
-struct CompareTupleByFirst {
-    __device__ __host__ bool operator()(const thrust::tuple<int,int,int,double>& a, const thrust::tuple<int,int,int,double>& b) const {
-        return thrust::get<0>(a) < thrust::get<0>(b);
-    }
-};
-struct MakeKey {
-    int n;
-    explicit MakeKey(int n_) : n(n_) {}
-    __device__ __host__ int operator()(int r, int c) const { return r * n + c; }
-};
-struct MakeBlockKey {
-    int numBlockCols;
-    int blockSize;
-    MakeBlockKey(int nbc, int bs) : numBlockCols(nbc), blockSize(bs) {}
-    __device__ __host__ int operator()(int row, int col) const {
-        int blockRow = row / blockSize;
-        int blockCol = col / blockSize;
-        int localRow = row % blockSize;
-        int localCol = col % blockSize;
-        int bs2 = blockSize * blockSize;
-        return (blockRow * numBlockCols + blockCol) * bs2 + (localRow * blockSize + localCol);
-    }
-};
-struct LowerTriangleOnly {
-    __device__ __host__ bool operator()(const thrust::tuple<int, int, double>& t) const {
-        return thrust::get<0>(t) >= thrust::get<1>(t);
-    }
-};
-// Scatter reduced (unique key, summed value) COO into block CSR. Keys encode (blockRow, blockCol, localRow, localCol).
-template<typename MatrixType>
-__global__ void scatterCOOToCSRKernel(
-    const int* __restrict__ rowPtr,
-    const int* __restrict__ colInd,
-    MatrixType* __restrict__ Avalues,
-    const int* __restrict__ keys,
-    const double* __restrict__ vals,
-    int numBlockCols,
-    int blockSize,
-    int nnz)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= nnz) return;
-    // Decode key: key = (blockRow * numBlockCols + blockCol) * bs2 + (localRow * blockSize + localCol)
-    int key = keys[i];
-    int bs2 = blockSize * blockSize;
-    int localCol = key % blockSize;
-    key /= blockSize;
-    int localRow = key % blockSize;
-    key /= blockSize;
-    int blockCol = key % numBlockCols;
-    int blockRow = key / numBlockCols;
-    double v = vals[i];
-    // Find block index k in block CSR for this (blockRow, blockCol)
-    int start = rowPtr[blockRow];
-    int end = rowPtr[blockRow + 1];
-    for (int k = start; k < end; k++) {
-        if (colInd[k] == blockCol) {
-            // Write into block at entry (localRow, localCol)
-            int offset = k * bs2 + localRow * blockSize + localCol;
-            Avalues[offset] = static_cast<MatrixType>(v);
-            return;
-        }
-    }
-}
 }
 #endif
 
@@ -362,82 +290,6 @@ public:
         (void)stream;
         for (int i = 0; i < n && i < static_cast<int>(m_deviceB.size()); i++)
             m_deviceB[static_cast<size_t>(i)] += static_cast<VectorType>(hostData[i]);
-        #endif
-    }
-
-    int assembleAFromCOO(int nnz, const int* rows, const int* cols, const double* vals) override {
-        const int numBlockRows = this->getNumRowBlocks();
-        const int blockSize = this->getBlockSize();
-        if (numBlockRows <= 0 || blockSize <= 0 || this->m_hostAValues.empty())
-            return -1;
-        #ifdef _CUDA
-        // Ensure device has structure (rowPtr, colInd) and vector sizes (B, X, Avalues)
-        this->uploadAIndicesToDevice();
-        this->ensureDeviceVectorSizes();
-        if (nnz <= 0) {
-            thrust::fill(m_deviceAValues.begin(), m_deviceAValues.end(), static_cast<MatrixType>(0));
-            return 0;
-        }
-        // Copy host COO to device
-        const size_t un = static_cast<size_t>(nnz);
-        thrust::device_vector<int> d_row(rows, rows + un);
-        thrust::device_vector<int> d_col(cols, cols + un);
-        thrust::device_vector<double> d_val(vals, vals + un);
-        size_t work_nnz = un;
-        // Symmetric lower: keep only row >= col to avoid double-counting; replace working buffers with filtered
-        if (this->getMatrixStorageMode() == CudaGenBcsrLinSOE::MatrixStorageMode::SYMMETRIC_LOWER) {
-            thrust::device_vector<int> d_row_filt(un), d_col_filt(un);
-            thrust::device_vector<double> d_val_filt(un);
-            auto zip_in = thrust::make_zip_iterator(thrust::make_tuple(d_row.begin(), d_col.begin(), d_val.begin()));
-            auto zip_out = thrust::make_zip_iterator(thrust::make_tuple(d_row_filt.begin(), d_col_filt.begin(), d_val_filt.begin()));
-            auto end_out = thrust::copy_if(thrust::device, zip_in, zip_in + nnz, zip_out, LowerTriangleOnly());
-            work_nnz = static_cast<size_t>(std::distance(zip_out, end_out));
-            if (work_nnz == 0) {
-                thrust::fill(m_deviceAValues.begin(), m_deviceAValues.end(), static_cast<MatrixType>(0));
-                this->m_matrixStatus = CudaGenBcsrLinSOE::MatrixStatus::COEFFICIENTS_CHANGED;
-                return 0;
-            }
-            d_row = std::move(d_row_filt);
-            d_col = std::move(d_col_filt);
-            d_val = std::move(d_val_filt);
-        }
-        // Assign a unique key per (blockRow, blockCol, localRow, localCol) for block CSR ordering
-        const int numBlockCols = numBlockRows;
-        thrust::device_vector<int> d_keys(work_nnz);
-        thrust::transform(d_row.begin(), d_row.begin() + work_nnz, d_col.begin(),
-            d_keys.begin(), MakeBlockKey(numBlockCols, blockSize));
-        // Sort by key so duplicate keys are adjacent
-        auto zip = thrust::make_zip_iterator(thrust::make_tuple(d_keys.begin(), d_row.begin(), d_col.begin(), d_val.begin()));
-        thrust::sort(thrust::device, zip, zip + work_nnz, CompareTupleByFirst());
-        // Sum values for identical keys; output is one (key, sum) per unique key
-        thrust::device_vector<int> d_keys_unique(work_nnz);
-        thrust::device_vector<double> d_vals_reduced(work_nnz);
-        auto end = thrust::reduce_by_key(thrust::device,
-            d_keys.begin(), d_keys.begin() + work_nnz, d_val.begin(),
-            d_keys_unique.begin(), d_vals_reduced.begin(),
-            thrust::equal_to<int>(), thrust::plus<double>());
-        int reduced_nnz = static_cast<int>(end.first - d_keys_unique.begin());
-        // Zero A then scatter each (key, val) into block CSR
-        thrust::fill(m_deviceAValues.begin(), m_deviceAValues.end(), static_cast<MatrixType>(0));
-        int* rowPtr = this->getDeviceRowPtrs();
-        int* colInd = this->getDeviceColIndices();
-        MatrixType* Avalues = raw_pointer_cast(m_deviceAValues.data());
-        if (rowPtr && colInd && Avalues && reduced_nnz > 0) {
-            int block = 256;
-            int grid = (reduced_nnz + block - 1) / block;
-            scatterCOOToCSRKernel<MatrixType><<<grid, block>>>(
-                rowPtr, colInd, Avalues,
-                raw_pointer_cast(d_keys_unique.data()),
-                raw_pointer_cast(d_vals_reduced.data()),
-                numBlockCols, blockSize, reduced_nnz);
-            if (cudaGetLastError() != cudaSuccess)
-                return -1;
-        }
-        this->m_matrixStatus = CudaGenBcsrLinSOE::MatrixStatus::COEFFICIENTS_CHANGED;
-        return 0;
-        #else
-        (void)nnz; (void)rows; (void)cols; (void)vals;
-        return -1;
         #endif
     }
 

@@ -177,10 +177,6 @@ public:
     // Output methods
     int saveSparseA(OPS_Stream& output, int baseIndex = 0);
 
-    // Assemble A from COO triplets on the GPU (sort by block key, reduce duplicates, scatter into device block CSR).
-    // Supports any blockSize; symmetric storage: only triplets with row>=col are used (lower triangle). Returns 0 on success.
-    virtual int assembleAFromCOO(int nnz, const int* rows, const int* cols, const double* vals) = 0;
-    
     // Parallel communication methods
     int sendSelf(int commitTag, Channel &theChannel) override;   
     int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker) override;
