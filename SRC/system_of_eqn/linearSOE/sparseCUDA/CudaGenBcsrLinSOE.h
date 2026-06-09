@@ -33,6 +33,11 @@
 // We use type erasure to hide the template implementation details from users.
 // The actual template code lives in CudaGenBcsrLinSOEImpl.h, which users never see.
 //
+// Design contract:
+//   - This base class owns host-side CSR/BCSR assembly (graph -> sparse structure, addA/addB).
+//   - All device storage and host/device transfers live in the *Impl subclass.
+//   - A new backend (e.g. ROCm) is added by implementing a new Impl subclass.
+//
 
 #ifndef CudaGenBcsrLinSOE_h
 #define CudaGenBcsrLinSOE_h
@@ -47,9 +52,9 @@
 // CUDA includes
 #include <cuda_runtime.h>
 
-// Thrust includes
-#include <thrust/device_vector.h>
+// Thrust includes (host pinned vectors only; device buffers live in *Impl)
 #include <thrust/host_vector.h>
+#include <thrust/mr/device_memory_resource.h>
 #include <thrust/mr/memory_resource.h>
 #include <thrust/mr/allocator.h>
 #else
@@ -169,10 +174,6 @@ public:
         STRUCTURE_CHANGED // Both the size and coefficients of the matrix have changed
     };
     MatrixStatus getMatrixStatus(void) const;
-    const int* getDeviceRowPtrs(void) const;
-    int* getDeviceRowPtrs(void);
-    const int* getDeviceColIndices(void) const;
-    int* getDeviceColIndices(void);
 
     // Output methods
     int saveSparseA(OPS_Stream& output, int baseIndex = 0);
@@ -205,7 +206,11 @@ public:
     virtual void ensureDeviceVectorSizes(void) = 0;
     // Copy host B data to device and add into device B (async when stream non-null). For overlapped recv in Distributed.
     virtual void addToDeviceBFromHost(int n, const double* hostData, void* stream = nullptr) = 0;
-    void uploadAIndicesToDevice(void);
+    virtual void uploadAIndicesToDevice(void) = 0;
+    virtual const int* getDeviceRowPtrs(void) const = 0;
+    virtual int* getDeviceRowPtrs(void) = 0;
+    virtual const int* getDeviceColIndices(void) const = 0;
+    virtual int* getDeviceColIndices(void) = 0;
 
 protected:    
     // Track the status of the matrix
@@ -223,13 +228,11 @@ protected:
     // Subclasses must provide their own device data vectors
     // thrust::device_vector<DataType> m_deviceX, m_deviceB, m_deviceAValues;
     
-    // Thrust containers for index data (using pinned memory)
+    // Thrust containers for index data (using pinned memory; device copy lives in *Impl)
     pinned_host_vector<int> m_hostCsrIndices;
-    thrust::device_vector<int> m_deviceCsrIndices;
     #else
     std::vector<double> m_hostX, m_hostB, m_hostAValues;
     std::vector<int> m_hostCsrIndices;
-    std::vector<int> m_deviceCsrIndices;
     #endif
     
     // Whether to pad the matrix with zeros to make it a multiple of the block size

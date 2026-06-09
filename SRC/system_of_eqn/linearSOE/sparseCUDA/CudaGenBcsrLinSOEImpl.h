@@ -101,7 +101,7 @@ public:
         bool symmetricStorage = false
     )
     : CudaGenBcsrLinSOE(CudaGenBcsrLinSOEImpl<MatrixType, VectorType>::getClassTagForType(), theSolver, blockSize, paddingEnabled, verbose, symmetricStorage),
-      m_deviceAValues(), m_deviceX(), m_deviceB()
+      m_deviceAValues(), m_deviceX(), m_deviceB(), m_deviceCsrIndices()
     {
         // Now that the derived class is fully constructed, we can safely call setLinearSOE
         theSolver.setLinearSOE(*this);
@@ -110,7 +110,7 @@ public:
     // Default constructor
     CudaGenBcsrLinSOEImpl()
     : CudaGenBcsrLinSOE(CudaGenBcsrLinSOEImpl<MatrixType, VectorType>::getClassTagForType()),
-      m_deviceAValues(), m_deviceX(), m_deviceB()
+      m_deviceAValues(), m_deviceX(), m_deviceB(), m_deviceCsrIndices()
     {
         /* Nothing to do here */
     }
@@ -269,6 +269,46 @@ public:
         m_deviceAValues.resize(aSize);
     }
 
+    inline void uploadAIndicesToDevice(void) override {
+        m_deviceCsrIndices = this->CudaGenBcsrLinSOE::m_hostCsrIndices;
+    }
+
+    const int* getDeviceRowPtrs(void) const override {
+        #ifdef _CUDA
+        return m_deviceCsrIndices.empty() ? nullptr : m_deviceCsrIndices.data().get();
+        #else
+        return m_deviceCsrIndices.empty() ? nullptr : m_deviceCsrIndices.data();
+        #endif
+    }
+
+    int* getDeviceRowPtrs(void) override {
+        #ifdef _CUDA
+        return m_deviceCsrIndices.empty() ? nullptr : m_deviceCsrIndices.data().get();
+        #else
+        return m_deviceCsrIndices.empty() ? nullptr : m_deviceCsrIndices.data();
+        #endif
+    }
+
+    const int* getDeviceColIndices(void) const override {
+        #ifdef _CUDA
+        return m_deviceCsrIndices.empty() ? nullptr
+            : m_deviceCsrIndices.data().get() + this->getNumRowBlocks() + 1;
+        #else
+        return m_deviceCsrIndices.empty() ? nullptr
+            : m_deviceCsrIndices.data() + this->getNumRowBlocks() + 1;
+        #endif
+    }
+
+    int* getDeviceColIndices(void) override {
+        #ifdef _CUDA
+        return m_deviceCsrIndices.empty() ? nullptr
+            : m_deviceCsrIndices.data().get() + this->getNumRowBlocks() + 1;
+        #else
+        return m_deviceCsrIndices.empty() ? nullptr
+            : m_deviceCsrIndices.data() + this->getNumRowBlocks() + 1;
+        #endif
+    }
+
     inline void addToDeviceBFromHost(int n, const double* hostData, void* stream) override {
         if (n <= 0 || hostData == nullptr) return;
         #ifdef _CUDA
@@ -299,9 +339,11 @@ private:
     thrust::device_vector<VectorType> m_deviceX, m_deviceB;
     thrust::device_vector<MatrixType> m_deviceAValues;
     thrust::device_vector<double> m_deviceStagingB;
+    thrust::device_vector<int> m_deviceCsrIndices;
     #else
     std::vector<VectorType> m_deviceX, m_deviceB;
     std::vector<MatrixType> m_deviceAValues;
+    std::vector<int> m_deviceCsrIndices;
     #endif
 
 public:

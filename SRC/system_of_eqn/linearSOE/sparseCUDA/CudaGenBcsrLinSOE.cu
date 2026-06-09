@@ -56,13 +56,7 @@
 // CUDA includes
 #include <cuda_runtime.h>
 
-// Thrust includes
-#include <thrust/copy.h>
-#include <thrust/fill.h>
-#include <thrust/transform.h>
-#include <thrust/functional.h>
-#include <thrust/execution_policy.h>
-#include <thrust/iterator/constant_iterator.h>
+// Thrust (raw_pointer_cast for pinned host vectors)
 #include <thrust/memory.h>
 
 // Bring thrust::raw_pointer_cast into scope for CUDA builds
@@ -164,7 +158,7 @@ CudaGenBcsrLinSOE::CudaGenBcsrLinSOE(int classTag, CudaGenBcsrLinSolver &theSolv
                              bool verbose, bool symmetricStorage)
     : LinearSOE(theSolver, classTag), 
     m_X(), m_B(), m_hostX(), m_hostB(), m_hostAValues(), 
-    m_hostCsrIndices(), m_deviceCsrIndices(),
+    m_hostCsrIndices(),
     m_blockSize(blockSize),
     m_matrixStatus(MatrixStatus::STRUCTURE_CHANGED),
     m_paddingEnabled(paddingEnabled),
@@ -176,7 +170,7 @@ CudaGenBcsrLinSOE::CudaGenBcsrLinSOE(int classTag, CudaGenBcsrLinSolver &theSolv
 
 CudaGenBcsrLinSOE::CudaGenBcsrLinSOE(int classTag): LinearSOE(classTag), 
     m_X(), m_B(), m_hostX(), m_hostB(), m_hostAValues(), 
-    m_hostCsrIndices(), m_deviceCsrIndices(),
+    m_hostCsrIndices(),
     m_blockSize(DEFAULT_BLOCK_SIZE),
     m_matrixStatus(MatrixStatus::STRUCTURE_CHANGED),
     m_paddingEnabled(true),
@@ -676,46 +670,17 @@ int CudaGenBcsrLinSOE::setB(const Vector &v, double fact)
 
     // Set vector elements
     if (fact == 1.0) {
-        #ifdef _CUDA
-        // Cast away const-ness to access non-const operator() that returns reference
-        Vector& nonConstV = const_cast<Vector&>(v);
-        thrust::copy_n(thrust::host, &nonConstV(0), size, m_hostB.begin());
-        #else
         for (int i = 0; i < size; i++) {
             m_hostB[i] = v(i);
         }
-        #endif
     } else if (fact == -1.0) {
-        #ifdef _CUDA
-        // Cast away const-ness to access non-const operator() that returns reference
-        Vector& nonConstV = const_cast<Vector&>(v);
-        thrust::transform(
-            thrust::host, // execution policy
-            &nonConstV(0), &nonConstV(0) + size, // input range
-            m_hostB.begin(), // output range
-            thrust::negate<double>() // unary operation
-        );
-        #else
         for (int i = 0; i < size; i++) {
             m_hostB[i] = -v(i);
         }
-        #endif
     } else {
-        #ifdef _CUDA
-        // Cast away const-ness to access non-const operator() that returns reference
-        Vector& nonConstV = const_cast<Vector&>(v);
-        thrust::transform(
-            thrust::host, // execution policy
-            &nonConstV(0), &nonConstV(0) + size, // input1 range
-            thrust::make_constant_iterator(fact), // input2 range
-            m_hostB.begin(), // output range
-            thrust::multiplies<double>() // binary operation
-        );
-        #else
         for (int i = 0; i < size; i++) {
             m_hostB[i] = fact * v(i);
         }
-        #endif
     }
 
     return 0;
@@ -723,13 +688,9 @@ int CudaGenBcsrLinSOE::setB(const Vector &v, double fact)
 
 void CudaGenBcsrLinSOE::zeroA(void)
 {
-    #ifdef _CUDA
-    thrust::fill(thrust::host, m_hostAValues.begin(), m_hostAValues.end(), 0.0);
-    #else
-    for (int i = 0; i < m_hostAValues.size(); i++) {
+    for (size_t i = 0; i < m_hostAValues.size(); i++) {
         m_hostAValues[i] = 0.0;
     }
-    #endif
     
     // Update matrix status
     if (m_matrixStatus == MatrixStatus::UNCHANGED) {
@@ -739,11 +700,9 @@ void CudaGenBcsrLinSOE::zeroA(void)
 
 void CudaGenBcsrLinSOE::zeroB(void)
 {
-    #ifdef _CUDA
-    thrust::fill(thrust::host, m_hostB.begin(), m_hostB.end(), 0.0);
-    #else
-    m_B.Zero();
-    #endif
+    for (size_t i = 0; i < m_hostB.size(); i++) {
+        m_hostB[i] = 0.0;
+    }
 }
 
 void CudaGenBcsrLinSOE::setX(int loc, double value)
@@ -1026,48 +985,6 @@ int CudaGenBcsrLinSOE::getNumNonZeroValues(void) const
 CudaGenBcsrLinSOE::MatrixStatus CudaGenBcsrLinSOE::getMatrixStatus(void) const
 {
     return m_matrixStatus;
-}
-
-const int* CudaGenBcsrLinSOE::getDeviceRowPtrs(void) const
-{
-    #ifdef _CUDA
-    return m_deviceCsrIndices.empty() ? nullptr : m_deviceCsrIndices.data().get();
-    #else
-    return nullptr;
-    #endif
-}
-
-int* CudaGenBcsrLinSOE::getDeviceRowPtrs(void)
-{
-    #ifdef _CUDA
-    return m_deviceCsrIndices.empty() ? nullptr : m_deviceCsrIndices.data().get();
-    #else
-    return nullptr;
-    #endif
-}
-
-const int* CudaGenBcsrLinSOE::getDeviceColIndices(void) const
-{
-    #ifdef _CUDA
-    return m_deviceCsrIndices.empty() ? nullptr : m_deviceCsrIndices.data().get() + getNumRowBlocks() + 1;
-    #else
-    return nullptr;
-    #endif
-}
-
-int* CudaGenBcsrLinSOE::getDeviceColIndices(void)
-{
-    #ifdef _CUDA
-    return m_deviceCsrIndices.empty() ? nullptr : m_deviceCsrIndices.data().get() + getNumRowBlocks() + 1;
-    #else
-    return nullptr;
-    #endif
-}
-
-void CudaGenBcsrLinSOE::uploadAIndicesToDevice(void)
-{
-    // Use thrust for transfer
-    m_deviceCsrIndices = m_hostCsrIndices;
 }
 
 bool CudaGenBcsrLinSOE::isMatrixEmpty(void) const
