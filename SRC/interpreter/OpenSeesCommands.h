@@ -202,6 +202,8 @@ private:
 int OPS_UniaxialMaterial();
 int OPS_testUniaxialMaterial();
 int OPS_setStrain();
+int OPS_setTrialStrain();
+int OPS_commitState();
 int OPS_getStrain();
 int OPS_getStress();
 int OPS_getTangent();
@@ -587,6 +589,7 @@ void* OPS_ExplicitDifference();
 void* OPS_LinearAlgorithm();
 void* OPS_NewtonRaphsonAlgorithm();
 void* OPS_ModifiedNewton();
+void* OPS_NewtonHallM();
 void* OPS_Broyden();
 void* OPS_BFGS();
 
