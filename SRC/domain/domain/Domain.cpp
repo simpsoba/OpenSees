@@ -103,7 +103,7 @@ Domain::Domain()
  theRegions(0), numRegions(0), commitTag(0), initBounds(true), resetBounds(false),
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
- theModalDampingFactors(0), inclModalMatrix(false),
+ theModalDampingFactors(0), modalDampingOption(MODAL_DAMPING_QUICK),
  lastChannel(0),
  paramIndex(0), paramSize(0), numParameters(0)
 {
@@ -161,7 +161,7 @@ Domain::Domain(int numNodes, int numElements, int numSPs, int numMPs, int numEQs
  theRegions(0), numRegions(0), commitTag(0), initBounds(true), resetBounds(false),
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
- theModalDampingFactors(0), inclModalMatrix(false),
+ theModalDampingFactors(0), modalDampingOption(MODAL_DAMPING_QUICK),
  lastChannel(0), paramIndex(0), paramSize(0), numParameters(0)
 {
     // init the arrays for storing the domain components
@@ -226,7 +226,7 @@ Domain::Domain(TaggedObjectStorage &theNodesStorage,
  theRegions(0), numRegions(0), commitTag(0), initBounds(true), resetBounds(false),
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
- theModalDampingFactors(0), inclModalMatrix(false),
+ theModalDampingFactors(0), modalDampingOption(MODAL_DAMPING_QUICK),
  lastChannel(0),paramIndex(0), paramSize(0), numParameters(0)
 {
     // init the arrays for storing the domain components
@@ -287,7 +287,7 @@ Domain::Domain(TaggedObjectStorage &theStorage)
  theRegions(0), numRegions(0), commitTag(0),initBounds(true), resetBounds(false),
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
- theModalDampingFactors(0), inclModalMatrix(false),
+ theModalDampingFactors(0), modalDampingOption(MODAL_DAMPING_QUICK),
  lastChannel(0),paramIndex(0), paramSize(0), numParameters(0)
 {
     // init the arrays for storing the domain components
@@ -1081,7 +1081,7 @@ Domain::clearAll(void) {
   committedTime = 0.0;
   dT = 0.0;
 
-  this->setModalDampingFactors(0);
+  this->setModalDampingFactors(nullptr);
 
   // set the bounds around the origin
   initBounds = true;
@@ -2406,12 +2406,19 @@ int Domain::getModalProperties(DomainModalProperties &dmp) const
 int
 Domain::setModalDampingFactors(Vector *theValues, bool inclMatrix)
 {
+  return setModalDampingFactors(theValues,
+    inclMatrix ? MODAL_DAMPING_INCL_MATRIX : MODAL_DAMPING_QUICK);
+}
+
+int
+Domain::setModalDampingFactors(Vector *theValues, ModalDampingOption option)
+{
   // if theValues == 0, turn off modal damping
   if (theValues == 0) {
     if (theModalDampingFactors != 0)
       delete theModalDampingFactors;
     theModalDampingFactors = 0;
-    inclModalMatrix = inclMatrix;
+    modalDampingOption = option;
     return 0;
   }
 
@@ -2424,7 +2431,7 @@ Domain::setModalDampingFactors(Vector *theValues, bool inclMatrix)
     *theModalDampingFactors = *theValues;
   }
 
-  inclModalMatrix = inclMatrix;
+  modalDampingOption = option;
 
   return 0;
 }
@@ -2438,7 +2445,13 @@ Domain::getModalDampingFactors(void)
 bool
 Domain::inclModalDampingMatrix(void)
 {
-  return inclModalMatrix;
+  return modalDampingOption == MODAL_DAMPING_INCL_MATRIX;
+}
+
+ModalDampingOption
+Domain::getModalDampingOption(void) const
+{
+  return modalDampingOption;
 }
 
 void

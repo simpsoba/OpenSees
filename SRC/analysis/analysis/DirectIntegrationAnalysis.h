@@ -47,6 +47,7 @@ class LinearSOE;
 class EquiSolnAlgo;
 class ConvergenceTest;
 class EigenSOE;
+class WoodburySOE;
 
 class DirectIntegrationAnalysis: public TransientAnalysis
 {
@@ -91,11 +92,16 @@ class DirectIntegrationAnalysis: public TransientAnalysis
   protected:
     
   private:
+    void applyWoodburyWrapIfNeeded(LinearSOE &nativeSOE);
+    void relinkAnalysisObjects(void);
+
     ConstraintHandler 	*theConstraintHandler;    
     DOF_Numberer 	*theDOF_Numberer;
     AnalysisModel 	*theAnalysisModel;
     EquiSolnAlgo 	*theAlgorithm;
     LinearSOE 		*theSOE;
+    LinearSOE 		*theNativeSOE;
+    WoodburySOE      *theWoodburyWrap;
     EigenSOE 		*theEigenSOE;
     TransientIntegrator *theIntegrator;
     ConvergenceTest     *theTest;
