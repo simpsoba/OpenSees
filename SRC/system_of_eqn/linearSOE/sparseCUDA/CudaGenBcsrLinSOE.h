@@ -48,7 +48,10 @@
 #include <Vector.h>
 #include "CudaUtils.h"
 
-#ifdef _CUDA
+#ifndef _CUDA
+#error "CudaGenBcsrLinSOE requires a CUDA build"
+#endif
+
 // CUDA includes
 #include <cuda_runtime.h>
 
@@ -57,14 +60,10 @@
 #include <thrust/mr/device_memory_resource.h>
 #include <thrust/mr/memory_resource.h>
 #include <thrust/mr/allocator.h>
-#else
-#include <vector>
-#endif
 
 // Forward declarations
 class CudaGenBcsrLinSolver;
 
-#ifdef _CUDA
 // Pinned memory allocators for improved host-device transfer performance
 using pinned_mr = thrust::universal_host_pinned_memory_resource;
 
@@ -73,7 +72,6 @@ using pinned_allocator = thrust::mr::stateless_resource_allocator<T, pinned_mr>;
 
 template <typename T>
 using pinned_host_vector = thrust::host_vector<T, pinned_allocator<T>>;
-#endif
 
 class CudaGenBcsrLinSOE : public LinearSOE
 {
@@ -212,6 +210,15 @@ public:
     virtual const int* getDeviceColIndices(void) const = 0;
     virtual int* getDeviceColIndices(void) = 0;
 
+    // Add scale * deviceScalarDiag[i] to the (i,i) entry of device A.
+    // deviceScalarDiag element type matches matrix precision (float or double).
+    virtual int addScalarDiagonalToA(const void *deviceScalarDiag, double scale, void *stream = nullptr) = 0;
+
+    // Add scale * deviceBlockDiag blocks to the diagonal blocks of device A (blockSize > 1 only).
+    // deviceBlockDiag length is getNumRowBlocks() * blockSize^2, row-major within each block.
+    // For blockSize == 1, use addScalarDiagonalToA instead.
+    virtual int addBlockDiagonalToA(const double *deviceBlockDiag, double scale, void *stream = nullptr) = 0;
+
 protected:    
     // Track the status of the matrix
     MatrixStatus m_matrixStatus;
@@ -222,7 +229,6 @@ protected:
     // Host representation
     Vector m_X, m_B; // for interfacing with OpenSees, wraps padded vectors
     
-    #ifdef _CUDA
     // Thrust containers for internal data (using pinned memory for faster host-device transfers)
     pinned_host_vector<double> m_hostX, m_hostB, m_hostAValues;
     // Subclasses must provide their own device data vectors
@@ -230,10 +236,6 @@ protected:
     
     // Thrust containers for index data (using pinned memory; device copy lives in *Impl)
     pinned_host_vector<int> m_hostCsrIndices;
-    #else
-    std::vector<double> m_hostX, m_hostB, m_hostAValues;
-    std::vector<int> m_hostCsrIndices;
-    #endif
     
     // Whether to pad the matrix with zeros to make it a multiple of the block size
     bool m_paddingEnabled;

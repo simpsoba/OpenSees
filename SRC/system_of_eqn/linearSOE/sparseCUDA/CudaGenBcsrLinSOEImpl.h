@@ -31,10 +31,14 @@
 #ifndef CudaGenBcsrLinSOEImpl_h
 #define CudaGenBcsrLinSOEImpl_h
 
+#ifndef _CUDA
+#error "CudaGenBcsrLinSOEImpl.h requires a CUDA build"
+#endif
+
 // OpenSees includes
 #include <CudaGenBcsrLinSOE.h>
 #include <CudaGenBcsrLinSolver.h>
-#ifdef _CUDA
+
 // CUDA includes
 #include <cuda_runtime.h>
 
@@ -46,16 +50,14 @@
 #include <thrust/memory.h>
 #include <thrust/system/cuda/execution_policy.h>
 
-// Bring thrust::raw_pointer_cast into scope for CUDA builds
 using thrust::raw_pointer_cast;
-#else
-#include <vector>
-#include <algorithm>
 
-// Define a passthrough raw_pointer_cast for non-CUDA builds
-template<typename T>
-inline T* raw_pointer_cast(T* ptr) { return ptr; }
-#endif
+namespace CudaGenBcsrLinSOEDetail {
+int addScalarDiagonalToA(int numEqn, int blockSize, const int *rowPtr, const int *colIdx, void *values,
+                           CudaPrecision prec, const void *deviceScalarDiag, double scale, cudaStream_t stream);
+int addBlockDiagonalToA(int numBlockRows, int blockSize, const int *rowPtr, const int *colIdx, void *values,
+                        CudaPrecision prec, const double *deviceBlockDiag, double scale, cudaStream_t stream);
+}
 
 // C++ includes
 #include <type_traits>
@@ -63,14 +65,12 @@ inline T* raw_pointer_cast(T* ptr) { return ptr; }
 // Forward declarations
 class CudaGenBcsrLinSolver;
 
-#ifdef _CUDA
 namespace {
 template<typename VectorType>
 struct AddDoubleToB {
     __device__ __host__ VectorType operator()(double a, VectorType b) const { return b + static_cast<VectorType>(a); }
 };
 }
-#endif
 
 // This template class provides the actual implementation for different data types.
 // It inherits from CudaGenBcsrLinSOE and implements all the pure virtual methods.
@@ -129,52 +129,28 @@ public:
     // Required methods for CudaGenBcsrLinSOE subclasses
     // These methods provide type-erased access to device data.
     // The void* return type allows the solver to work with any data type without knowing the specifics.
-    const void* getDeviceAValues(void) const noexcept override { 
-        #ifdef _CUDA
-        return m_deviceAValues.empty() ? nullptr : m_deviceAValues.data().get(); 
-        #else
-        return m_deviceAValues.empty() ? nullptr : m_deviceAValues.data(); 
-        #endif
+    const void* getDeviceAValues(void) const noexcept override {
+        return m_deviceAValues.empty() ? nullptr : m_deviceAValues.data().get();
     }
     
-    void* getDeviceAValues(void) noexcept override { 
-        #ifdef _CUDA
-        return m_deviceAValues.empty() ? nullptr : m_deviceAValues.data().get(); 
-        #else
-        return m_deviceAValues.empty() ? nullptr : m_deviceAValues.data(); 
-        #endif
+    void* getDeviceAValues(void) noexcept override {
+        return m_deviceAValues.empty() ? nullptr : m_deviceAValues.data().get();
     }
     
-    const void* getDeviceX(void) const noexcept override { 
-        #ifdef _CUDA
-        return m_deviceX.empty() ? nullptr : m_deviceX.data().get(); 
-        #else
-        return m_deviceX.empty() ? nullptr : m_deviceX.data(); 
-        #endif
+    const void* getDeviceX(void) const noexcept override {
+        return m_deviceX.empty() ? nullptr : m_deviceX.data().get();
     }
     
-    void* getDeviceX(void) noexcept override { 
-        #ifdef _CUDA
-        return m_deviceX.empty() ? nullptr : m_deviceX.data().get(); 
-        #else
-        return m_deviceX.empty() ? nullptr : m_deviceX.data(); 
-        #endif
+    void* getDeviceX(void) noexcept override {
+        return m_deviceX.empty() ? nullptr : m_deviceX.data().get();
     }
     
-    const void* getDeviceB(void) const noexcept override { 
-        #ifdef _CUDA
-        return m_deviceB.empty() ? nullptr : m_deviceB.data().get(); 
-        #else
-        return m_deviceB.empty() ? nullptr : m_deviceB.data(); 
-        #endif
+    const void* getDeviceB(void) const noexcept override {
+        return m_deviceB.empty() ? nullptr : m_deviceB.data().get();
     }
     
-    void* getDeviceB(void) noexcept override { 
-        #ifdef _CUDA
-        return m_deviceB.empty() ? nullptr : m_deviceB.data().get(); 
-        #else
-        return m_deviceB.empty() ? nullptr : m_deviceB.data(); 
-        #endif
+    void* getDeviceB(void) noexcept override {
+        return m_deviceB.empty() ? nullptr : m_deviceB.data().get();
     }
     
     // Precision query method
@@ -196,35 +172,12 @@ public:
     
     // Host (double)-device (VectorType) data transfer methods
     inline void uploadVectorsToDevice(void) override {
-        #ifdef _CUDA
-        // Use thrust for transfer (handles type conversion)
         m_deviceB = this->CudaGenBcsrLinSOE::m_hostB;
         m_deviceX.resize(this->CudaGenBcsrLinSOE::m_hostX.size());
-        #else
-        m_deviceB.resize(this->CudaGenBcsrLinSOE::m_hostB.size());
-        std::transform(
-            this->CudaGenBcsrLinSOE::m_hostB.begin(),
-            this->CudaGenBcsrLinSOE::m_hostB.end(),
-            m_deviceB.begin(),
-            [](double val){ return static_cast<VectorType>(val); } // convert to device type
-        );
-        m_deviceX.resize(this->CudaGenBcsrLinSOE::m_hostX.size());
-        #endif
     }
     
     inline void downloadSolutionFromDevice(void) override {
-        #ifdef _CUDA
-        // Use thrust for transfer (handles type conversion)
         this->CudaGenBcsrLinSOE::m_hostX = m_deviceX;
-        #else
-        this->CudaGenBcsrLinSOE::m_hostX.resize(m_deviceX.size());
-        std::transform(
-            m_deviceX.begin(),
-            m_deviceX.end(),
-            this->CudaGenBcsrLinSOE::m_hostX.begin(),
-            [](VectorType val){ return static_cast<double>(val); } // convert to host type
-        );
-        #endif
         this->CudaGenBcsrLinSOE::m_X.setData(
             raw_pointer_cast(this->CudaGenBcsrLinSOE::m_hostX.data()), 
             this->CudaGenBcsrLinSOE::m_X.Size()
@@ -232,32 +185,11 @@ public:
     }
     
     inline void uploadAValuesToDevice(void) override {
-        #ifdef _CUDA
-        // Use thrust for transfer (handles type conversion)
         m_deviceAValues = this->CudaGenBcsrLinSOE::m_hostAValues;
-        #else
-        m_deviceAValues.resize(this->CudaGenBcsrLinSOE::m_hostAValues.size());
-        std::transform(
-            this->CudaGenBcsrLinSOE::m_hostAValues.begin(),
-            this->CudaGenBcsrLinSOE::m_hostAValues.end(),
-            m_deviceAValues.begin(),
-            [](double val){ return static_cast<MatrixType>(val); } // convert to device type
-        );
-        #endif
     }
 
     inline void downloadAValuesFromDevice(void) override {
-        #ifdef _CUDA
         this->CudaGenBcsrLinSOE::m_hostAValues = m_deviceAValues;
-        #else
-        this->CudaGenBcsrLinSOE::m_hostAValues.resize(m_deviceAValues.size());
-        std::transform(
-            m_deviceAValues.begin(),
-            m_deviceAValues.end(),
-            this->CudaGenBcsrLinSOE::m_hostAValues.begin(),
-            [](MatrixType val){ return static_cast<double>(val); }
-        );
-        #endif
     }
 
     inline void ensureDeviceVectorSizes(void) override {
@@ -274,44 +206,71 @@ public:
     }
 
     const int* getDeviceRowPtrs(void) const override {
-        #ifdef _CUDA
         return m_deviceCsrIndices.empty() ? nullptr : m_deviceCsrIndices.data().get();
-        #else
-        return m_deviceCsrIndices.empty() ? nullptr : m_deviceCsrIndices.data();
-        #endif
     }
 
     int* getDeviceRowPtrs(void) override {
-        #ifdef _CUDA
         return m_deviceCsrIndices.empty() ? nullptr : m_deviceCsrIndices.data().get();
-        #else
-        return m_deviceCsrIndices.empty() ? nullptr : m_deviceCsrIndices.data();
-        #endif
     }
 
     const int* getDeviceColIndices(void) const override {
-        #ifdef _CUDA
         return m_deviceCsrIndices.empty() ? nullptr
             : m_deviceCsrIndices.data().get() + this->getNumRowBlocks() + 1;
-        #else
-        return m_deviceCsrIndices.empty() ? nullptr
-            : m_deviceCsrIndices.data() + this->getNumRowBlocks() + 1;
-        #endif
     }
 
     int* getDeviceColIndices(void) override {
-        #ifdef _CUDA
         return m_deviceCsrIndices.empty() ? nullptr
             : m_deviceCsrIndices.data().get() + this->getNumRowBlocks() + 1;
-        #else
-        return m_deviceCsrIndices.empty() ? nullptr
-            : m_deviceCsrIndices.data() + this->getNumRowBlocks() + 1;
-        #endif
+    }
+
+    int addScalarDiagonalToA(const void *deviceScalarDiag, double scale, void *stream) override
+    {
+        const int n = this->getNumEqn();
+        if (scale == 0.0 || n <= 0 || deviceScalarDiag == nullptr) {
+            return 0;
+        }
+        const int *rowPtr = getDeviceRowPtrs();
+        const int *colIdx = getDeviceColIndices();
+        void *values = getDeviceAValues();
+        if (rowPtr == nullptr || colIdx == nullptr || values == nullptr) {
+            return -1;
+        }
+        const int rc = CudaGenBcsrLinSOEDetail::addScalarDiagonalToA(
+            n, this->getBlockSize(), rowPtr, colIdx, values, this->getPrecision(), deviceScalarDiag, scale,
+            stream != nullptr ? static_cast<cudaStream_t>(stream) : cudaStream_t{0});
+        if (rc == 0 && this->m_matrixStatus == MatrixStatus::UNCHANGED) {
+            this->m_matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;
+        }
+        return rc;
+    }
+
+    int addBlockDiagonalToA(const double *deviceBlockDiag, double scale, void *stream) override
+    {
+        const int bs = this->getBlockSize();
+        if (bs <= 1) {
+            return -1;
+        }
+        const int numBlockRows = this->getNumRowBlocks();
+        if (scale == 0.0 || numBlockRows <= 0 || bs <= 0 || deviceBlockDiag == nullptr) {
+            return 0;
+        }
+        const int *rowPtr = getDeviceRowPtrs();
+        const int *colIdx = getDeviceColIndices();
+        void *values = getDeviceAValues();
+        if (rowPtr == nullptr || colIdx == nullptr || values == nullptr) {
+            return -1;
+        }
+        const int rc = CudaGenBcsrLinSOEDetail::addBlockDiagonalToA(
+            numBlockRows, bs, rowPtr, colIdx, values, this->getPrecision(), deviceBlockDiag, scale,
+            stream != nullptr ? static_cast<cudaStream_t>(stream) : cudaStream_t{0});
+        if (rc == 0 && this->m_matrixStatus == MatrixStatus::UNCHANGED) {
+            this->m_matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;
+        }
+        return rc;
     }
 
     inline void addToDeviceBFromHost(int n, const double* hostData, void* stream) override {
         if (n <= 0 || hostData == nullptr) return;
-        #ifdef _CUDA
         const size_t un = static_cast<size_t>(n);
         if (m_deviceB.size() < un) return;
         if (m_deviceStagingB.size() < un)
@@ -326,25 +285,14 @@ public:
             thrust::transform(thrust::cuda::par,
                 m_deviceStagingB.begin(), m_deviceStagingB.begin() + n,
                 m_deviceB.begin(), m_deviceB.begin(), AddDoubleToB<VectorType>());
-        #else
-        (void)stream;
-        for (int i = 0; i < n && i < static_cast<int>(m_deviceB.size()); i++)
-            m_deviceB[static_cast<size_t>(i)] += static_cast<VectorType>(hostData[i]);
-        #endif
     }
 
 private:    
     // Device memory storage using Thrust vectors
-    #ifdef _CUDA
     thrust::device_vector<VectorType> m_deviceX, m_deviceB;
     thrust::device_vector<MatrixType> m_deviceAValues;
     thrust::device_vector<double> m_deviceStagingB;
     thrust::device_vector<int> m_deviceCsrIndices;
-    #else
-    std::vector<VectorType> m_deviceX, m_deviceB;
-    std::vector<MatrixType> m_deviceAValues;
-    std::vector<int> m_deviceCsrIndices;
-    #endif
 
 public:
     // Helper function to get class tag for type

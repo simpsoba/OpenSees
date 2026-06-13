@@ -686,6 +686,9 @@
 #include "HHTHSIncrReduct_TP.h"
 #include "KRAlphaExplicit.h"
 #include "KRAlphaExplicit_TP.h"
+#ifdef _CUDSS
+#include "CudaExplicitAlpha.h"
+#endif
 #include "Newmark.h"
 #include "StagedNewmark.h"
 #include "NewmarkExplicit.h"
@@ -3104,6 +3107,11 @@ FEM_ObjectBrokerAllClasses::getNewTransientIntegrator(int classTag)
 
     case INTEGRATOR_TAGS_KRAlphaExplicit_TP:  
          return new KRAlphaExplicit_TP();
+
+#ifdef _CUDSS
+    case INTEGRATOR_TAGS_CudaExplicitAlpha:
+         return new CudaExplicitAlpha();
+#endif
 
     case INTEGRATOR_TAGS_Newmark:  
 	     return new Newmark();

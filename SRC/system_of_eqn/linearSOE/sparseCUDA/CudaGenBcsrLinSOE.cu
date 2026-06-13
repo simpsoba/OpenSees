@@ -48,24 +48,15 @@
 #include <vector>
 #include <algorithm>
 
-#ifdef _CUDA
 #include "CudaGenBcsrLinSOEImpl.h"
-#endif
 
-#ifdef _CUDA
 // CUDA includes
 #include <cuda_runtime.h>
 
 // Thrust (raw_pointer_cast for pinned host vectors)
 #include <thrust/memory.h>
 
-// Bring thrust::raw_pointer_cast into scope for CUDA builds
 using thrust::raw_pointer_cast;
-#else
-// Define a passthrough raw_pointer_cast for non-CUDA builds
-template<typename T>
-inline T* raw_pointer_cast(T* ptr) { return ptr; }
-#endif
 
 namespace {
 
@@ -998,7 +989,6 @@ CudaGenBcsrLinSolver* CudaGenBcsrLinSOE::getCudaGenBcsrLinSolver(void)
 }
 
 // Factory method implementations
-#ifdef _CUDA
 CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createDouble(
     CudaGenBcsrLinSolver &theSolver, 
     int blockSize, 
@@ -1047,6 +1037,151 @@ CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloatDouble(
     );
 }
 
+namespace CudaGenBcsrLinSOEDetail {
+
+namespace {
+
+template<typename MatrixType>
+__global__ void kernelAddScalarDiagonalToCsr(int n, const int *rowPtr, const int *colIdx, MatrixType *values,
+                                             const MatrixType *scalarDiag, double scale)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) {
+        return;
+    }
+    const MatrixType scaled = static_cast<MatrixType>(scale) * scalarDiag[i];
+    const int rowStart = rowPtr[i];
+    const int rowEnd = rowPtr[i + 1];
+    for (int k = rowStart; k < rowEnd; ++k) {
+        if (colIdx[k] == i) {
+            values[k] += scaled;
+            return;
+        }
+    }
+}
+
+template<typename MatrixType>
+__global__ void kernelAddScalarDiagonalToBlockCsr(int numEqn, int blockSize, const int *rowPtr,
+                                                  const int *colIdx, MatrixType *values, const MatrixType *scalarDiag,
+                                                  double scale)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= numEqn) {
+        return;
+    }
+    const MatrixType scaled = static_cast<MatrixType>(scale) * scalarDiag[i];
+    const int blockRow = i / blockSize;
+    const int localIdx = i % blockSize;
+    const int rowStart = rowPtr[blockRow];
+    const int rowEnd = rowPtr[blockRow + 1];
+    for (int k = rowStart; k < rowEnd; ++k) {
+        if (colIdx[k] == blockRow) {
+            const int blockOffset = k * blockSize * blockSize;
+            const int entryOffset = localIdx * blockSize + localIdx;
+            values[blockOffset + entryOffset] += scaled;
+            return;
+        }
+    }
+}
+
+template<typename MatrixType>
+__global__ void kernelAddBlockDiagonalToBlockCsr(int numBlockRows, int blockSize, const int *rowPtr,
+                                                 const int *colIdx, MatrixType *values, const double *blockDiag,
+                                                 double scale)
+{
+    const int blockRow = blockIdx.x * blockDim.x + threadIdx.x;
+    if (blockRow >= numBlockRows) {
+        return;
+    }
+    const int rowStart = rowPtr[blockRow];
+    const int rowEnd = rowPtr[blockRow + 1];
+    for (int k = rowStart; k < rowEnd; ++k) {
+        if (colIdx[k] == blockRow) {
+            const int blockOffset = k * blockSize * blockSize;
+            const int diagOffset = blockRow * blockSize * blockSize;
+            for (int lr = 0; lr < blockSize; ++lr) {
+                for (int lc = 0; lc < blockSize; ++lc) {
+                    const int off = lr * blockSize + lc;
+                    values[blockOffset + off] +=
+                        static_cast<MatrixType>(scale * blockDiag[diagOffset + off]);
+                }
+            }
+            return;
+        }
+    }
+}
+
+int gridBlocks(int n, int blockSize = 256) { return (n + blockSize - 1) / blockSize; }
+
+} // namespace
+
+int addScalarDiagonalToA(int numEqn, int blockSize, const int *rowPtr, const int *colIdx, void *values,
+                         CudaPrecision prec, const void *deviceScalarDiag, double scale, cudaStream_t stream)
+{
+    if (scale == 0.0 || numEqn <= 0 || blockSize <= 0 || rowPtr == nullptr || colIdx == nullptr ||
+        values == nullptr || deviceScalarDiag == nullptr) {
+        return 0;
+    }
+    const int blocks = gridBlocks(numEqn);
+    if (blockSize == 1) {
+        switch (prec) {
+            case CudaPrecision::dFFI:
+            case CudaPrecision::dFDI:
+                kernelAddScalarDiagonalToCsr<float><<<blocks, 256, 0, stream>>>(
+                    numEqn, rowPtr, colIdx, static_cast<float *>(values),
+                    static_cast<const float *>(deviceScalarDiag), scale);
+                break;
+            default:
+                kernelAddScalarDiagonalToCsr<double><<<blocks, 256, 0, stream>>>(
+                    numEqn, rowPtr, colIdx, static_cast<double *>(values),
+                    static_cast<const double *>(deviceScalarDiag), scale);
+                break;
+        }
+    } else {
+        switch (prec) {
+            case CudaPrecision::dFFI:
+            case CudaPrecision::dFDI:
+                kernelAddScalarDiagonalToBlockCsr<float><<<blocks, 256, 0, stream>>>(
+                    numEqn, blockSize, rowPtr, colIdx, static_cast<float *>(values),
+                    static_cast<const float *>(deviceScalarDiag), scale);
+                break;
+            default:
+                kernelAddScalarDiagonalToBlockCsr<double><<<blocks, 256, 0, stream>>>(
+                    numEqn, blockSize, rowPtr, colIdx, static_cast<double *>(values),
+                    static_cast<const double *>(deviceScalarDiag), scale);
+                break;
+        }
+    }
+    return cudaGetLastError() == cudaSuccess ? 0 : -1;
+}
+
+int addBlockDiagonalToA(int numBlockRows, int blockSize, const int *rowPtr, const int *colIdx, void *values,
+                        CudaPrecision prec, const double *deviceBlockDiag, double scale, cudaStream_t stream)
+{
+    if (blockSize <= 1) {
+        return -1;
+    }
+    if (scale == 0.0 || numBlockRows <= 0 || rowPtr == nullptr || colIdx == nullptr || values == nullptr ||
+        deviceBlockDiag == nullptr) {
+        return 0;
+    }
+    const int blocks = gridBlocks(numBlockRows);
+    switch (prec) {
+        case CudaPrecision::dFFI:
+        case CudaPrecision::dFDI:
+            kernelAddBlockDiagonalToBlockCsr<float><<<blocks, 256, 0, stream>>>(
+                numBlockRows, blockSize, rowPtr, colIdx, static_cast<float *>(values), deviceBlockDiag, scale);
+            break;
+        default:
+            kernelAddBlockDiagonalToBlockCsr<double><<<blocks, 256, 0, stream>>>(
+                numBlockRows, blockSize, rowPtr, colIdx, static_cast<double *>(values), deviceBlockDiag, scale);
+            break;
+    }
+    return cudaGetLastError() == cudaSuccess ? 0 : -1;
+}
+
+} // namespace CudaGenBcsrLinSOEDetail
+
 LinearSOE* CudaGenBcsrLinSOE::createCudaLinearSOE(int classTag) {
     switch(classTag) {
         case LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE:
@@ -1061,59 +1196,4 @@ LinearSOE* CudaGenBcsrLinSOE::createCudaLinearSOE(int classTag) {
             return nullptr;
     }
 }
-#else
-// Non-CUDA fallbacks
-CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createDouble(
-    CudaGenBcsrLinSolver &theSolver, 
-    int blockSize, 
-    bool paddingEnabled,
-    bool verbose,
-    bool symmetricStorage
-) {
-    (void)symmetricStorage;
-    opserr << "WARNING: CudaGenBcsrLinSOE::createDouble() - CUDA not available, cannot create SOE\n";
-    return nullptr;
-}
-
-CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloat(
-    CudaGenBcsrLinSolver &theSolver,
-    int blockSize, 
-    bool paddingEnabled,
-    bool verbose,
-    bool symmetricStorage
-) {
-    (void)symmetricStorage;
-    opserr << "WARNING: CudaGenBcsrLinSOE::createFloat() - CUDA not available, cannot create SOE\n";
-    return nullptr;
-}
-
-CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createDoubleFloat(
-    CudaGenBcsrLinSolver &theSolver,
-    int blockSize, 
-    bool paddingEnabled,
-    bool verbose,
-    bool symmetricStorage
-) {
-    (void)symmetricStorage;
-    opserr << "WARNING: CudaGenBcsrLinSOE::createDoubleFloat() - CUDA not available, cannot create SOE\n";
-    return nullptr;
-}
-
-CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloatDouble(
-    CudaGenBcsrLinSolver &theSolver,
-    int blockSize, 
-    bool paddingEnabled,
-    bool verbose,
-    bool symmetricStorage
-) {
-    (void)symmetricStorage;
-    opserr << "WARNING: CudaGenBcsrLinSOE::createFloatDouble() - CUDA not available, cannot create SOE\n";
-    return nullptr;
-}
-
-LinearSOE* CudaGenBcsrLinSOE::createCudaLinearSOE(int classTag) {
-    opserr << "WARNING: CudaGenBcsrLinSOE::createFromClassTag() - CUDA not available, cannot create SOE\n";
-    return nullptr;
-}
-#endif
 

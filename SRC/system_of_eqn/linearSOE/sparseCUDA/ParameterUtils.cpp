@@ -2,6 +2,7 @@
 **    OpenSees - Open System for Earthquake Engineering Simulation    **
 **          Pacific Earthquake Engineering Research Center            **
 **                                                                    **
+**                                                                    **
 ** (C) Copyright 1999, The Regents of the University of California    **
 ** All Rights Reserved.                                               **
 **                                                                    **
@@ -10,10 +11,15 @@
 ** file 'COPYRIGHT'  in main directory for information on usage and   **
 ** redistribution,  and for a DISCLAIMER OF ALL WARRANTIES.           **
 **                                                                    **
+** Developed by:                                                      **
+**   Frank McKenna (fmckenna@ce.berkeley.edu)                         **
+**   Gregory L. Fenves (fenves@ce.berkeley.edu)                       **
+**   Filip C. Filippou (filippou@ce.berkeley.edu)                     **
+**                                                                    **
 ** ****************************************************************** */
 
-// ParameterUtils.cpp -- getNumProcesses() for CuDSS (compiled into OPS_Cuda_Serial and/or
-// OPS_Cuda_Parallel). Same MPI guard pattern as SRC/tcl/commands.cpp and OPS_getNP() in
+// ParameterUtils.cpp -- getNumProcesses() for cuDSS (OPS_Cuda_CuDSS).
+// Same MPI guard pattern as SRC/tcl/commands.cpp and OPS_getNP() in
 // OpenSeesMiscCommands.cpp (MPI_Comm_size); avoids relying on Tcl-only globals like OPS_np.
 
 #include "ParameterUtils.h"

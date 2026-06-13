@@ -1554,7 +1554,7 @@ int OPS_System()
 #ifdef _CUDSS
     } else if (strcmp(type,"CuDSS") == 0 || strcmp(type,"cudss") == 0 
                 || strcmp(type,"CUDSS") == 0 || strcmp(type,"cuDSS") == 0) {
-        theSOE = (LinearSOE*)OPS_CuDSSLinSolver();
+        theSOE = (LinearSOE*)OPS_CudaDirectSparseSolver();
 #endif // _CUDSS
 #endif // _CUDA
 
@@ -1853,6 +1853,17 @@ int OPS_Integrator()
 
     } else if (strcmp(type,"KRAlphaExplicit_TP") == 0) {
 	ti = (TransientIntegrator*)OPS_KRAlphaExplicit_TP();
+
+#ifdef _CUDSS
+    } else if (strcmp(type,"CudaExplicitAlpha") == 0) {
+	ti = (TransientIntegrator*)OPS_CudaExplicitAlpha();
+
+    } else if (strcmp(type,"CudaKRAlpha") == 0) {
+	ti = (TransientIntegrator*)OPS_CudaKRAlpha();
+
+    } else if (strcmp(type,"CudaMKRAlpha") == 0) {
+	ti = (TransientIntegrator*)OPS_CudaMKRAlpha();
+#endif
 
     } else if (strcmp(type,"AlphaOS") == 0) {
 	ti = (TransientIntegrator*)OPS_AlphaOS();

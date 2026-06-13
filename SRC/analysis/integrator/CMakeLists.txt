@@ -133,6 +133,7 @@ target_sources(OPS_Analysis
        GimmeMCK.h
        ExplicitBathe.h
        ExplicitDifferenceStatic.h
+       CudaExplicitAlpha.h
 )
 
 target_sources(OPS_PFEM

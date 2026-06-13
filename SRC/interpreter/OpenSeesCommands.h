@@ -513,7 +513,7 @@ void* OPS_FullGenLinLapackSolver();
 void* OPS_AmgXLinSolver();
 #endif // _AMGX
 #ifdef _CUDSS
-void* OPS_CuDSSLinSolver();
+void* OPS_CudaDirectSparseSolver();
 #endif // _CUDSS
 
 void* OPS_PlainNumberer();
@@ -571,6 +571,11 @@ void* OPS_HHTHSFixedNumIter_TP();
 void* OPS_GeneralizedAlpha();
 void* OPS_KRAlphaExplicit();
 void* OPS_KRAlphaExplicit_TP();
+#ifdef _CUDSS
+void* OPS_CudaExplicitAlpha();
+void* OPS_CudaKRAlpha();
+void* OPS_CudaMKRAlpha();
+#endif
 void* OPS_AlphaOS();
 void* OPS_AlphaOS_TP();
 void* OPS_AlphaOSGeneralized();

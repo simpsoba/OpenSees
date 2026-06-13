@@ -18,34 +18,32 @@
 **                                                                    **
 ** ****************************************************************** */                                                                        
                                                                        
-// $Source: OpenSees/SRC/system_of_eqn/linearSOE/sparseCUDA/CuDSSLinSolver.h
+// $Source: OpenSees/SRC/system_of_eqn/linearSOE/sparseCUDA/CudaDirectSparseSolver.h
 //
 // Written: gaaraujo
 // Created: 10/2025
 //
-// Description: This file contains the class definition for CuDSSLinSolver.
-// An CuDSSLinSolver object can be constructed to solve a CudaGenBcsrLinSOE
-// object. It obtains the solution by making calls to the
-// CuDSS library developed by NVIDIA.
+// Description: OpenSees LinearSOESolver for GPU direct sparse solve via cuDSS.
+// A CudaDirectSparseSolver solves a CudaGenBcsrLinSOE by delegating to CudaCsrMatrix.
 //
 // The CuDSS library provides a high-performance GPU-accelerated direct solver
 // for sparse linear systems of the form AX = B. The cuDSS functionality allows 
 // flexibility in matrix properties and solver configuration, as well as 
 // execution parameters like CUDA streams.
 //
-// This solver will only be available if OpenSees is compiled with CUDSS
-// support enabled (i.e., with the compile flag -D_CUDSS). This wrapper 
-// is implemented for single-CPU and single-GPU systems only. 
+// This solver is only built when cuDSS is available (OPS_Cuda_CuDSS).
 //
 
-#ifndef CuDSSLinSolver_h
-#define CuDSSLinSolver_h
+#ifndef CudaDirectSparseSolver_h
+#define CudaDirectSparseSolver_h
 
 // OpenSees includes
 #include <CudaGenBcsrLinSolver.h>
 #include <OPS_Stream.h>
+#include "CudaCsrMatrix.h"
 
 // C++ includes
+#include <cudss.h>
 #include <string>
 #include <vector>
 
@@ -53,17 +51,12 @@
 // symmetric and spd both use symmetric lower storage in CudaGenBcsrLinSOE.
 enum class CuDSSMatrixType { FULL, SYMMETRIC, SPD };
 
-// cuDSS includes
-#ifdef _CUDSS
-#include <cudss.h>
-#endif // _CUDSS
-
-class CuDSSLinSolver : public CudaGenBcsrLinSolver
+class CudaDirectSparseSolver : public CudaGenBcsrLinSolver
 {
 public:
     // Constructor with default parameters
     // useMultiGPU: use cuDSS multi-GPU (MG) mode; deviceIndices: GPU IDs (empty = use all)
-    CuDSSLinSolver(
+    CudaDirectSparseSolver(
         CudaPrecision precision = CudaPrecision::dDDI,
         bool verbose = false,
         bool hybridMemoryMode = false,
@@ -77,7 +70,7 @@ public:
     );
     
     // Destructor
-    ~CuDSSLinSolver();
+    ~CudaDirectSparseSolver();
     
     // Solver methods
     int solve(void) override;
@@ -112,21 +105,8 @@ private:
     // Helper function to initialize cuDSS matrices when structure changes
     int setupMatrices();
 
-    #ifdef _CUDSS
-    // Per-instance handle and stream (same member for single-GPU and MG)
-    cudssHandle_t m_Handle;
-    cudaStream_t m_cudaStream;
-    
-    // cuDSS objects
-    cudssConfig_t m_Config;      ///< solver configuration
-    cudssData_t m_Data;          ///< solver data
-    cudssMatrix_t m_Matrix;      ///< matrix data
-    cudssMatrix_t m_RHS;         ///< right-hand side data
-    cudssMatrix_t m_Solution;    ///< solution data
-    
-    // Precision
-    cudaDataType_t m_ValueType; ///< SOE value type
-    cudaDataType_t m_IndexType; ///< SOE index type
-    #endif // _CUDSS
+    static CuDssMatrixKind toCuDssMatrixKind(CuDSSMatrixType type);
+
+    CudaCsrMatrix *m_matrix = nullptr;
 };
 #endif

@@ -538,10 +538,12 @@ if(HAVE_CUDA)
       set(AMGX_FLAG -D_NOAMGX)
       set(AMGX_LIBRARIES "")
       set(AMGX_INCLUDE_DIR "")
+      set(HAVE_AMGX FALSE)
   else()
       message(STATUS "Compiling with AMGX from ${AMGX_NO_MPI_DIR}")
 
       set(AMGX_FLAG -D_AMGX)
+      set(HAVE_AMGX TRUE)
 
       if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
           set(AMGX_LIBRARIES "${AMGX_NO_MPI_DIR}/amgx.lib")
@@ -644,17 +646,29 @@ endif()
 
 message(STATUS "SCALAPACK_LIBRARIES=${SCALAPACK_LIBRARIES}")
 
-# CUDA toolchain (flags + libs) applied to any CUDA-enabled target
-macro(ops_cuda_apply_toolchain target_name)
+# CUDA object-library layout:
+#   OPS_Cuda          - CudaGenBcsrLinSOE / CudaGenBcsrLinSolver (shared GPU SOE framework)
+#   OPS_Cuda_AmgX     - AmgXLinSolver (optional, when AMGX_NO_MPI_DIR is set)
+#   OPS_Cuda_CuDSS    - cuDSS direct solver + CudaExplicitAlpha (optional, when cuDSS is found)
+#   OPS_Cuda_Parallel - parallel assembly CUDA SOEs for OpenSeesSP / OpenSeesMP (future)
+#
+# Executables link OPS_Cuda plus whichever backends were built. OpenSeesSP/MP also link
+# OPS_Cuda_Parallel when that target exists.
+
+macro(ops_cuda_apply_base_toolchain target_name)
   target_compile_definitions(${target_name} PUBLIC ${CUDA_FLAG})
   target_link_libraries(${target_name} PRIVATE ${CUDA_LIBRARIES})
+endmacro()
 
-  if(DEFINED AMGX_NO_MPI_DIR)
+macro(ops_cuda_apply_amgx_toolchain target_name)
+  if(HAVE_AMGX)
     target_include_directories(${target_name} PUBLIC ${AMGX_INCLUDE_DIR})
     target_compile_definitions(${target_name} PUBLIC ${AMGX_FLAG})
     target_link_libraries(${target_name} PRIVATE ${AMGX_LIBRARIES})
   endif()
+endmacro()
 
+macro(ops_cuda_apply_cudss_toolchain target_name)
   if(HAVE_CUDSS)
     target_compile_definitions(${target_name} PUBLIC ${CUDSS_FLAG})
     target_link_libraries(${target_name} PRIVATE cudss)
@@ -670,32 +684,71 @@ macro(ops_cuda_apply_toolchain target_name)
   endif()
 endmacro()
 
-# Links OPS_Cuda plus OPS_Cuda_Serial (cuDSS + ParameterUtils) when HAVE_CUDSS.
-# Same CUDA object libs for serial OpenSees, OpenSeesSP, and OpenSeesMP.
+macro(ops_cuda_apply_backend_defs target_name)
+  ops_cuda_apply_amgx_toolchain(${target_name})
+  ops_cuda_apply_cudss_toolchain(${target_name})
+endmacro()
+
+function(ops_cuda_link_backends target_name)
+  if(NOT HAVE_CUDA)
+    return()
+  endif()
+
+  target_link_libraries(${target_name} PRIVATE OPS_Cuda)
+  if(HAVE_AMGX)
+    target_link_libraries(${target_name} PRIVATE OPS_Cuda_AmgX)
+  endif()
+  if(HAVE_CUDSS)
+    target_link_libraries(${target_name} PRIVATE OPS_Cuda_CuDSS)
+  endif()
+endfunction()
+
+function(ops_cuda_link_parallel_backend target_name)
+  if(TARGET OPS_Cuda_Parallel)
+    target_link_libraries(${target_name} PRIVATE OPS_Cuda_Parallel)
+  endif()
+endfunction()
+
 function(configure_cuda_for_target target_name)
   if(NOT HAVE_CUDA)
     return()
   endif()
 
-  ops_cuda_apply_toolchain(${target_name})
+  ops_cuda_apply_base_toolchain(${target_name})
 
   if(${target_name} STREQUAL "OPS_Cuda")
     return()
   endif()
 
-  if(${target_name} STREQUAL "OPS_Cuda_Serial")
+  if(${target_name} STREQUAL "OPS_Cuda_AmgX")
+    ops_cuda_apply_amgx_toolchain(${target_name})
+    target_link_libraries(${target_name} PUBLIC OPS_Cuda)
+    return()
+  endif()
+
+  if(${target_name} STREQUAL "OPS_Cuda_CuDSS")
+    ops_cuda_apply_cudss_toolchain(${target_name})
+    target_link_libraries(${target_name} PUBLIC OPS_Cuda)
+    return()
+  endif()
+
+  if(${target_name} STREQUAL "OPS_Cuda_Parallel")
     target_link_libraries(${target_name} PUBLIC OPS_Cuda)
     return()
   endif()
 
   if(${target_name} STREQUAL "OPS_INTERPRETER" OR ${target_name} STREQUAL "OPS_InterpTcl")
+    # Command sources use #ifdef _AMGX / _CUDSS; symbols resolve at final executable link.
+    ops_cuda_apply_backend_defs(${target_name})
     target_link_libraries(${target_name} PRIVATE OPS_Cuda)
     return()
   endif()
 
-  target_link_libraries(${target_name} PRIVATE OPS_Cuda)
-  if(HAVE_CUDSS)
-    target_link_libraries(${target_name} PRIVATE OPS_Cuda_Serial)
+  ops_cuda_apply_backend_defs(${target_name})
+  ops_cuda_link_backends(${target_name})
+
+  if(${target_name} STREQUAL "OpenSeesSP" OR ${target_name} STREQUAL "OpenSeesMP")
+    ops_cuda_link_parallel_backend(${target_name})
   endif()
 endfunction()
 
@@ -857,27 +910,33 @@ if(HAVE_CUDA)
     ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaGenBcsrLinSOE.cu
     ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaGenBcsrLinSolver.cu
   )
-  
-  # Configure CUDA for the OPS_Cuda library
   configure_cuda_for_target(OPS_Cuda)
-  
-  # Add AMGX-specific sources if AMGX is available
-  if(DEFINED AMGX_NO_MPI_DIR)
-    target_sources(OPS_Cuda PRIVATE
+
+  if(HAVE_AMGX)
+    add_library(OPS_Cuda_AmgX OBJECT
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/AmgXLinSolver.cu
     )
+    configure_cuda_for_target(OPS_Cuda_AmgX)
   endif()
 
   if(HAVE_CUDSS)
-    add_library(OPS_Cuda_Serial OBJECT
-      ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuDSSLinSolver.cu
+    add_library(OPS_Cuda_CuDSS OBJECT
+      ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaCsrMatrix.cu
+      ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuDSSBackend.cu
+      ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaDirectSparseSolver.cu
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/ParameterUtils.cpp
+      ${OPS_SRC_DIR}/analysis/integrator/CudaExplicitAlpha.cu
     )
-    ops_cuda_apply_toolchain(OPS_Cuda_Serial)
-    target_link_libraries(OPS_Cuda_Serial PUBLIC OPS_Cuda)
+    configure_cuda_for_target(OPS_Cuda_CuDSS)
   endif()
 
-  # After OPS_Cuda exists (interpreter objects reference OPS_* entry points at link time)
+  # Parallel assembly CUDA SOEs for OpenSeesSP / OpenSeesMP.
+  # Add sources here when distributed GPU assembly is implemented, e.g.:
+  # add_library(OPS_Cuda_Parallel OBJECT
+  #   ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaParallelGenBcsrLinSOE.cu
+  # )
+  # configure_cuda_for_target(OPS_Cuda_Parallel)
+
   configure_cuda_for_target(OPS_INTERPRETER)
   configure_cuda_for_target(OPS_InterpTcl)
 endif()

@@ -33,5 +33,8 @@ add_subdirectory(profileSPD)
 #add_subdirectory(mumps)
 add_subdirectory(itpack)
 
-# CUDA sparse solvers
-add_subdirectory(sparseCUDA)
+# CUDA sparse solvers — only wire up headers/include when CUDA is available.
+# Source compilation is handled by the OPS_Cuda* targets in the root CMakeLists.
+if(HAVE_CUDA)
+  add_subdirectory(sparseCUDA)
+endif()

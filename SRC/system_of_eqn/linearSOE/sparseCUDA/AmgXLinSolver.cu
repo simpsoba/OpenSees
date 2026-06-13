@@ -38,14 +38,12 @@
 #include <AmgXLinSolver.h>
 
 // for parsing command line arguments
-#ifdef _AMGX
 #include <elementAPI.h>
 #include <FileStream.h>
 #include <unordered_map>
 #include <functional>
 #include <memory>
 #include "ParameterUtils.h"
-#endif // _AMGX
 
 // C++ includes
 #include <sstream>
@@ -55,7 +53,6 @@
 #include <cmath>
 #include <stdexcept>
 
-#ifdef _AMGX
 // Static member initialization
 bool AmgXLinSolver::m_AmgXInitialized = false;
 
@@ -90,7 +87,6 @@ void AmgXCallback(const char* msg, int length) {
 #ifdef __cplusplus
 }
 #endif // __cplusplus
-#endif // _AMGX
 
 /* Anonymous namespace for helper functions */
 namespace {
@@ -201,7 +197,6 @@ AmgXLinSolver::AmgXLinSolver(
     :CudaGenBcsrLinSolver(SOLVER_TAGS_AmgXLinSolver, CudaPrecision::dDDI),  // Simple constructor always uses double
     m_verbose(verbose)
 {
-    #ifdef _AMGX
     std::string configOptions = getDefaultConfigOptions(
         solver, preconditioner, smoother, max_iters, 
         abs_tolerance, rel_tolerance, monitor_residual);
@@ -209,7 +204,6 @@ AmgXLinSolver::AmgXLinSolver(
     // Simple constructor always uses double precision
     const char* precisionStr = "dDDI";
     init(nullConfigFile, configOptions.c_str(), precisionStr);
-    #endif // _AMGX
 }
 
 AmgXLinSolver::AmgXLinSolver( 
@@ -218,7 +212,6 @@ AmgXLinSolver::AmgXLinSolver(
     :CudaGenBcsrLinSolver(SOLVER_TAGS_AmgXLinSolver, precision), 
     m_verbose(verbose)
 {
-    #ifdef _AMGX
     // AmgX currently only supports uniform precision (dDDI or dFFI)
     if (!isUniformPrecision(precision)) {
         opserr << "ERROR: AmgXLinSolver::AmgXLinSolver() - "
@@ -230,14 +223,12 @@ AmgXLinSolver::AmgXLinSolver(
     // Convert enum to string for AMGX library (which expects string format)
     const char* precisionStr = cudaPrecisionToString(precision);
     init(configFile, configOptions, precisionStr, callbackStream);
-    #endif // _AMGX
 }
 
 
 void AmgXLinSolver::init(const char *configFile, const char *configOptions, 
                          const char *precision, OPS_Stream* callbackStream) 
 {
-    #ifdef _AMGX
     /* Initialize AMGX library - only done once across all instances */
     if (!m_AmgXInitialized) {
         AMGX_SAFE_CALL(AMGX_initialize());
@@ -316,13 +307,11 @@ void AmgXLinSolver::init(const char *configFile, const char *configOptions,
     AMGX_vector_create(&m_Solution, m_Resources, m_Mode);
 
     m_ActiveSolverInstances++;
-    #endif // _AMGX
 
     return;
 }
 
 AmgXLinSolver::~AmgXLinSolver() {
-    #ifdef _AMGX
     /* AMGX solver destroy must be called prior to AMGX matrix destroy. 
       See AMGX Reference Manual V2.0 (2017), Section 1.4.2 */
     AMGX_solver_destroy(m_Solver);
@@ -348,12 +337,10 @@ AmgXLinSolver::~AmgXLinSolver() {
     if (m_ActiveSolverInstances > 0) {
         m_ActiveSolverInstances--;
     }
-    #endif // _AMGX
     return;
 }
 
 int AmgXLinSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE) {
-    #ifdef _AMGX
     // Check precision match between solver and SOE
     if (theSOE.getPrecision() != this->getPrecision()) {
         opserr << "WARNING: AmgXLinSolver::setLinearSOE() - "
@@ -363,13 +350,11 @@ int AmgXLinSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE) {
     }
     
     return this->CudaGenBcsrLinSolver::setLinearSOE(theSOE);
-    #endif // _AMGX
 
     return 0;
 }
 
 int AmgXLinSolver::solve() {
-    #ifdef _AMGX
     CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
     if (theSOE == nullptr) {
         opserr << "WARNING: AmgXLinSolver::solve() - "
@@ -462,7 +447,6 @@ int AmgXLinSolver::solve() {
                << "Solve successful" << endln;
         reportAmgXSolveStats(this->getNumIterations(), initialResidualNorm, finalResidualNorm);
     }
-    #endif // _AMGX
 
     return 0;
 }
@@ -474,20 +458,17 @@ int AmgXLinSolver::setSize()
 
 int AmgXLinSolver::getNumIterations() {
     int numIterations = 0;
-    #ifdef _AMGX
     if (m_Solver == nullptr) {
         opserr << "WARNING: AmgXLinSolver::getNumIterations() - "
                << "Solver not initialized" << endln;
         return 0;
     }
     AMGX_solver_get_iterations_number(m_Solver, &numIterations);
-    #endif // _AMGX
     return numIterations;
 }
 
 double AmgXLinSolver::getResidualNorm() {
     double finalResidualNorm = 0.0;
-    #ifdef _AMGX
     if (m_Solver == nullptr || m_Matrix == nullptr || m_RHS == nullptr || m_Solution == nullptr) {
         opserr << "WARNING: AmgXLinSolver::getResidualNorm() - "
                << "Solver, matrix, RHS, or solution AMGX handles not initialized" << endln;
@@ -501,12 +482,10 @@ double AmgXLinSolver::getResidualNorm() {
     for (double residual : residualComponent) {
         finalResidualNorm += residual * residual;
     }
-    #endif // _AMGX
     return std::sqrt(finalResidualNorm);
 }
 
 // OpenSees API for parsing command line arguments
-#ifdef _AMGX
 
 struct AmgXGeneralConfig;
 struct AmgXSimpleConfig;
@@ -948,10 +927,3 @@ void* OPS_AmgXLinSolver()
             return nullptr;
     }
 }
-#else // _AMGX
-void* OPS_AmgXLinSolver() {
-    opserr << "WARNING: OPS_AmgXLinSolver() - "
-           << "AMGX not available" << endln;
-    return nullptr;
-}
-#endif // _AMGX

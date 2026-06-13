@@ -1111,6 +1111,7 @@
 #define INTEGRATOR_TAGS_HarmonicSteadyState             60
 #define INTEGRATOR_TAGS_ExplicitBathe                   61
 #define INTEGRATOR_TAGS_ExplicitDifferenceStatic        62
+#define INTEGRATOR_TAGS_CudaExplicitAlpha               63
 
 
 #define LinSOE_TAGS_FullGenLinSOE		1
@@ -1185,7 +1186,7 @@
 #define SOLVER_TAGS_PFEMQuasiSolver                     32
 #define SOLVER_TAGS_PFEMDiaSolver                       33
 #define SOLVER_TAGS_AmgXLinSolver                       34
-#define SOLVER_TAGS_CuDSSLinSolver                      35
+#define SOLVER_TAGS_CudaDirectSparseSolver              35
 #define SOLVER_TAGS_SparsePythonCompressedLinSolver     100201
 #define SOLVER_TAGS_SparsePythonCOOLinSolver            100202
 

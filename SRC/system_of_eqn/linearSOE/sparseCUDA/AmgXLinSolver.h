@@ -37,9 +37,7 @@
 // enabling significant acceleration of the linear solution phase when
 // running on CUDA-capable GPUs.
 //
-// This solver will only be available if OpenSees is compiled with AMGX
-// support enabled (i.e., with the compile flag -D_AMGX). This wrapper 
-// is implemented for single-CPU and single-GPU systems only. 
+// This solver is only built when AMGX is available (OPS_Cuda_AmgX).
 //
 
 #ifndef AmgXLinSolver_h
@@ -53,7 +51,6 @@
 #include <string>
 
 // AMGX includes
-#ifdef _AMGX
 #include <amgx_c.h>
 
 #ifdef __cplusplus
@@ -63,7 +60,6 @@ void AmgXCallback(const char* msg, int length);
 #ifdef __cplusplus
 }
 #endif // __cplusplus
-#endif // _AMGX
 
 class AmgXLinSolver : public CudaGenBcsrLinSolver
 {
@@ -110,7 +106,6 @@ private:
               const char *precision = "dDDI",
               OPS_Stream* callbackStream = (OPS_Stream*)&opserr);
 
-    #ifdef _AMGX
     // Static members for global state
     static bool m_AmgXInitialized;           ///< Whether AMGX is initialized
     static int m_ActiveSolverInstances;     ///< Count of active solver instances
@@ -124,7 +119,6 @@ private:
     AMGX_vector_handle    m_Solution     = nullptr;  ///< Solution vector handle
     AMGX_solver_handle    m_Solver       = nullptr;  ///< Solver handle
     AMGX_Mode             m_Mode;                    ///< Solver mode
-    #endif // _AMGX
 };
 
 #endif
