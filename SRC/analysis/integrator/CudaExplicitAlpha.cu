@@ -567,6 +567,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         }
         matAlpha->spmv(w2, b);
         cudaCheckError(cudaStreamSynchronize(stream), "formUnbalance residual sync");
+        cudaSOE->downloadRhsFromDevice();
         return 0;
     }
 

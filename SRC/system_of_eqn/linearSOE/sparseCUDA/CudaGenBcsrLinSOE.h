@@ -201,6 +201,7 @@ public:
 
     // Host-device data transfer methods
     virtual void uploadVectorsToDevice(void) = 0;
+    virtual void downloadRhsFromDevice(void) = 0;
     virtual void downloadSolutionFromDevice(void) = 0;
     virtual void uploadAValuesToDevice(void) = 0;
     virtual void downloadAValuesFromDevice(void) = 0;

@@ -175,6 +175,10 @@ public:
         m_deviceB = this->CudaGenBcsrLinSOE::m_hostB;
         m_deviceX.resize(this->CudaGenBcsrLinSOE::m_hostX.size());
     }
+
+    inline void downloadRhsFromDevice(void) override {
+        this->CudaGenBcsrLinSOE::m_hostB = m_deviceB;
+    }
     
     inline void downloadSolutionFromDevice(void) override {
         this->CudaGenBcsrLinSOE::m_hostX = m_deviceX;
