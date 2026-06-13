@@ -1848,11 +1848,41 @@ int OPS_Integrator()
     } else if (strcmp(type,"GeneralizedAlpha") == 0) {
 	ti = (TransientIntegrator*)OPS_GeneralizedAlpha();
 
+    } else if (strcmp(type,"ExplicitAlpha") == 0) {
+	ti = (TransientIntegrator*)OPS_ExplicitAlpha();
+
     } else if (strcmp(type,"KRAlphaExplicit") == 0) {
 	ti = (TransientIntegrator*)OPS_KRAlphaExplicit();
 
+    } else if (strcmp(type,"MKRAlphaExplicit") == 0) {
+	ti = (TransientIntegrator*)OPS_MKRAlphaExplicit();
+
+    } else if (strcmp(type,"ExplicitAlpha_TP") == 0) {
+	ti = (TransientIntegrator*)OPS_ExplicitAlpha_TP();
+
     } else if (strcmp(type,"KRAlphaExplicit_TP") == 0) {
 	ti = (TransientIntegrator*)OPS_KRAlphaExplicit_TP();
+
+    } else if (strcmp(type,"MKRAlphaExplicit_TP") == 0) {
+	ti = (TransientIntegrator*)OPS_MKRAlphaExplicit_TP();
+
+    } else if (strcmp(type,"ExplicitAlphaMultiSOE") == 0) {
+	ti = (TransientIntegrator*)OPS_ExplicitAlphaMultiSOE();
+
+    } else if (strcmp(type,"KRAlphaExplicitMultiSOE") == 0) {
+	ti = (TransientIntegrator*)OPS_KRAlphaExplicitMultiSOE();
+
+    } else if (strcmp(type,"MKRAlphaExplicitMultiSOE") == 0) {
+	ti = (TransientIntegrator*)OPS_MKRAlphaExplicitMultiSOE();
+
+    } else if (strcmp(type,"ExplicitAlphaMultiSOE_TP") == 0) {
+	ti = (TransientIntegrator*)OPS_ExplicitAlphaMultiSOE_TP();
+
+    } else if (strcmp(type,"KRAlphaExplicitMultiSOE_TP") == 0) {
+	ti = (TransientIntegrator*)OPS_KRAlphaExplicitMultiSOE_TP();
+
+    } else if (strcmp(type,"MKRAlphaExplicitMultiSOE_TP") == 0) {
+	ti = (TransientIntegrator*)OPS_MKRAlphaExplicitMultiSOE_TP();
 
 #ifdef _CUDSS
     } else if (strcmp(type,"CudaExplicitAlpha") == 0) {

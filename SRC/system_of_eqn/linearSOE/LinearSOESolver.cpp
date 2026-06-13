@@ -48,6 +48,10 @@ LinearSOESolver::~LinearSOESolver()
     
 }
 
-
+LinearSOESolver *
+LinearSOESolver::getCopy(void) const
+{
+    return nullptr;
+}
 
 

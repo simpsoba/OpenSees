@@ -684,8 +684,10 @@
 #include "HHTHSIncrLimit_TP.h"
 #include "HHTHSIncrReduct.h"
 #include "HHTHSIncrReduct_TP.h"
-#include "KRAlphaExplicit.h"
-#include "KRAlphaExplicit_TP.h"
+#include "ExplicitAlpha.h"
+#include "ExplicitAlpha_TP.h"
+#include "ExplicitAlphaMultiSOE.h"
+#include "ExplicitAlphaMultiSOE_TP.h"
 #ifdef _CUDSS
 #include "CudaExplicitAlpha.h"
 #endif
@@ -3103,10 +3105,22 @@ FEM_ObjectBrokerAllClasses::getNewTransientIntegrator(int classTag)
 	     return new HHTHSIncrReduct_TP();
 
     case INTEGRATOR_TAGS_KRAlphaExplicit:  
-         return new KRAlphaExplicit();
+         return new ExplicitAlpha();
 
     case INTEGRATOR_TAGS_KRAlphaExplicit_TP:  
-         return new KRAlphaExplicit_TP();
+         return new ExplicitAlpha_TP();
+
+    case INTEGRATOR_TAGS_ExplicitAlpha:
+         return new ExplicitAlpha();
+
+    case INTEGRATOR_TAGS_ExplicitAlpha_TP:
+         return new ExplicitAlpha_TP();
+
+    case INTEGRATOR_TAGS_ExplicitAlphaMultiSOE:
+         return new ExplicitAlphaMultiSOE();
+
+    case INTEGRATOR_TAGS_ExplicitAlphaMultiSOE_TP:
+         return new ExplicitAlphaMultiSOE_TP();
 
 #ifdef _CUDSS
     case INTEGRATOR_TAGS_CudaExplicitAlpha:

@@ -240,8 +240,18 @@ extern void *OPS_HHTHSIncrLimit(void);
 extern void *OPS_HHTHSIncrLimit_TP(void);
 extern void *OPS_HHTHSIncrReduct(void);
 extern void *OPS_HHTHSIncrReduct_TP(void);
+extern void *OPS_ExplicitAlpha(void);
 extern void *OPS_KRAlphaExplicit(void);
+extern void *OPS_MKRAlphaExplicit(void);
+extern void *OPS_ExplicitAlpha_TP(void);
 extern void *OPS_KRAlphaExplicit_TP(void);
+extern void *OPS_MKRAlphaExplicit_TP(void);
+extern void *OPS_ExplicitAlphaMultiSOE(void);
+extern void *OPS_KRAlphaExplicitMultiSOE(void);
+extern void *OPS_MKRAlphaExplicitMultiSOE(void);
+extern void *OPS_ExplicitAlphaMultiSOE_TP(void);
+extern void *OPS_KRAlphaExplicitMultiSOE_TP(void);
+extern void *OPS_MKRAlphaExplicitMultiSOE_TP(void);
 #ifdef _CUDSS
 extern void *OPS_CudaExplicitAlpha(void);
 extern void *OPS_CudaKRAlpha(void);
@@ -5067,9 +5077,30 @@ specifyIntegrator(ClientData clientData, Tcl_Interp *interp, int argc,
       theTransientAnalysis->setIntegrator(*theTransientIntegrator);
   }
   
+  else if (strcmp(argv[1],"ExplicitAlpha") == 0) {
+    theTransientIntegrator = (TransientIntegrator *)OPS_ExplicitAlpha();
+
+    if (theTransientAnalysis != 0)
+      theTransientAnalysis->setIntegrator(*theTransientIntegrator);
+  }
+
   else if (strcmp(argv[1],"KRAlphaExplicit") == 0) {
     theTransientIntegrator = (TransientIntegrator *)OPS_KRAlphaExplicit();
     
+    if (theTransientAnalysis != 0)
+      theTransientAnalysis->setIntegrator(*theTransientIntegrator);
+  }
+
+  else if (strcmp(argv[1],"MKRAlphaExplicit") == 0) {
+    theTransientIntegrator = (TransientIntegrator *)OPS_MKRAlphaExplicit();
+
+    if (theTransientAnalysis != 0)
+      theTransientAnalysis->setIntegrator(*theTransientIntegrator);
+  }
+
+  else if (strcmp(argv[1],"ExplicitAlpha_TP") == 0) {
+    theTransientIntegrator = (TransientIntegrator *)OPS_ExplicitAlpha_TP();
+
     if (theTransientAnalysis != 0)
       theTransientAnalysis->setIntegrator(*theTransientIntegrator);
   }
@@ -5080,6 +5111,56 @@ specifyIntegrator(ClientData clientData, Tcl_Interp *interp, int argc,
     if (theTransientAnalysis != 0)
       theTransientAnalysis->setIntegrator(*theTransientIntegrator);
   }
+
+  else if (strcmp(argv[1],"MKRAlphaExplicit_TP") == 0) {
+    theTransientIntegrator = (TransientIntegrator *)OPS_MKRAlphaExplicit_TP();
+
+    if (theTransientAnalysis != 0)
+      theTransientAnalysis->setIntegrator(*theTransientIntegrator);
+  }
+
+  else if (strcmp(argv[1],"ExplicitAlphaMultiSOE") == 0) {
+    theTransientIntegrator = (TransientIntegrator *)OPS_ExplicitAlphaMultiSOE();
+
+    if (theTransientAnalysis != 0)
+      theTransientAnalysis->setIntegrator(*theTransientIntegrator);
+  }
+
+  else if (strcmp(argv[1],"KRAlphaExplicitMultiSOE") == 0) {
+    theTransientIntegrator = (TransientIntegrator *)OPS_KRAlphaExplicitMultiSOE();
+
+    if (theTransientAnalysis != 0)
+      theTransientAnalysis->setIntegrator(*theTransientIntegrator);
+  }
+
+  else if (strcmp(argv[1],"MKRAlphaExplicitMultiSOE") == 0) {
+    theTransientIntegrator = (TransientIntegrator *)OPS_MKRAlphaExplicitMultiSOE();
+
+    if (theTransientAnalysis != 0)
+      theTransientAnalysis->setIntegrator(*theTransientIntegrator);
+  }
+
+  else if (strcmp(argv[1],"ExplicitAlphaMultiSOE_TP") == 0) {
+    theTransientIntegrator = (TransientIntegrator *)OPS_ExplicitAlphaMultiSOE_TP();
+
+    if (theTransientAnalysis != 0)
+      theTransientAnalysis->setIntegrator(*theTransientIntegrator);
+  }
+
+  else if (strcmp(argv[1],"KRAlphaExplicitMultiSOE_TP") == 0) {
+    theTransientIntegrator = (TransientIntegrator *)OPS_KRAlphaExplicitMultiSOE_TP();
+
+    if (theTransientAnalysis != 0)
+      theTransientAnalysis->setIntegrator(*theTransientIntegrator);
+  }
+
+  else if (strcmp(argv[1],"MKRAlphaExplicitMultiSOE_TP") == 0) {
+    theTransientIntegrator = (TransientIntegrator *)OPS_MKRAlphaExplicitMultiSOE_TP();
+
+    if (theTransientAnalysis != 0)
+      theTransientAnalysis->setIntegrator(*theTransientIntegrator);
+  }
+  
 #ifdef _CUDSS
   else if (strcmp(argv[1],"CudaExplicitAlpha") == 0) {
     theTransientIntegrator = (TransientIntegrator *)OPS_CudaExplicitAlpha();

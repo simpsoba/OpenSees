@@ -76,6 +76,7 @@ public:
     int solve(void) override;
     int setSize(void) override;
     int setLinearSOE(CudaGenBcsrLinSOE &theSOE) override;
+    LinearSOESolver *getCopy(void) const override;
 
 protected:
 

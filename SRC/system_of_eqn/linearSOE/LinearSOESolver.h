@@ -49,6 +49,9 @@ class LinearSOESolver : public MovableObject
     virtual int solve(void) = 0;
     virtual int setSize(void) = 0;
     virtual double getDeterminant(void) {return 1.0;};
+
+    /** New solver with same type/options as this instance. Caller owns the returned pointer. */
+    virtual LinearSOESolver *getCopy(void) const;
     
   protected:
     

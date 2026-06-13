@@ -63,6 +63,7 @@
 
 // Forward declarations
 class CudaGenBcsrLinSolver;
+class CudaCsrMatrix;
 
 // Pinned memory allocators for improved host-device transfer performance
 using pinned_mr = thrust::universal_host_pinned_memory_resource;
@@ -150,6 +151,8 @@ public:
     void setX(int loc, double value) override;
     void setX(const Vector &x) override;
     int solve(void) override;
+    int formAp(const Vector &p, Vector &Ap) override;
+    LinearSOE *getCopy(void) const override;
     
     // Set and get the associated CudaGenBcsrLinSolver object
     int setCudaGenBcsrLinSolver(CudaGenBcsrLinSolver &newSolver);
@@ -246,6 +249,10 @@ protected:
     // Storage mode: full matrix or symmetric lower triangle
     MatrixStorageMode m_storageMode;
 
+    // Lazy cuSPARSE operator for formAp (SpMV only; separate from solver factorization)
+    CudaCsrMatrix *m_spmvMatrix = nullptr;
+    int m_spmvStructureRows = -1;
+
     // Set size helper methods
     int buildStandardCSR(Graph &theGraph);
     int buildBlockCSR(Graph &theGraph);
@@ -264,6 +271,8 @@ protected:
     bool isValidGlobalIndex(int index) const;
 
     bool isMatrixEmpty(void) const;
+
+    int ensureSpMVOperator(void);
 };
 
 inline OPS_Stream& operator<<(OPS_Stream& os, CudaGenBcsrLinSOE::MatrixStatus status) {

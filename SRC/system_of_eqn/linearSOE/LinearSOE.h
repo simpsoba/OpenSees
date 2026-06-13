@@ -87,8 +87,13 @@ class LinearSOE : public MovableObject
 
     virtual void setX(int loc, double value) =0;
     virtual void setX(const Vector &X) =0;
-    
+
+    /** New SOE and owned solver with same system type/options as this instance; no matrix/RHS
+     *  buffers copied. Caller owns the returned pointer. Default returns nullptr. */
+    virtual LinearSOE *getCopy(void) const;
+
     LinearSOESolver *getSolver(void);
+    const LinearSOESolver *getSolver(void) const;
     
   protected:
     int setSolver(LinearSOESolver &newSolver);	        

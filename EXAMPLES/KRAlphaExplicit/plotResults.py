@@ -78,12 +78,11 @@ RESP_SYMBOL = {"disp": r"u", "vel": r"\dot{u}", "accel": r"\ddot{u}"}
 RESP_UNITS = {"disp": "m", "vel": "m/s", "accel": "m/s²"}
 DRIFT_PEAK_LABEL = r"peak $|\Delta u|$ (m)"
 
-COLOR_NEWMARK = "#888888"         # light grey — Newmark GPU (CuDSS)
+COLOR_NEWMARK = "#888888"         # light grey — Newmark (CuDSS)
 COLOR_NEWMARK_CPU = "#555555"     # darker grey — Newmark CPU (FullGeneral)
-COLOR_EXPLICIT = "#4477AA"        # blue — KRAlphaExplicit (CPU)
-COLOR_CUDA_KR = "#EE6677"         # red — CudaKRAlpha
-COLOR_CUDA_MKR = "#CCBB44"        # olive — CudaMKRAlpha
-COLOR_MULTISOE = "#EE6677"        # red — AlphaExplicitMultiSOE (legacy layout)
+COLOR_EXPLICIT = "#4477AA"        # blue — dense explicit (FullGeneral)
+COLOR_MULTISOE = "#AA3377"        # magenta — MultiSOE (CuDSS workspace)
+COLOR_CUDA = "#EE6677"            # red — CudaKRAlpha / CudaMKRAlpha
 COLOR_GRID = "#BBBBBB"
 
 # Minimum log-scale upper limit for |error| and |FFT(error)| panels (shared y across subplots).
@@ -99,7 +98,7 @@ def result_tag(method: str, params: Sequence) -> str:
 
 
 def resolve_newmark_tag(results: Path) -> str:
-    """Pick Newmark GPU (CuDSS) result folder."""
+    """Pick Newmark CuDSS result folder."""
     for params in (NEWMARK_PARAMS, LEGACY_NEWMARK_PARAMS):
         tag = result_tag("Newmark", params)
         if (results / tag / "disp.out").is_file():
@@ -260,21 +259,53 @@ def is_diagonal_mass_tag(tag: str) -> bool:
     return "-diagonalMass" in tag or "-lumped" in tag
 
 
-def legend_label(tag: str) -> str:
+def integrator_family(tag: str) -> str:
+    """Legend/plot family: dense, multisoe, cuda, or Newmark SOE variant."""
     if tag.startswith("Newmark_FullGeneral"):
-        return "Newmark (CPU FullGeneral)"
+        return "newmark_fg"
     if tag.startswith("Newmark"):
-        return "Newmark (GPU CuDSS)"
+        return "newmark_cudss"
     if "MultiSOE" in tag:
-        return "AlphaExplicitMultiSOE"
-    diag_mass = is_diagonal_mass_tag(tag)
-    if tag.startswith("KRAlphaExplicit"):
-        return "KRAlphaExplicit (CPU)"
-    if tag.startswith("CudaKRAlpha"):
-        return "CudaKRAlpha (GPU)" + (" diag. mass" if diag_mass else "")
-    if tag.startswith("CudaMKRAlpha"):
-        return "CudaMKRAlpha (GPU)" + (" diag. mass" if diag_mass else "")
-    return "AlphaExplicit"
+        return "multisoe"
+    if tag.startswith("Cuda"):
+        return "cuda"
+    if tag.startswith("KRAlphaExplicit") or tag.startswith("MKRAlphaExplicit"):
+        return "dense"
+    return "other"
+
+
+CUDA_LEGEND_FAMILIES = (
+    "dense",
+    "multisoe",
+    "cuda",
+    "newmark_cudss",
+    "newmark_fg",
+)
+
+
+def legend_label(tag: str) -> str:
+    fam = integrator_family(tag)
+    if fam == "newmark_fg":
+        return "Newmark (FullGeneral)"
+    if fam == "newmark_cudss":
+        return "Newmark (CuDSS)"
+    if fam == "dense":
+        return "Dense"
+    if fam == "multisoe":
+        return "MultiSOE"
+    if fam == "cuda":
+        return "Cuda" + (" diag. mass" if is_diagonal_mass_tag(tag) else "")
+    return tag
+
+
+def ordered_cuda_legend_tags(tags: Sequence[str]) -> List[str]:
+    """One representative tag per integrator family for the figure legend."""
+    by_fam: dict[str, str] = {}
+    for tag in tags:
+        fam = integrator_family(tag)
+        if fam not in by_fam:
+            by_fam[fam] = tag
+    return [by_fam[fam] for fam in CUDA_LEGEND_FAMILIES if fam in by_fam]
 
 
 def style_axes(ax, *, logy: bool = False) -> None:
@@ -389,16 +420,13 @@ def plot_style(tag: str) -> Tuple[str, str, float, int]:
         return ":", COLOR_NEWMARK_CPU, 0.85, 4
     if tag.startswith("Newmark"):
         return "-", COLOR_NEWMARK, 0.85, 3
-    if tag.startswith("KRAlphaExplicit"):
-        return "-.", COLOR_EXPLICIT, 0.55, 2
-    if tag.startswith("CudaMKRAlpha"):
-        ls = ":" if is_diagonal_mass_tag(tag) else "--"
-        return ls, COLOR_CUDA_MKR, 0.55, 2
-    if tag.startswith("CudaKRAlpha"):
-        ls = ":" if is_diagonal_mass_tag(tag) else "--"
-        return ls, COLOR_CUDA_KR, 0.55, 1
     if "MultiSOE" in tag:
-        return "--", COLOR_MULTISOE, 0.55, 1
+        return "--", COLOR_MULTISOE, 0.55, 2
+    if tag.startswith("Cuda"):
+        ls = ":" if is_diagonal_mass_tag(tag) else "--"
+        return ls, COLOR_CUDA, 0.55, 1
+    if tag.startswith("KRAlphaExplicit") or tag.startswith("MKRAlphaExplicit"):
+        return "-.", COLOR_EXPLICIT, 0.55, 2
     return "-.", COLOR_EXPLICIT, 0.55, 2
 
 
@@ -554,8 +582,24 @@ def cuda_panel_rows_with_flags(
     p_cpu = [rho]
     p_cuda = integrator_params(rho, incremental=incremental, alpha_close_check=alpha_close_check)
     return [
-        ("KR", [*refs, result_tag("KRAlphaExplicit", p_cpu), result_tag("CudaKRAlpha", p_cuda)]),
-        ("MKR", [*refs, result_tag("CudaMKRAlpha", p_cuda)]),
+        (
+            "KR",
+            [
+                *refs,
+                result_tag("KRAlphaExplicit", p_cpu),
+                result_tag("KRAlphaExplicitMultiSOE", p_cuda),
+                result_tag("CudaKRAlpha", p_cuda),
+            ],
+        ),
+        (
+            "MKR",
+            [
+                *refs,
+                result_tag("MKRAlphaExplicit", p_cpu),
+                result_tag("MKRAlphaExplicitMultiSOE", p_cuda),
+                result_tag("CudaMKRAlpha", p_cuda),
+            ],
+        ),
     ]
 
 
@@ -647,7 +691,7 @@ def plot_cuda_convergence(
     plot_stride: int,
     save_fig,
 ) -> bool:
-    """NR convergence history for Newmark GPU vs CPU only."""
+    """NR convergence history for Newmark CuDSS vs FullGeneral only."""
     newmark_tags = [ref] + ([ref_cpu] if ref_cpu else [])
     newmark_tags = [t for t in newmark_tags if load_convergence(results, t)[0].size]
     if not newmark_tags:
@@ -679,7 +723,7 @@ def plot_cuda_convergence(
 
 
 def run_cuda(example_dir: Path, *, jobs: int = 1) -> int:
-    """Plots for Newmark + KRAlphaExplicit + CudaKRAlpha/CudaMKRAlpha."""
+    """Plots for Newmark + KRAlphaExplicit + MultiSOE + CudaKRAlpha/CudaMKRAlpha."""
     cfg = load_config(example_dir)
     dt_analysis = float(getattr(cfg, "DT_ANALYSIS", 0.005))
     dt_plot = float(getattr(cfg, "DT_PLOT", dt_analysis))
@@ -689,7 +733,7 @@ def run_cuda(example_dir: Path, *, jobs: int = 1) -> int:
     figures_root.mkdir(parents=True, exist_ok=True)
     ref = resolve_newmark_tag(results)
     ref_cpu = resolve_newmark_cpu_tag(results)
-    ref_msg = f"Newmark GPU={ref}"
+    ref_msg = f"Newmark CuDSS={ref}"
     if ref_cpu:
         ref_msg += f", CPU={ref_cpu}"
     print(f"Using Newmark references: {ref_msg}", flush=True)
@@ -897,8 +941,8 @@ def run_cuda(example_dir: Path, *, jobs: int = 1) -> int:
 
                 fig.supylabel(f"{resp_time_label(resp)}\n{rho_ylabel}")
                 fig_err.supylabel(f"{resp_error_label(resp)}\n{rho_ylabel}")
-                add_figure_legend(fig, legend_tags)
-                add_figure_legend(fig_err, legend_tags_err, nrow=1)
+                add_figure_legend(fig, ordered_cuda_legend_tags(legend_tags), nrow=4)
+                add_figure_legend(fig_err, ordered_cuda_legend_tags(legend_tags_err), nrow=3)
                 fig.supxlabel("time (s)")
                 fig_err.supxlabel("time (s)")
                 save_fig(fig, out_dir / cmp_fname)

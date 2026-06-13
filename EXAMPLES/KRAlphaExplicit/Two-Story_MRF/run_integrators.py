@@ -8,8 +8,9 @@ known Python teardown segfault in the local ``opensees.so``.
 
 Each CUDA/CPU KR family also runs with ``-incrementalAccel``; at rho=1.0 add
 ``-alphaCloseCheck`` (and both flags together), matching the KRAlphaSparse layout.
-``-incrementalAccel`` and ``-alphaCloseCheck`` apply to **CudaKRAlpha / CudaMKRAlpha
-only**; CPU ``KRAlphaExplicit`` is always the standard (total-form) case.
+``-incrementalAccel`` and ``-alphaCloseCheck`` apply to **CudaKRAlpha / CudaMKRAlpha /
+KRAlphaExplicitMultiSOE / MKRAlphaExplicitMultiSOE**; dense CPU ``KRAlphaExplicit`` /
+``MKRAlphaExplicit`` are always the standard (total-form) case.
 
 Usage:
   python3 run_integrators.py                    # Tcl, rhos 1.0 and 0.5
@@ -182,6 +183,10 @@ def _kr_cpu_run(rho: float) -> RunSpec:
     return (f"KR ρ={rho:g}", "KRAlphaExplicit", [rho], None)
 
 
+def _mkr_cpu_run(rho: float) -> RunSpec:
+    return (f"MKR ρ={rho:g}", "MKRAlphaExplicit", [rho], None)
+
+
 def _cuda_runs(
     rho: float, *, incremental: bool = False, alpha_close_check: bool = False
 ) -> List[RunSpec]:
@@ -200,20 +205,47 @@ def _cuda_runs(
     ]
 
 
+def _multisoe_runs(
+    rho: float, *, incremental: bool = False, alpha_close_check: bool = False
+) -> List[RunSpec]:
+    sfx = ""
+    extra: List[Union[float, str]] = []
+    if incremental:
+        sfx += " (incr)"
+        extra.append("-incrementalAccel")
+    if alpha_close_check:
+        sfx += " (α close)"
+        extra.append("-alphaCloseCheck")
+    p: List[Union[float, str]] = [rho, *extra]
+    return [
+        (f"MultiSOE KR ρ={rho:g}{sfx}", "KRAlphaExplicitMultiSOE", list(p), None),
+        (f"MultiSOE MKR ρ={rho:g}{sfx}", "MKRAlphaExplicitMultiSOE", list(p), None),
+    ]
+
+
 def _build_runs(rhos: List[float], *, include_incremental: bool = True) -> List[RunSpec]:
     runs: List[RunSpec] = [
-        ("Newmark (GPU)", "Newmark", [0.5, 0.25], None),
+        ("Newmark (CuDSS)", "Newmark", [0.5, 0.25], None),
         ("Newmark (CPU)", "Newmark", [0.5, 0.25], "FullGeneral"),
     ]
     for rho in rhos:
         runs.append(_kr_cpu_run(rho))
+        runs.append(_mkr_cpu_run(rho))
+        runs.extend(_multisoe_runs(rho, incremental=False))
         runs.extend(_cuda_runs(rho, incremental=False))
         if include_incremental:
+            runs.extend(_multisoe_runs(rho, incremental=True))
             runs.extend(_cuda_runs(rho, incremental=True))
         if abs(rho - 1.0) < 1e-12:
+            runs.extend(_multisoe_runs(rho, alpha_close_check=True))
             runs.extend(_cuda_runs(rho, alpha_close_check=True))
             if include_incremental:
-                runs.extend(_cuda_runs(rho, incremental=True, alpha_close_check=True))
+                runs.extend(
+                    _multisoe_runs(rho, incremental=True, alpha_close_check=True)
+                )
+                runs.extend(
+                    _cuda_runs(rho, incremental=True, alpha_close_check=True)
+                )
     return runs
 
 

@@ -67,7 +67,7 @@ LinearSOE::solve(void)
 int
 LinearSOE::formAp(const Vector &p, Vector &Ap)
 {
-  return 0;
+  return -1;
 }
 
 double
@@ -88,8 +88,20 @@ LinearSOE::setSolver(LinearSOESolver &newSolver)
     return 0;
 }
 
+LinearSOE *
+LinearSOE::getCopy(void) const
+{
+    return nullptr;
+}
+
 LinearSOESolver *
 LinearSOE::getSolver(void)
+{
+    return theSolver;
+}
+
+const LinearSOESolver *
+LinearSOE::getSolver(void) const
 {
     return theSolver;
 }

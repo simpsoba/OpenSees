@@ -49,6 +49,7 @@
 #include <algorithm>
 
 #include "CudaGenBcsrLinSOEImpl.h"
+#include "CudaCsrMatrix.h"
 
 // CUDA includes
 #include <cuda_runtime.h>
@@ -182,7 +183,8 @@ bool CudaGenBcsrLinSOE::isSymmetricStorage(void) const
 
 CudaGenBcsrLinSOE::~CudaGenBcsrLinSOE() 
 {
-    
+    delete m_spmvMatrix;
+    m_spmvMatrix = nullptr;
 }
 
 // Validation methods
@@ -986,6 +988,141 @@ bool CudaGenBcsrLinSOE::isMatrixEmpty(void) const
 CudaGenBcsrLinSolver* CudaGenBcsrLinSOE::getCudaGenBcsrLinSolver(void)
 {
     return dynamic_cast<CudaGenBcsrLinSolver*>(this->LinearSOE::getSolver());
+}
+
+int
+CudaGenBcsrLinSOE::ensureSpMVOperator(void)
+{
+    if (m_blockSize != 1) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::ensureSpMVOperator() - "
+               << "formAp requires blockSize = 1, got " << m_blockSize << endln;
+        return -1;
+    }
+
+    const int numRows = getNumRowBlocks();
+    const int numNZ = getNumNonZeroValues();
+    if (numRows <= 0) {
+        return -1;
+    }
+
+    ensureDeviceVectorSizes();
+    uploadAIndicesToDevice();
+
+    const int *rowPtrs = getDeviceRowPtrs();
+    const int *colIndices = getDeviceColIndices();
+    if (rowPtrs == nullptr || colIndices == nullptr) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::ensureSpMVOperator() - null CSR indices\n";
+        return -1;
+    }
+
+    if (m_spmvMatrix == nullptr) {
+        CudaCsrMatrix::Options opts;
+        opts.precision = getPrecision();
+        m_spmvMatrix = new CudaCsrMatrix(opts);
+        m_spmvStructureRows = -1;
+    }
+
+    if (m_spmvStructureRows != numRows ||
+        m_matrixStatus == MatrixStatus::STRUCTURE_CHANGED) {
+        if (m_spmvMatrix->bindStructure(numRows, numNZ, rowPtrs, colIndices) != 0) {
+            return -1;
+        }
+        m_spmvStructureRows = numRows;
+    }
+
+    return 0;
+}
+
+int
+CudaGenBcsrLinSOE::formAp(const Vector &p, Vector &Ap)
+{
+    const int n = getNumEqn();
+    if (p.Size() != n || Ap.Size() != n) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::formAp() - vector size mismatch\n";
+        return -1;
+    }
+    if (n <= 0) {
+        return 0;
+    }
+
+    if (ensureSpMVOperator() != 0) {
+        return -1;
+    }
+
+    for (int i = 0; i < n; ++i) {
+        m_hostB[static_cast<size_t>(i)] = p(i);
+    }
+
+    uploadVectorsToDevice();
+    uploadAValuesToDevice();
+
+    void *deviceA = getDeviceAValues();
+    void *deviceP = getDeviceB();
+    void *deviceAp = getDeviceX();
+    if (deviceA == nullptr || deviceP == nullptr || deviceAp == nullptr) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::formAp() - null device pointer(s)\n";
+        return -1;
+    }
+
+    if (m_spmvMatrix->bindValues(deviceA) != 0) {
+        return -1;
+    }
+    if (m_spmvMatrix->spmv(deviceP, deviceAp, 1.0, 0.0) != 0) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::formAp() - SpMV failed\n";
+        return -1;
+    }
+
+    downloadSolutionFromDevice();
+    for (int i = 0; i < n; ++i) {
+        Ap(i) = m_hostX[static_cast<size_t>(i)];
+    }
+    return 0;
+}
+
+LinearSOE *
+CudaGenBcsrLinSOE::getCopy(void) const
+{
+    const CudaGenBcsrLinSolver *baseSolver =
+        dynamic_cast<const CudaGenBcsrLinSolver *>(this->LinearSOE::getSolver());
+    if (baseSolver == nullptr) {
+        return nullptr;
+    }
+
+    LinearSOESolver *newSolver = baseSolver->getCopy();
+    if (newSolver == nullptr) {
+        return nullptr;
+    }
+
+    CudaGenBcsrLinSolver *cudaSolver = dynamic_cast<CudaGenBcsrLinSolver *>(newSolver);
+    if (cudaSolver == nullptr) {
+        delete newSolver;
+        return nullptr;
+    }
+
+    const bool symmetricStorage = isSymmetricStorage();
+    CudaGenBcsrLinSOE *out = nullptr;
+    switch (getPrecision()) {
+        case CudaPrecision::dDDI:
+            out = createDouble(*cudaSolver, m_blockSize, m_paddingEnabled, m_verbose, symmetricStorage);
+            break;
+        case CudaPrecision::dFFI:
+            out = createFloat(*cudaSolver, m_blockSize, m_paddingEnabled, m_verbose, symmetricStorage);
+            break;
+        case CudaPrecision::dDFI:
+            out = createDoubleFloat(*cudaSolver, m_blockSize, m_paddingEnabled, m_verbose, symmetricStorage);
+            break;
+        case CudaPrecision::dFDI:
+            out = createFloatDouble(*cudaSolver, m_blockSize, m_paddingEnabled, m_verbose, symmetricStorage);
+            break;
+        default:
+            delete newSolver;
+            return nullptr;
+    }
+
+    if (out == nullptr) {
+        delete newSolver;
+    }
+    return out;
 }
 
 // Factory method implementations

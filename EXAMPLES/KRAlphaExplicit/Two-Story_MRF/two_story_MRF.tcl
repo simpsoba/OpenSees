@@ -91,6 +91,14 @@ switch -exact $integratorMethod {
         set linearSOE FullGeneral
         set newmarkCpu 0
     }
+    MKRAlphaExplicit {
+        set integratorParams [list $rho]
+        set maxIter 1
+        set pFlag 5
+        set algo Linear
+        set linearSOE FullGeneral
+        set newmarkCpu 0
+    }
     CudaKRAlpha {
         set integratorParams [appendIntegratorFlags [list $rho]]
         set maxIter 1
@@ -107,15 +115,31 @@ switch -exact $integratorMethod {
         set linearSOE CuDSS
         set newmarkCpu 0
     }
+    KRAlphaExplicitMultiSOE {
+        set integratorParams [appendIntegratorFlags [list $rho]]
+        set maxIter 1
+        set pFlag 5
+        set algo Linear
+        set linearSOE CuDSS
+        set newmarkCpu 0
+    }
+    MKRAlphaExplicitMultiSOE {
+        set integratorParams [appendIntegratorFlags [list $rho]]
+        set maxIter 1
+        set pFlag 5
+        set algo Linear
+        set linearSOE CuDSS
+        set newmarkCpu 0
+    }
     default {
         puts stderr "Unknown integrator: $integratorMethod"
-        puts stderr "Use: Newmark | NewmarkCPU | KRAlphaExplicit | CudaKRAlpha | CudaMKRAlpha"
+        puts stderr "Use: Newmark | NewmarkCPU | KRAlphaExplicit | MKRAlphaExplicit | KRAlphaExplicitMultiSOE | MKRAlphaExplicitMultiSOE | CudaKRAlpha | CudaMKRAlpha"
         exit 1
     }
 }
 
-if {$integratorMethod eq "KRAlphaExplicit" && ($useIncrementalAccel || $useAlphaCloseCheck || $useDiagonalMass)} {
-    puts stderr "WARNING two_story_MRF.tcl: -incrementalAccel/-alphaCloseCheck/-diagonalMass ignored for KRAlphaExplicit (CUDA integrators only)"
+if {$integratorMethod in {KRAlphaExplicit MKRAlphaExplicit} && ($useIncrementalAccel || $useAlphaCloseCheck || $useDiagonalMass)} {
+    puts stderr "WARNING two_story_MRF.tcl: -incrementalAccel/-alphaCloseCheck/-diagonalMass ignored for dense KRAlphaExplicit/MKRAlphaExplicit"
 }
 
 # Match Python result folder names

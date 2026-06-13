@@ -70,3 +70,9 @@ int CudaGenBcsrLinSolver::recvSelf(int commitTag, Channel &theChannel, FEM_Objec
 {
     return 0;
 }
+
+LinearSOESolver *
+CudaGenBcsrLinSolver::getCopy(void) const
+{
+    return nullptr;
+}

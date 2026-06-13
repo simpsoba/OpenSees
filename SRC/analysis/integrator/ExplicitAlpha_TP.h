@@ -7,7 +7,7 @@
 ** All Rights Reserved.                                               **
 **                                                                    **
 ** Commercial use of this program without express permission of the   **
-** University of California, Berkeley, is strictly prohibited.  See   **
+** University of California, Berkeley, is strictly prohibited.  See **
 ** file 'COPYRIGHT'  in main directory for information on usage and   **
 ** redistribution,  and for a DISCLAIMER OF ALL WARRANTIES.           **
 **                                                                    **
@@ -22,23 +22,25 @@
 // $Date$
 // $URL$
 
-#ifndef KRAlphaExplicit_h
-#define KRAlphaExplicit_h
-
 // Developed: Chinmoy Kolay (chk311@lehigh.edu)
 // Implemented: Andreas Schellenberg (andreas.schellenberg@gmail.com)
 // Created: 08/14
-// Revision: A
+// Modified: 07 May 2026, Gustavo A. Araujo R. (gaaraujor@gmail.com): generalized
+// the implementation for arbitrary alphaF, alphaM, gamma, and beta.
 //
-// Description: This file contains the class definition for KRAlphaExplicit.
-// KRAlphaExplicit is an algorithmic class for performing a transient analysis
-// using the explicit Kolay-Ricles integration scheme based on the midpoint rule.
+// Description: Transient integrator using the explicit Kolay-Ricles scheme based on
+// the trapezoidal rule, with user-supplied alphaF, alphaM, gamma, and beta
+// (KRAlphaExplicit_TP uses the rhoInf mapping from the reference).
 //
 // Reference: Kolay, C. and J. Ricles (2014). "Development of a family of
 // unconditionally stable explicit direct integration algorithms with
 // controllable numerical energy dissipation." Earthquake Engineering and
 // Structural Dynamics, 43(9):1361-1380.
 
+#ifndef ExplicitAlpha_TP_h
+#define ExplicitAlpha_TP_h
+
+#include <cmath>
 #include <TransientIntegrator.h>
 
 class DOF_Group;
@@ -46,63 +48,79 @@ class FE_Element;
 class Vector;
 class Matrix;
 
-class KRAlphaExplicit : public TransientIntegrator
+class ExplicitAlpha_TP : public TransientIntegrator
 {
 public:
-    // constructors
-    KRAlphaExplicit();
-    KRAlphaExplicit(double rhoInf,
-        bool updElemDisp = false);
-    
-    // destructor
-    ~KRAlphaExplicit();
-    
-    // method to set up the system of equations
+    ExplicitAlpha_TP();
+    ExplicitAlpha_TP(double alphaF, double alphaM, double gamma, double beta,
+                     bool incrementalAccel = false, bool useAlphaCloseCheck = false);
+
+    virtual ~ExplicitAlpha_TP();
+
     int formTangent(int statFlag);
-    
-    // methods which define what the FE_Element and DOF_Groups add
-    // to the system of equation object.
+    int formUnbalance(void);
+
     int formEleTangent(FE_Element *theEle);
     int formNodTangent(DOF_Group *theDof);
-    
-    // methods to update the domain
+    int formEleResidual(FE_Element *theEle);
+    int formNodUnbalance(DOF_Group *theDof);
+
     int domainChanged(void);
     int newStep(double deltaT);
     int revertToLastStep(void);
     int update(const Vector &aiPlusOne);
     int commit(void);
 
-    // modalDamping
-    double getCFactor(void) {return c2;}
+    double getCFactor(void) { return c2; }
 
     const Vector &getVel(void);
-    
+
     virtual int sendSelf(int commitTag, Channel &theChannel);
     virtual int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);
-    
+
     void Print(OPS_Stream &s, int flag = 0);
     int revertToStart();
 
+
 protected:
-    
-private:
+    ExplicitAlpha_TP(int classTag, double alphaF, double alphaM, double gamma, double beta,
+                     bool incrementalAccel, bool useAlphaCloseCheck);
+
     double alphaM;
     double alphaF;
     double beta;
     double gamma;
-    bool updElemDisp;  // a flag indicating if element displacements are updated during commit
+
+    /** Absolute tolerance on \f$|\alpha_M-\alpha_F|\f$ for the \c areAlphaMFClose shortcut. */
+    static constexpr double toleranceAlphaMF = 1.0e-8;
+
+    /** \c true if \c -alphaCloseCheck is set and \f$|\alpha_M-\alpha_F|\le\f$ \ref toleranceAlphaMF. */
+    bool areAlphaMFClose() const
+    {
+        return useAlphaCloseCheck && std::fabs(alphaM - alphaF) <= toleranceAlphaMF;
+    }
+
+    bool incrementalAccel;
+    /** If true, use the alpha-close shortcut when \f$|\alpha_M-\alpha_F|\le\f$ tolerance. */
+    bool useAlphaCloseCheck;
     double deltaT;
-    
-    Matrix *alpha1, *alpha3;  // integration parameter matrices, alpha2 = (0.5 + gamma)*alpha1
-    Matrix *Mhat;             // effective mass matrix for linear SOE
-    
-    int updateCount;                            // method should only have one update per step
-    int initAlphaMatrices;                      // a flag to initialize the alpha matrices
-    double c1, c2, c3;                          // some constants we need to keep
-    Vector *Ut, *Utdot, *Utdotdot;              // response quantities at time t
-    Vector *U, *Udot, *Udotdot;                 // response quantities at time t + deltaT
-    Vector *Ualpha, *Ualphadot, *Ualphadotdot;  // response quantities at time t + alpha*deltaT
-    Vector *Utdothat;                           // velocity-like vector at time t
+
+    Matrix *alpha1;
+    Matrix *alpha3;
+    Matrix *Mhat;
+
+    int updateCount;
+    int initAlphaMatrices;
+    double c1, c2, c3;
+    double residM, residD, residR, residP;
+    Vector *Ut, *Utdot, *Utdotdot;
+    Vector *U, *Udot, *Udotdot;
+    Vector *Utdothat;
+    Vector *Put;
 };
+
+void *OPS_ExplicitAlpha_TP(void);
+void *OPS_KRAlphaExplicit_TP(void);
+void *OPS_MKRAlphaExplicit_TP(void);
 
 #endif

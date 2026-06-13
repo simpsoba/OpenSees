@@ -199,6 +199,22 @@ int CudaDirectSparseSolver::setSize() {
     return 0;
 }
 
+LinearSOESolver *
+CudaDirectSparseSolver::getCopy(void) const
+{
+    return new CudaDirectSparseSolver(
+        getPrecision(),
+        m_verbose,
+        m_hybridMemoryMode,
+        m_hybridDeviceMemoryLimits,
+        m_hybridExecuteMode,
+        m_multiThreadingMode,
+        m_threadingLibPath.empty() ? nullptr : m_threadingLibPath.c_str(),
+        m_cudssMatType,
+        m_useMultiGPU,
+        m_deviceIndices);
+}
+
 int CudaDirectSparseSolver::setupMatrices() {
     if (m_matrix == nullptr) {
         opserr << "ERROR: CudaDirectSparseSolver::setupMatrices() - direct solver not initialized\n";

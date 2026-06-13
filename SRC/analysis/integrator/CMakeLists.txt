@@ -73,8 +73,10 @@ target_sources(OPS_Analysis
        HHTHSIncrReduct_TP.cpp
        Houbolt.cpp                      # krm
        HSConstraint.cpp
-       KRAlphaExplicit.cpp
-       KRAlphaExplicit_TP.cpp
+       ExplicitAlpha.cpp
+       ExplicitAlpha_TP.cpp
+       ExplicitAlphaMultiSOE.cpp
+       ExplicitAlphaMultiSOE_TP.cpp
        NewmarkExplicit.cpp              # Andreas Schellenberg
        NewmarkHSFixedNumIter.cpp        # Andreas Schellenberg
        NewmarkHSIncrLimit.cpp           # Andreas Schellenberg
@@ -119,8 +121,10 @@ target_sources(OPS_Analysis
        HHTHSIncrReduct_TP.h
        Houbolt.h
        HSConstraint.h
-       KRAlphaExplicit.h
-       KRAlphaExplicit_TP.h
+       ExplicitAlpha.h
+       ExplicitAlpha_TP.h
+       ExplicitAlphaMultiSOE.h
+       ExplicitAlphaMultiSOE_TP.h
        NewmarkExplicit.h
        NewmarkHSFixedNumIter.h
        NewmarkHSIncrLimit.h

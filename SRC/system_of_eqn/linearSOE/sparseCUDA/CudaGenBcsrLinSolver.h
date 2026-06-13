@@ -55,6 +55,7 @@ public:
     // Abstract methods that must be implemented by subclasses
     int solve(void) override = 0;
     virtual int setSize(void) override;
+    LinearSOESolver *getCopy(void) const override;
 
     // Parallel communication methods
     int sendSelf(int commitTag, Channel &theChannel) override;   
