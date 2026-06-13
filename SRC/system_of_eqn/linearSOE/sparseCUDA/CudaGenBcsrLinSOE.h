@@ -190,9 +190,9 @@ public:
     void setAValuesPrimaryLocation(DataLocation loc);
     void setAIndicesPrimaryLocation(DataLocation loc);
 
-    // When enabled (default), getX() syncs from device before returning host m_X.
-    void enableXSync(bool enable);
-    bool isXSyncEnabled(void) const;
+    // When true (default), getX() syncs from device; when false, host m_X may be stale.
+    void setXSyncMode(bool mode);
+    bool getXSyncMode(void) const;
 
     // Lazy sync: copy when stale and update primary location (implemented in *Impl).
     virtual void syncBToDevice(void) = 0;
@@ -278,7 +278,7 @@ protected:
     DataLocation m_aIndicesLoc = DataLocation::Host;
 
     // When false, getX() skips device-to-host sync; host m_X may be stale.
-    bool m_xSyncEnabled = true;
+    bool m_xSyncMode = true;
 
     // Set size helper methods
     int buildStandardCSR(Graph &theGraph);

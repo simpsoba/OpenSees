@@ -737,19 +737,19 @@ void CudaGenBcsrLinSOE::setX(const Vector &x)
     setXPrimaryLocation(DataLocation::Host);
 }
 
-void CudaGenBcsrLinSOE::enableXSync(bool enable)
+void CudaGenBcsrLinSOE::setXSyncMode(bool mode)
 {
-    m_xSyncEnabled = enable;
+    m_xSyncMode = mode;
 }
 
-bool CudaGenBcsrLinSOE::isXSyncEnabled(void) const
+bool CudaGenBcsrLinSOE::getXSyncMode(void) const
 {
-    return m_xSyncEnabled;
+    return m_xSyncMode;
 }
 
 const Vector & CudaGenBcsrLinSOE::getX(void)
 {
-    if (m_xSyncEnabled) {
+    if (m_xSyncMode) {
         syncXToHost();
     }
     return m_X;

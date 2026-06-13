@@ -789,29 +789,12 @@ CudaExplicitAlpha::CudaExplicitAlpha(int classTag, double _alphaF, double _alpha
 {
 }
 
-void CudaExplicitAlpha::pauseXSync(CudaGenBcsrLinSOE *cudaSOE)
-{
-    if (cudaSOE == nullptr) {
-        return;
-    }
-    if (m_pauseXSyncSOE != nullptr && m_pauseXSyncSOE != cudaSOE) {
-        m_pauseXSyncSOE->enableXSync(true);
-    }
-    cudaSOE->enableXSync(false);
-    m_pauseXSyncSOE = cudaSOE;
-}
-
-void CudaExplicitAlpha::resumeXSync(void)
-{
-    if (m_pauseXSyncSOE != nullptr) {
-        m_pauseXSyncSOE->enableXSync(true);
-        m_pauseXSyncSOE = nullptr;
-    }
-}
-
 CudaExplicitAlpha::~CudaExplicitAlpha()
 {
-    resumeXSync();
+    CudaGenBcsrLinSOE *cudaSOE = nullptr;
+    if (validateCudaSOE(cudaSOE) == 0) {
+        cudaSOE->setXSyncMode(true);
+    }
     destroyDeviceImpl();
     delete Ut;
     delete Utdot;
@@ -907,7 +890,7 @@ int CudaExplicitAlpha::domainChanged()
     }
 
     ensureDeviceImpl(cudaSOE);
-    pauseXSync(cudaSOE);
+    cudaSOE->setXSyncMode(false);
 
     m_impl->destroySolvers();
     m_impl->allocate(size, areAlphaMFClose() ? 1 : 2);
@@ -961,7 +944,7 @@ int CudaExplicitAlpha::newStep(double _deltaT)
         return -3;
     }
     ensureDeviceImpl(cudaSOE);
-    pauseXSync(cudaSOE);
+    cudaSOE->setXSyncMode(false);
 
     *Ut = *U;
     *Utdot = *Udot;
@@ -1043,7 +1026,10 @@ int CudaExplicitAlpha::commit()
 
 int CudaExplicitAlpha::revertToLastStep()
 {
-    resumeXSync();
+    CudaGenBcsrLinSOE *cudaSOE = nullptr;
+    if (validateCudaSOE(cudaSOE) == 0) {
+        cudaSOE->setXSyncMode(true);
+    }
     if (U->Size() > 0) {
         *U = *Ut;
         *Udot = *Utdot;
@@ -1100,7 +1086,10 @@ void CudaExplicitAlpha::Print(OPS_Stream &s, int flag)
 
 int CudaExplicitAlpha::revertToStart()
 {
-    resumeXSync();
+    CudaGenBcsrLinSOE *cudaSOE = nullptr;
+    if (validateCudaSOE(cudaSOE) == 0) {
+        cudaSOE->setXSyncMode(true);
+    }
     if (U->Size() > 0) {
         Ut->Zero();
         Utdot->Zero();

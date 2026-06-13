@@ -352,8 +352,8 @@ proc runDynamicAnalysis {} {
     global integratorMethod integratorParams maxIter pFlag algo linearSOE
     global outputFolder MONITOR_NODES MONITOR_DOFS sec
 
-    set record [file rootname $gmFile]
-    set gmDat ${record}.dat
+    file mkdir $outputFolder
+    set gmDat [file join $outputFolder gm.dat]
     source [file join $scriptDir .. .. verification ReadRecord.tcl]
     ReadRecord $gmFile $gmDat dtFile nPts
 
@@ -368,8 +368,6 @@ proc runDynamicAnalysis {} {
     algorithm $algo
     eval integrator $integratorMethod {*}$integratorParams
     analysis Transient
-
-    file mkdir $outputFolder
 
     set resultsPath [file join $outputFolder results.txt]
     set resultsFd [open $resultsPath a+]

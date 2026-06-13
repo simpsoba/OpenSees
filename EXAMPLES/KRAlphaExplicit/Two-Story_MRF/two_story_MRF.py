@@ -463,11 +463,13 @@ def _load_path_series_values(path: str) -> list[float]:
 def _default_system(integrator_method: str) -> str:
     if integrator_method.startswith("Cuda") or integrator_method == "Newmark":
         return "CuDSS"
+    if "MultiSOE" in integrator_method:
+        return "CuDSS"
     return "FullGeneral"
 
 
 def _set_transient_linear_system(integrator_method: str, system: str | None = None) -> None:
-    """GPU SOE (CuDSS) for Newmark reference and Cuda* explicit integrators; CPU FullGeneral for KRAlpha."""
+    """CuDSS for Newmark, Cuda*, and *MultiSOE*; FullGeneral for dense KRAlpha."""
     if system is not None:
         ops.system(system)
         return
@@ -500,10 +502,14 @@ def run_dynamic_analysis(
         integrator = {'method': 'Newmark', 
                       'params': [0.5, 0.25], 
                       'maxIter': 10}
+
+    output_folder = _result_folder(integrator)
+    os.makedirs(output_folder, exist_ok=True)
+
     # Ground motion input:
     # - If gm_file is numeric-only (no PEER header), do NOT call ReadRecord on it, otherwise
     #   it can overwrite/truncate the original file (inFilename == outFilename case).
-    # - If gm_file has a PEER header, ReadRecord will generate a plain numeric "*.dat" file.
+    # - Each analysis writes its own gm.dat under output_folder (safe for parallel runs).
     if dt_gm is not None:
         gm_path_for_opensees = gm_file
         dt_file = float(dt_gm)
@@ -513,10 +519,9 @@ def run_dynamic_analysis(
         except Exception:
             nPts = 0
     else:
-        record = os.path.splitext(gm_file)[0]
-        out_dat = record + ".dat"
-        dt_file, nPts = ReadRecord.ReadRecord(gm_file, out_dat)
-        gm_path_for_opensees = out_dat
+        gm_dat = os.path.join(output_folder, "gm.dat")
+        dt_file, nPts = ReadRecord.ReadRecord(gm_file, gm_dat)
+        gm_path_for_opensees = gm_dat
 
     # Set time series and uniform excitation pattern (KRAlphaSparse: -filePath)
     ops.timeSeries("Path", 2, "-filePath", gm_path_for_opensees, "-dt", dt_file, "-factor", gravity)
@@ -537,10 +542,6 @@ def run_dynamic_analysis(
     ops.analysis('Transient')
     
     # Setup recorders of interest
-    
-    # Output folder
-    output_folder = _result_folder(integrator)
-    os.makedirs(output_folder, exist_ok=True)
     
     # General log file and OpenSees log file
     results = open(f'{output_folder}/results.txt','a+')
