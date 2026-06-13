@@ -1,32 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-Run the Two-Story MRF integrator matrix, then plot with Python.
-
-Analyses run in separate subprocesses (Tcl OpenSees or OpenSeesPy) so a crash in
-one case does not block plotting the others. Prefer ``--engine tcl`` to avoid the
-known Python teardown segfault in the local ``opensees.so``.
-
-Each CUDA/CPU KR family also runs with ``-incrementalAccel``; at rho=1.0 add
-``-alphaCloseCheck`` (and both flags together), matching the KRAlphaSparse layout.
-``-incrementalAccel`` and ``-alphaCloseCheck`` apply to **CudaKRAlpha / CudaMKRAlpha /
-KRAlphaExplicitMultiSOE / MKRAlphaExplicitMultiSOE**; dense CPU ``KRAlphaExplicit`` /
-``MKRAlphaExplicit`` are always the standard (total-form) case.
-
-Usage:
-  python3 run_integrators.py                    # Tcl, rhos 1.0 and 0.5
-  python3 run_integrators.py --engine python    # OpenSeesPy via run_one_integrator.py
-  python3 run_integrators.py --engine tcl        # explicit Tcl (default)
-  python3 run_integrators.py 0.75
-  python3 run_integrators.py --append 1.0
-  python3 run_integrators.py --plots-only
-  python3 run_integrators.py --no-incremental
-  python3 run_integrators.py --jobs auto
-
-Environment:
-  OPENSEES   path to OpenSees executable (Tcl; default: ../../../build/Release/OpenSees)
-  PYTHON     Python executable for --engine python (default: python3)
-  PYTHONPATH prepended with build/Release and EXAMPLES/KRAlphaExplicit for Python runs
-"""
+"""Shared integrator-matrix runner for 1-D shear-frame examples (ops-cuda layout)."""
 
 from __future__ import annotations
 
@@ -37,25 +10,15 @@ import subprocess
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
-Engine = Literal["tcl", "python"]
 RunSpec = Tuple[str, str, List[Union[float, str]], Optional[str]]
 
 DEFAULT_RHOS: List[float] = [1.0, 0.5]
-DEFAULT_SCALE = 3.0
-DEFAULT_ENGINE: Engine = "tcl"
 
 
 def _repo_root(here: Path) -> Path:
     return (here / ".." / ".." / "..").resolve()
-
-
-def _default_opensees(here: Path) -> Path:
-    env = os.environ.get("OPENSEES")
-    if env:
-        return Path(env)
-    return _repo_root(here) / "build" / "Release" / "OpenSees"
 
 
 def _python_env(here: Path) -> dict[str, str]:
@@ -67,42 +30,6 @@ def _python_env(here: Path) -> dict[str, str]:
         prepend.append(existing)
     env["PYTHONPATH"] = os.pathsep.join(prepend)
     return env
-
-
-def _tcl_method_and_args(
-    ops_method: str, params: List[Union[float, str]], scale: float, system: Optional[str]
-) -> List[str]:
-    if ops_method == "Newmark" and system == "FullGeneral":
-        return ["NewmarkCPU"]
-    if ops_method == "Newmark":
-        return ["Newmark"]
-
-    if not params:
-        raise ValueError(f"integrator {ops_method} requires params")
-
-    args: List[str] = [ops_method, str(params[0]), str(scale)]
-    for tok in params[1:]:
-        if isinstance(tok, str):
-            if not tok.startswith("-"):
-                raise ValueError(f"unexpected integrator flag token: {tok!r}")
-            args.append(tok)
-        else:
-            raise ValueError(f"unexpected integrator param after rho: {tok!r}")
-    return args
-
-
-def _run_tcl(
-    opensees: Path,
-    here: Path,
-    method: str,
-    params: List[Union[float, str]],
-    scale: float,
-    system: Optional[str],
-) -> int:
-    tcl_script = here / "two_story_MRF.tcl"
-    cmd = [str(opensees), str(tcl_script), *_tcl_method_and_args(method, params, scale, system)]
-    print(" ".join(cmd), flush=True)
-    return subprocess.run(cmd, cwd=here).returncode
 
 
 def _run_python(
@@ -138,44 +65,19 @@ def _run_python(
     if system is not None:
         cmd += ["--system", system]
     print(" ".join(cmd), flush=True)
-    return subprocess.run(cmd, cwd=here, env=_python_env(here)).returncode
+    return subprocess.run(cmd, cwd=str(here), env=_python_env(here)).returncode
 
 
 RunTask = Tuple[
-    str,  # label
-    Engine,
-    Path,  # here
-    str,  # method
-    List[Union[float, str]],
-    float,  # scale
-    Optional[str],  # system
-    Path,  # gm_file
-    float,  # dt_analysis
-    Optional[Path],  # opensees (tcl)
-    str,  # python executable
+    str, str, Path, str, List[Union[float, str]], int, float, float, Path, Optional[int], Optional[str]
 ]
 
 
 def _run_task(task: RunTask) -> Tuple[str, int]:
-    (
-        label,
-        engine,
-        here,
-        method,
-        params,
-        scale,
-        system,
-        gm_file,
-        dt_analysis,
-        opensees,
-        py,
-    ) = task
-    max_iter = 25 if method == "Newmark" else 1
-    pflag = 0 if method == "Newmark" else 5
-    if engine == "tcl":
-        rc = _run_tcl(opensees, here, method, params, scale, system)
-    else:
-        rc = _run_python(py, here, method, params, max_iter, dt_analysis, scale, gm_file, pflag, system)
+    label, py, here, method, params, max_iter, dt_analysis, scale, gm_file, pflag, system = task
+    rc = _run_python(
+        py, here, method, params, max_iter, dt_analysis, scale, gm_file, pflag, system
+    )
     return label, rc
 
 
@@ -223,7 +125,7 @@ def _multisoe_runs(
     ]
 
 
-def _build_runs(rhos: List[float], *, include_incremental: bool = True) -> List[RunSpec]:
+def build_runs(rhos: List[float], *, include_incremental: bool = True) -> List[RunSpec]:
     runs: List[RunSpec] = [
         ("Newmark (CuDSS)", "Newmark", [0.5, 0.25], None),
         ("Newmark (CPU)", "Newmark", [0.5, 0.25], "FullGeneral"),
@@ -250,32 +152,8 @@ def _build_runs(rhos: List[float], *, include_incremental: bool = True) -> List[
 
 
 _SKIP_ARGS = frozenset(
-    (
-        "--plots-only",
-        "--append",
-        "--jobs",
-        "-j",
-        "--no-incremental",
-        "--engine",
-        "--tcl",
-        "--python",
-    )
+    ("--plots-only", "--append", "--jobs", "-j", "--no-incremental")
 )
-
-
-def _parse_engine(argv: List[str]) -> Engine:
-    if "--python" in argv:
-        return "python"
-    if "--tcl" in argv:
-        return "tcl"
-    for i, arg in enumerate(argv):
-        if arg == "--engine" and i + 1 < len(argv):
-            val = argv[i + 1].lower()
-            if val in ("tcl", "python"):
-                return val  # type: ignore[return-value]
-            print(f"ERROR: unknown --engine {argv[i + 1]!r} (want tcl or python)", file=sys.stderr)
-            raise SystemExit(2)
-    return DEFAULT_ENGINE
 
 
 def _parse_rho_args(argv: List[str]) -> List[float]:
@@ -284,7 +162,7 @@ def _parse_rho_args(argv: List[str]) -> List[float]:
     while i < len(argv):
         arg = argv[i]
         if arg in _SKIP_ARGS:
-            i += 2 if arg in ("--jobs", "-j", "--engine") else 1
+            i += 2 if arg in ("--jobs", "-j") else 1
             continue
         try:
             rhos.append(float(arg))
@@ -304,7 +182,7 @@ def _parse_jobs(argv: List[str]) -> int:
     return 1
 
 
-def _run_all_tasks(tasks: List[RunTask], jobs: int, engine: Engine) -> None:
+def _run_all_tasks(tasks: List[RunTask], jobs: int) -> None:
     if jobs <= 1 or len(tasks) <= 1:
         for task in tasks:
             label, rc = _run_task(task)
@@ -312,7 +190,7 @@ def _run_all_tasks(tasks: List[RunTask], jobs: int, engine: Engine) -> None:
                 print(f"WARNING: {label} failed (exit code {rc})", flush=True)
         return
 
-    print(f"Running {len(tasks)} {engine} analyses with {jobs} workers", flush=True)
+    print(f"Running {len(tasks)} shear analyses with {jobs} workers", flush=True)
     with ProcessPoolExecutor(max_workers=jobs) as pool:
         futures = {pool.submit(_run_task, task): task[0] for task in tasks}
         for fut in as_completed(futures):
@@ -326,31 +204,36 @@ def _run_all_tasks(tasks: List[RunTask], jobs: int, engine: Engine) -> None:
                 print(f"WARNING: {label} failed (exit code {rc})", flush=True)
 
 
-def main() -> None:
-    here = Path(__file__).resolve().parent
+def main(here: Path) -> None:
     os.chdir(here)
     argv = sys.argv[1:]
 
     plots_only = "--plots-only" in argv
     append = "--append" in argv
     jobs = _parse_jobs(argv)
-    engine = _parse_engine(argv)
     only_rhos = _parse_rho_args(argv)
     include_incremental = "--no-incremental" not in argv
     rhos = only_rhos if only_rhos else DEFAULT_RHOS
-    runs = _build_runs(rhos, include_incremental=include_incremental)
+    runs = build_runs(rhos, include_incremental=include_incremental)
 
     if not plots_only:
-        from plot_config import DT_ANALYSIS
+        import importlib.util
 
-        gm_file = here / "ground_motions" / "RSN960_NORTHR_LOS270.AT2"
-        py = os.environ.get("PYTHON", "python3")
-        opensees = _default_opensees(here)
+        cfg_path = here / "plot_config.py"
+        spec = importlib.util.spec_from_file_location("plot_config", cfg_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot load {cfg_path}")
+        cfg = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cfg)
 
-        if engine == "tcl" and not opensees.is_file():
-            print(f"ERROR: OpenSees executable not found: {opensees}", file=sys.stderr)
-            print("Set OPENSEES or build build/Release/OpenSees", file=sys.stderr)
+        gm_file = here / "tabasFN.txt"
+        if not gm_file.is_file():
+            print(f"ERROR: ground motion not found: {gm_file}", file=sys.stderr)
             raise SystemExit(2)
+
+        py = os.environ.get("PYTHON", "python3")
+        dt_analysis = float(getattr(cfg, "DT_ANALYSIS", 0.02))
+        gm_scale = float(getattr(cfg, "GM_SCALE", 9.81))
 
         if not append:
             for sub in ("results", "figures"):
@@ -359,25 +242,26 @@ def main() -> None:
                     shutil.rmtree(d)
                     print(f"Removed {d}")
 
-        print(f"Analysis engine: {engine}", flush=True)
         tasks: List[RunTask] = []
         for label, ops_method, params, system in runs:
+            max_iter = 25 if ops_method == "Newmark" else 1
+            pflag = 0 if ops_method == "Newmark" else 5
             tasks.append(
                 (
                     label,
-                    engine,
+                    py,
                     here,
                     ops_method,
                     params,
-                    DEFAULT_SCALE,
-                    system,
+                    max_iter,
+                    dt_analysis,
+                    gm_scale,
                     gm_file,
-                    float(DT_ANALYSIS),
-                    opensees,
-                    py,
+                    pflag,
+                    system,
                 )
             )
-        _run_all_tasks(tasks, jobs, engine)
+        _run_all_tasks(tasks, jobs)
 
     sys.path.insert(0, str(here.parent))
     from plotResults import run as plot_results
@@ -389,7 +273,3 @@ def main() -> None:
     from collect_timing import write_timing_summary
 
     write_timing_summary(here)
-
-
-if __name__ == "__main__":
-    main()

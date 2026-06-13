@@ -22,6 +22,7 @@ Reference:
 # Modules
 import os
 import sys
+import time
 from datetime import datetime
 
 # Prefer locally built OpenSees Python module (build/Release/opensees.so).
@@ -35,6 +36,8 @@ import numpy as np
 import ReadRecord
 
 from plot_config import DT_ANALYSIS, FREE_VIBRATION_SECONDS
+
+from analysis_utils import write_timing
 
 # Optional plotting/post-processing dependencies (not required for running the analysis)
 try:
@@ -249,7 +252,7 @@ def create_model(apply_gravity=True, plot_model=True):
         n_steps = 10
         ops.wipeAnalysis()
         ops.constraints('Transformation')
-        ops.numberer('RCM')
+        ops.numberer('Plain')
         ops.system('FullGeneral')
         ops.test('NormDispIncr', 1.0e-6, 10)
         ops.algorithm('KrylovNewton')
@@ -531,7 +534,7 @@ def run_dynamic_analysis(
     ops.wipeAnalysis()
     _set_transient_linear_system(integrator["method"], integrator.get("system"))
     ops.constraints('Transformation')
-    ops.numberer('RCM')
+    ops.numberer('Plain')
     # OpenSees 'test' print flag: 0 for Newmark; verbose (5) for 1-iter explicit runs
     pFlag = integrator.get("pFlag", _default_pflag(integrator))
     test_args = _integrator_ops_test_args(integrator, pFlag)
@@ -671,6 +674,7 @@ def run_dynamic_analysis(
         iters_per_step.append(nit)
         tol_per_step.append(fnorm)
 
+    t_wall0 = time.perf_counter()
     while ok == 0 and step < n_steps:
         ok = ops.analyze(1, dt_analysis)
         # if the analysis fails try initial tangent iteration
@@ -685,6 +689,8 @@ def run_dynamic_analysis(
                 ops.algorithm(algo)
         _record_convergence_step()
         step += 1
+
+    write_timing(output_folder, time.perf_counter() - t_wall0)
 
     if time_per_step:
         conv = np.column_stack(

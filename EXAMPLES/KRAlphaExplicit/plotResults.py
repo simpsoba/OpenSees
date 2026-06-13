@@ -423,8 +423,7 @@ def plot_style(tag: str) -> Tuple[str, str, float, int]:
     if "MultiSOE" in tag:
         return "--", COLOR_MULTISOE, 0.55, 2
     if tag.startswith("Cuda"):
-        ls = ":" if is_diagonal_mass_tag(tag) else "--"
-        return ls, COLOR_CUDA, 0.55, 1
+        return ":", COLOR_CUDA, 0.55, 1
     if tag.startswith("KRAlphaExplicit") or tag.startswith("MKRAlphaExplicit"):
         return "-.", COLOR_EXPLICIT, 0.55, 2
     return "-.", COLOR_EXPLICIT, 0.55, 2

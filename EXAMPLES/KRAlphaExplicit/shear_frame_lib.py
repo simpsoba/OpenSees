@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime
 from typing import Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
+
+from analysis_utils import write_timing
 
 GRAVITY = 9.80665
 
@@ -214,21 +217,42 @@ def _integrator_ops_test_args(integrator, pFlag):
 
 
 def _integrator_call_params(integrator: dict) -> list:
-    params = list(integrator["params"])
-    if "MultiSOE" in integrator["method"]:
-        ws = ("UmfPack",)
-        params.extend([
-            "Begin_Mass_System", *ws, "End_Mass_System",
-            "Begin_Alpha_System", *ws, "End_Alpha_System",
-        ])
-    return params
+    return list(integrator["params"])
 
 
-def _set_transient_linear_system(integrator_method: str, ops) -> None:
+def _default_system(integrator_method: str) -> str:
+    if integrator_method.startswith("Cuda") or integrator_method == "Newmark":
+        return "CuDSS"
     if "MultiSOE" in integrator_method:
-        ops.system("UmfPack")
-    else:
-        ops.system("FullGeneral")
+        return "CuDSS"
+    return "FullGeneral"
+
+
+def _result_folder(integrator: dict) -> str:
+    method = integrator["method"]
+    params = integrator["params"]
+    system = integrator.get("system")
+    if system is not None and not (method == "Newmark" and system == "CuDSS"):
+        return f"results/{method}_{system}_params-{params!s}"
+    return f"results/{method}_params-{params!s}"
+
+
+def _set_transient_linear_system(
+    integrator_method: str, ops, system: Optional[str] = None
+) -> None:
+    if system is not None:
+        ops.system(system)
+        return
+    ops.system(_default_system(integrator_method))
+
+
+def _stage_gm_for_run(gm_source: str, output_folder: str) -> str:
+    """Per-run GM copy so parallel Path timeSeries reads do not race."""
+    import shutil
+
+    gm_dat = os.path.join(output_folder, "gm.dat")
+    shutil.copy2(gm_source, gm_dat)
+    return gm_dat
 
 
 def count_gm_lines(gm_path: str) -> int:
@@ -249,7 +273,7 @@ def run_dynamic_analysis(
     integrator: dict,
     pattern_tag: int = 2,
     ts_tag: int = 2,
-) -> None:
+) -> int:
     """Transient analysis with path GM; removes uniform excitation after GM duration."""
     if integrator is None:
         integrator = {"method": "Newmark", "params": [0.5, 0.25], "maxIter": 10}
@@ -259,8 +283,12 @@ def run_dynamic_analysis(
     free_steps = int(round(free_vibration_seconds / dt_analysis))
     n_steps = motion_steps + free_steps
 
+    output_folder = _result_folder(integrator)
+    os.makedirs(output_folder, exist_ok=True)
+    gm_path = _stage_gm_for_run(gm_file, output_folder)
+
     ops.wipeAnalysis()
-    _set_transient_linear_system(integrator["method"], ops)
+    _set_transient_linear_system(integrator["method"], ops, integrator.get("system"))
     ops.constraints("Plain")
     ops.numberer("Plain")
     pFlag = integrator.get("pFlag", _default_pflag(integrator))
@@ -270,20 +298,22 @@ def run_dynamic_analysis(
     ops.integrator(integrator["method"], *_integrator_call_params(integrator))
     ops.analysis("Transient")
 
-    ops.timeSeries("Path", ts_tag, "-filePath", gm_file, "-dt", gm_dt, "-factor", GRAVITY)
-    ops.pattern("UniformExcitation", pattern_tag, monitor_dof, "-accel", ts_tag, "-fact", gm_scale)
-
-    output_folder = f"results/{integrator['method']}_params-{str(integrator['params'])}"
-    os.makedirs(output_folder, exist_ok=True)
+    ops.timeSeries(
+        "Path", ts_tag, "-filePath", gm_path, "-dt", gm_dt, "-factor", GRAVITY
+    )
+    ops.pattern(
+        "UniformExcitation", pattern_tag, monitor_dof, "-accel", ts_tag, "-fact", gm_scale
+    )
 
     results = open(f"{output_folder}/results.txt", "a+")
     ops.logFile(f"{output_folder}/OpenSees.log", "-noEcho")
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     results.write(f"{current_time} - Analysis STARTED.\n")
     results.write(
-        f"{current_time} - GM {os.path.basename(gm_file)} (dt={gm_dt} s, npts={n_pts}), "
+        f"{current_time} - GM {os.path.basename(gm_path)} (dt={gm_dt} s, npts={n_pts}), "
         f"dt_analysis={dt_analysis} s, motion_steps={motion_steps}, free_steps={free_steps}, "
-        f"gm_scale={gm_scale}.\n"
+        f"gm_scale={gm_scale}; system {integrator.get('system') or _default_system(integrator['method'])}; "
+        f"integrator {integrator['method']} {integrator['params']}.\n"
     )
     results.close()
 
@@ -306,6 +336,7 @@ def run_dynamic_analysis(
     time_per_step: List[float] = []
     iters_per_step: List[int] = []
     tol_per_step: List[float] = []
+    t_wall0 = time.perf_counter()
 
     def _record_convergence_step() -> None:
         try:
@@ -337,6 +368,8 @@ def run_dynamic_analysis(
         _record_convergence_step()
         step += 1
 
+    write_timing(output_folder, time.perf_counter() - t_wall0)
+
     if time_per_step:
         conv = np.column_stack(
             [np.asarray(time_per_step), np.asarray(iters_per_step), np.asarray(tol_per_step)]
@@ -358,3 +391,5 @@ def run_dynamic_analysis(
         print("Failed!")
     results.close()
     ops.remove("recorders")
+    print(output_folder)
+    return 0 if ok == 0 else 1

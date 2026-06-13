@@ -311,7 +311,7 @@ proc buildModel {} {
 
     wipeAnalysis
     constraints Transformation
-    numberer RCM
+    numberer Plain
     system FullGeneral
     test NormDispIncr 1.0e-6 10
     algorithm KrylovNewton
@@ -363,7 +363,7 @@ proc runDynamicAnalysis {} {
     wipeAnalysis
     system $linearSOE
     constraints Transformation
-    numberer RCM
+    numberer Plain
     test NormUnbalance 1.0e-8 $maxIter $pFlag
     algorithm $algo
     eval integrator $integratorMethod {*}$integratorParams
@@ -399,6 +399,7 @@ proc runDynamicAnalysis {} {
 
     set ok 0
     set step 0
+    set tWall0 [clock milliseconds]
     set convPath [file join $outputFolder convergence.dat]
     set convFd [open $convPath w]
     puts $convFd "# time iters final_norm"
@@ -425,13 +426,24 @@ proc runDynamicAnalysis {} {
     }
     close $convFd
 
+    set wallTime [expr {([clock milliseconds] - $tWall0) / 1000.0}]
+    set timingPath [file join $outputFolder timing.txt]
+    set timingFd [open $timingPath w]
+    set currentTime [clock format [clock seconds] -format {%Y-%m-%d %H:%M:%S}]
+    puts $timingFd "# $currentTime"
+    puts $timingFd "label transient"
+    puts $timingFd "wall_time_s $wallTime"
+    close $timingFd
+
     set resultsFd [open $resultsPath a+]
     set currentTime [clock format [clock seconds] -format {%Y-%m-%d %H:%M:%S}]
     if {$ok == 0} {
         puts $resultsFd "$currentTime - Analysis COMPLETED successfully."
+        puts $resultsFd "$currentTime - transient wall time: $wallTime s"
         puts "Passed!"
     } else {
         puts $resultsFd "$currentTime - Analysis FAILED at time t = [getTime] s"
+        puts $resultsFd "$currentTime - transient wall time: $wallTime s"
         puts "Failed!"
     }
     close $resultsFd
