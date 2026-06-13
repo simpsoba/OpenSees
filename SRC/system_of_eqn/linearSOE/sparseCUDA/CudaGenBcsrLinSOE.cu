@@ -410,6 +410,11 @@ int CudaGenBcsrLinSOE::setSize(Graph &theGraph)
     // Update matrix status
     m_matrixStatus = MatrixStatus::STRUCTURE_CHANGED;
 
+    // Reset host/device authority after structural rebuild
+    setBPrimaryLocation(DataLocation::Host);
+    setXPrimaryLocation(DataLocation::Host);
+    setAValuesPrimaryLocation(DataLocation::Host);
+    setAIndicesPrimaryLocation(DataLocation::Host);
 
     // Get the solver
     LinearSOESolver *the_Solver = this->getSolver();
@@ -511,6 +516,10 @@ int CudaGenBcsrLinSOE::addA(const Matrix &m, const ID &id, double fact)
         return 0;
     }
 
+    if (m_aLoc == DataLocation::Device) {
+        syncAValuesToHost();
+    }
+
     const int idSize = id.Size();
 
     // Check that m and id are of similar size
@@ -578,6 +587,7 @@ int CudaGenBcsrLinSOE::addA(const Matrix &m, const ID &id, double fact)
     if (m_matrixStatus == MatrixStatus::UNCHANGED) {
         m_matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;
     }
+    setAValuesPrimaryLocation(DataLocation::Host);
 
     return 0;
 }
@@ -608,6 +618,10 @@ int CudaGenBcsrLinSOE::addB(const Vector &v, const ID &id, double fact)
     // Check for a quick return
     if (fact == 0.0) {
         return 0;
+    }
+
+    if (m_bLoc == DataLocation::Device) {
+        syncBToHost();
     }
 
     const int idSize = id.Size();
@@ -643,6 +657,7 @@ int CudaGenBcsrLinSOE::addB(const Vector &v, const ID &id, double fact)
         }
     }
 
+    setBPrimaryLocation(DataLocation::Host);
     return 0;
 }
 
@@ -676,6 +691,7 @@ int CudaGenBcsrLinSOE::setB(const Vector &v, double fact)
         }
     }
 
+    setBPrimaryLocation(DataLocation::Host);
     return 0;
 }
 
@@ -689,6 +705,7 @@ void CudaGenBcsrLinSOE::zeroA(void)
     if (m_matrixStatus == MatrixStatus::UNCHANGED) {
         m_matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;
     }
+    setAValuesPrimaryLocation(DataLocation::Host);
 }
 
 void CudaGenBcsrLinSOE::zeroB(void)
@@ -696,12 +713,14 @@ void CudaGenBcsrLinSOE::zeroB(void)
     for (size_t i = 0; i < m_hostB.size(); i++) {
         m_hostB[i] = 0.0;
     }
+    setBPrimaryLocation(DataLocation::Host);
 }
 
 void CudaGenBcsrLinSOE::setX(int loc, double value)
 {
     if (isValidGlobalIndex(loc)) {
         m_X(loc) = value;
+        setXPrimaryLocation(DataLocation::Host);
     }
 }
 
@@ -715,20 +734,36 @@ void CudaGenBcsrLinSOE::setX(const Vector &x)
     }
 
     m_X = x;
+    setXPrimaryLocation(DataLocation::Host);
+}
+
+void CudaGenBcsrLinSOE::enableXSync(bool enable)
+{
+    m_xSyncEnabled = enable;
+}
+
+bool CudaGenBcsrLinSOE::isXSyncEnabled(void) const
+{
+    return m_xSyncEnabled;
 }
 
 const Vector & CudaGenBcsrLinSOE::getX(void)
 {
+    if (m_xSyncEnabled) {
+        syncXToHost();
+    }
     return m_X;
 }   
 
 const Vector & CudaGenBcsrLinSOE::getB(void)
 {
+    syncBToHost();
     return m_B;
 }
 
 double CudaGenBcsrLinSOE::normRHS(void)
 {
+    syncBToHost();
     return m_B.Norm();
 }
 
@@ -795,14 +830,15 @@ int CudaGenBcsrLinSOE::solve(void)
                    << "Failed to fill padded diagonals" << endln;
             return -1;
         }
+        setAValuesPrimaryLocation(DataLocation::Host);
     }
 
-    uploadVectorsToDevice();
+    syncBToDevice();
     if (m_matrixStatus == MatrixStatus::STRUCTURE_CHANGED) {
-        uploadAValuesToDevice();
-        uploadAIndicesToDevice();
+        syncIndicesToDevice();
+        syncAValuesToDevice();
     } else if (m_matrixStatus == MatrixStatus::COEFFICIENTS_CHANGED) {
-        uploadAValuesToDevice();
+        syncAValuesToDevice();
     } else { /* pass */ }
     
     // Get the cuda solver
@@ -815,10 +851,9 @@ int CudaGenBcsrLinSOE::solve(void)
         // Update matrix status for future solves
         if (solverOk == 0) {
             m_matrixStatus = MatrixStatus::UNCHANGED;
+            setXPrimaryLocation(DataLocation::Device);
         }
 
-        // Copy solution back to host
-        downloadSolutionFromDevice();
         return solverOk;
     } else {
         opserr << "WARNING: CudaGenBcsrLinSOE::solve() - "
@@ -834,6 +869,8 @@ int CudaGenBcsrLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
                << "Matrix data is empty" << endln;
         return 0;
     }
+
+    syncAValuesToHost();
 
     // Pad matrix before printing
     if (m_matrixStatus != MatrixStatus::UNCHANGED && m_paddingEnabled) {
@@ -980,6 +1017,28 @@ CudaGenBcsrLinSOE::MatrixStatus CudaGenBcsrLinSOE::getMatrixStatus(void) const
     return m_matrixStatus;
 }
 
+// set*PrimaryLocation: declare authority after an in-place write.
+// Prefer Host or Device; Both is reserved for sync* after a transfer.
+void CudaGenBcsrLinSOE::setBPrimaryLocation(DataLocation loc)
+{
+    m_bLoc = loc;
+}
+
+void CudaGenBcsrLinSOE::setXPrimaryLocation(DataLocation loc)
+{
+    m_xLoc = loc;
+}
+
+void CudaGenBcsrLinSOE::setAValuesPrimaryLocation(DataLocation loc)
+{
+    m_aLoc = loc;
+}
+
+void CudaGenBcsrLinSOE::setAIndicesPrimaryLocation(DataLocation loc)
+{
+    m_aIndicesLoc = loc;
+}
+
 bool CudaGenBcsrLinSOE::isMatrixEmpty(void) const
 {
     return m_hostAValues.size() == 0 || m_hostCsrIndices.size() <= 1;
@@ -1006,7 +1065,7 @@ CudaGenBcsrLinSOE::ensureSpMVOperator(void)
     }
 
     ensureDeviceVectorSizes();
-    uploadAIndicesToDevice();
+    syncIndicesToDevice();
 
     const int *rowPtrs = getDeviceRowPtrs();
     const int *colIndices = getDeviceColIndices();
@@ -1049,16 +1108,13 @@ CudaGenBcsrLinSOE::formAp(const Vector &p, Vector &Ap)
         return -1;
     }
 
-    for (int i = 0; i < n; ++i) {
-        m_hostB[static_cast<size_t>(i)] = p(i);
-    }
-
-    uploadVectorsToDevice();
-    uploadAValuesToDevice();
+    ensureSpmvScratchSizes();
+    syncAValuesToDevice();
+    uploadSpmvPFromHost(p, n);
 
     void *deviceA = getDeviceAValues();
-    void *deviceP = getDeviceB();
-    void *deviceAp = getDeviceX();
+    void *deviceP = getDeviceSpmvP();
+    void *deviceAp = getDeviceSpmvY();
     if (deviceA == nullptr || deviceP == nullptr || deviceAp == nullptr) {
         opserr << "WARNING: CudaGenBcsrLinSOE::formAp() - null device pointer(s)\n";
         return -1;
@@ -1072,10 +1128,7 @@ CudaGenBcsrLinSOE::formAp(const Vector &p, Vector &Ap)
         return -1;
     }
 
-    downloadSolutionFromDevice();
-    for (int i = 0; i < n; ++i) {
-        Ap(i) = m_hostX[static_cast<size_t>(i)];
-    }
+    downloadSpmvYToHost(Ap, n);
     return 0;
 }
 

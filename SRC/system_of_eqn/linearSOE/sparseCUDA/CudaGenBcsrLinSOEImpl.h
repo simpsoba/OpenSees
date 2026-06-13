@@ -45,10 +45,7 @@
 // Thrust includes
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
-#include <thrust/transform.h>
-#include <thrust/execution_policy.h>
 #include <thrust/memory.h>
-#include <thrust/system/cuda/execution_policy.h>
 
 using thrust::raw_pointer_cast;
 
@@ -64,13 +61,6 @@ int addBlockDiagonalToA(int numBlockRows, int blockSize, const int *rowPtr, cons
 
 // Forward declarations
 class CudaGenBcsrLinSolver;
-
-namespace {
-template<typename VectorType>
-struct AddDoubleToB {
-    __device__ __host__ VectorType operator()(double a, VectorType b) const { return b + static_cast<VectorType>(a); }
-};
-}
 
 // This template class provides the actual implementation for different data types.
 // It inherits from CudaGenBcsrLinSOE and implements all the pure virtual methods.
@@ -170,30 +160,52 @@ public:
         }
     }
     
-    // Host (double)-device (VectorType) data transfer methods
-    inline void uploadVectorsToDevice(void) override {
-        m_deviceB = this->CudaGenBcsrLinSOE::m_hostB;
-        m_deviceX.resize(this->CudaGenBcsrLinSOE::m_hostX.size());
+    // Lazy sync: guard + host/device copy in one method.
+    inline void syncBToDevice(void) override {
+        if (this->m_bLoc == DataLocation::Host) {
+            m_deviceB = this->CudaGenBcsrLinSOE::m_hostB;
+            m_deviceX.resize(this->CudaGenBcsrLinSOE::m_hostX.size());
+            this->m_bLoc = DataLocation::Both;
+        }
     }
 
-    inline void downloadRhsFromDevice(void) override {
-        this->CudaGenBcsrLinSOE::m_hostB = m_deviceB;
-    }
-    
-    inline void downloadSolutionFromDevice(void) override {
-        this->CudaGenBcsrLinSOE::m_hostX = m_deviceX;
-        this->CudaGenBcsrLinSOE::m_X.setData(
-            raw_pointer_cast(this->CudaGenBcsrLinSOE::m_hostX.data()), 
-            this->CudaGenBcsrLinSOE::m_X.Size()
-        );
-    }
-    
-    inline void uploadAValuesToDevice(void) override {
-        m_deviceAValues = this->CudaGenBcsrLinSOE::m_hostAValues;
+    inline void syncBToHost(void) override {
+        if (this->m_bLoc == DataLocation::Device) {
+            this->CudaGenBcsrLinSOE::m_hostB = m_deviceB;
+            this->m_bLoc = DataLocation::Both;
+        }
     }
 
-    inline void downloadAValuesFromDevice(void) override {
-        this->CudaGenBcsrLinSOE::m_hostAValues = m_deviceAValues;
+    inline void syncXToHost(void) override {
+        if (this->m_xLoc == DataLocation::Device) {
+            this->CudaGenBcsrLinSOE::m_hostX = m_deviceX;
+            this->CudaGenBcsrLinSOE::m_X.setData(
+                raw_pointer_cast(this->CudaGenBcsrLinSOE::m_hostX.data()),
+                this->CudaGenBcsrLinSOE::m_X.Size()
+            );
+            this->m_xLoc = DataLocation::Both;
+        }
+    }
+
+    inline void syncAValuesToDevice(void) override {
+        if (this->m_aLoc == DataLocation::Host) {
+            m_deviceAValues = this->CudaGenBcsrLinSOE::m_hostAValues;
+            this->m_aLoc = DataLocation::Both;
+        }
+    }
+
+    inline void syncAValuesToHost(void) override {
+        if (this->m_aLoc == DataLocation::Device) {
+            this->CudaGenBcsrLinSOE::m_hostAValues = m_deviceAValues;
+            this->m_aLoc = DataLocation::Both;
+        }
+    }
+
+    inline void syncIndicesToDevice(void) override {
+        if (this->m_aIndicesLoc == DataLocation::Host) {
+            m_deviceCsrIndices = this->CudaGenBcsrLinSOE::m_hostCsrIndices;
+            this->m_aIndicesLoc = DataLocation::Both;
+        }
     }
 
     inline void ensureDeviceVectorSizes(void) override {
@@ -203,10 +215,6 @@ public:
         m_deviceB.resize(bSize);
         m_deviceX.resize(xSize);
         m_deviceAValues.resize(aSize);
-    }
-
-    inline void uploadAIndicesToDevice(void) override {
-        m_deviceCsrIndices = this->CudaGenBcsrLinSOE::m_hostCsrIndices;
     }
 
     const int* getDeviceRowPtrs(void) const override {
@@ -273,30 +281,77 @@ public:
         return rc;
     }
 
-    inline void addToDeviceBFromHost(int n, const double* hostData, void* stream) override {
-        if (n <= 0 || hostData == nullptr) return;
+    void ensureSpmvScratchSizes(void) override {
+        const size_t n = this->CudaGenBcsrLinSOE::m_hostB.size();
+        m_deviceSpmvP.resize(n);
+        m_deviceSpmvY.resize(n);
+    }
+
+    void *getDeviceSpmvP(void) override {
+        return m_deviceSpmvP.empty() ? nullptr : m_deviceSpmvP.data().get();
+    }
+
+    void *getDeviceSpmvY(void) override {
+        return m_deviceSpmvY.empty() ? nullptr : m_deviceSpmvY.data().get();
+    }
+
+    void uploadSpmvPFromHost(const Vector &p, int n) override {
+        if (n <= 0) {
+            return;
+        }
         const size_t un = static_cast<size_t>(n);
-        if (m_deviceB.size() < un) return;
-        if (m_deviceStagingB.size() < un)
-            m_deviceStagingB.resize(un);
-        cudaStream_t s = (stream != nullptr) ? static_cast<cudaStream_t>(stream) : 0;
-        cudaMemcpyAsync(raw_pointer_cast(m_deviceStagingB.data()), hostData, un * sizeof(double), cudaMemcpyHostToDevice, s);
-        if (s != 0)
-            thrust::transform(thrust::cuda::par.on(s),
-                m_deviceStagingB.begin(), m_deviceStagingB.begin() + n,
-                m_deviceB.begin(), m_deviceB.begin(), AddDoubleToB<VectorType>());
-        else
-            thrust::transform(thrust::cuda::par,
-                m_deviceStagingB.begin(), m_deviceStagingB.begin() + n,
-                m_deviceB.begin(), m_deviceB.begin(), AddDoubleToB<VectorType>());
+        if (m_deviceSpmvP.size() < un) {
+            m_deviceSpmvP.resize(un);
+        }
+        if constexpr (std::is_same_v<VectorType, double>) {
+            // OpenSees Vector has no const data pointer; const_cast is read-only here.
+            const double *pData = &const_cast<Vector &>(p)(0);
+            cudaMemcpy(raw_pointer_cast(m_deviceSpmvP.data()), pData, un * sizeof(double),
+                       cudaMemcpyHostToDevice);
+        } else {
+            if (m_hostSpmvStaging.size() < un) {
+                m_hostSpmvStaging.resize(un);
+            }
+            for (int i = 0; i < n; ++i) {
+                m_hostSpmvStaging[static_cast<size_t>(i)] = static_cast<VectorType>(p(i));
+            }
+            cudaMemcpy(raw_pointer_cast(m_deviceSpmvP.data()),
+                       raw_pointer_cast(m_hostSpmvStaging.data()), un * sizeof(VectorType),
+                       cudaMemcpyHostToDevice);
+        }
+    }
+
+    void downloadSpmvYToHost(Vector &Ap, int n) override {
+        if (n <= 0) {
+            return;
+        }
+        const size_t un = static_cast<size_t>(n);
+        if (m_deviceSpmvY.size() < un) {
+            return;
+        }
+        if constexpr (std::is_same_v<VectorType, double>) {
+            cudaMemcpy(&Ap(0), raw_pointer_cast(m_deviceSpmvY.data()), un * sizeof(double),
+                       cudaMemcpyDeviceToHost);
+        } else {
+            if (m_hostSpmvStaging.size() < un) {
+                m_hostSpmvStaging.resize(un);
+            }
+            cudaMemcpy(raw_pointer_cast(m_hostSpmvStaging.data()),
+                       raw_pointer_cast(m_deviceSpmvY.data()), un * sizeof(VectorType),
+                       cudaMemcpyDeviceToHost);
+            for (int i = 0; i < n; ++i) {
+                Ap(i) = static_cast<double>(m_hostSpmvStaging[static_cast<size_t>(i)]);
+            }
+        }
     }
 
 private:    
     // Device memory storage using Thrust vectors
     thrust::device_vector<VectorType> m_deviceX, m_deviceB;
     thrust::device_vector<MatrixType> m_deviceAValues;
-    thrust::device_vector<double> m_deviceStagingB;
     thrust::device_vector<int> m_deviceCsrIndices;
+    thrust::device_vector<VectorType> m_deviceSpmvP, m_deviceSpmvY;
+    thrust::host_vector<VectorType> m_hostSpmvStaging;
 
 public:
     // Helper function to get class tag for type

@@ -424,7 +424,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         const int numRhs = areClose ? 1 : 2;
         ensureAlphaBuffers(numRhs);
 
-        cudaSOE->uploadAIndicesToDevice();
+        cudaSOE->syncIndicesToDevice();
         cudaSOE->ensureDeviceVectorSizes();
         ensureMatrices(cudaSOE->getPrecision());
         if (bindSharedStructure(cudaSOE) != 0) {
@@ -451,7 +451,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
             if (integrator->formTangentIntoSOE(INITIAL_TANGENT, 0.0, 0.0, 1.0) != 0) {
                 return -1;
             }
-            cudaSOE->uploadAValuesToDevice();
+            cudaSOE->syncAValuesToDevice();
             if (matM->copyValues(cudaSOE->getDeviceAValues()) != 0) {
                 return -2;
             }
@@ -471,7 +471,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         if (integrator->formTangentIntoSOE(INITIAL_TANGENT, bdt2, gdt, 1.0) != 0) {
             return -3;
         }
-        cudaSOE->uploadAValuesToDevice();
+        cudaSOE->syncAValuesToDevice();
         if (matAlpha->copyValues(cudaSOE->getDeviceAValues()) != 0) {
             return -4;
         }
@@ -495,7 +495,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
                                                   integrator->alphaF * gdt, integrator->alphaM) != 0) {
             return -5;
         }
-        cudaSOE->uploadAValuesToDevice();
+        cudaSOE->syncAValuesToDevice();
         matA->bindValues(cudaSOE->getDeviceAValues());
         return 0;
     }
@@ -554,7 +554,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
 
     int formUnbalance(CudaGenBcsrLinSOE *cudaSOE) override
     {
-        cudaSOE->uploadVectorsToDevice();
+        cudaSOE->syncBToDevice();
         void *b = cudaSOE->getDeviceB();
         T *w2 = thrust::raw_pointer_cast(d_w2.data());
         if (diagonalM) {
@@ -567,7 +567,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         }
         matAlpha->spmv(w2, b);
         cudaCheckError(cudaStreamSynchronize(stream), "formUnbalance residual sync");
-        cudaSOE->downloadRhsFromDevice();
+        cudaSOE->setBPrimaryLocation(CudaGenBcsrLinSOE::DataLocation::Device);
         return 0;
     }
 
@@ -789,8 +789,29 @@ CudaExplicitAlpha::CudaExplicitAlpha(int classTag, double _alphaF, double _alpha
 {
 }
 
+void CudaExplicitAlpha::pauseXSync(CudaGenBcsrLinSOE *cudaSOE)
+{
+    if (cudaSOE == nullptr) {
+        return;
+    }
+    if (m_pauseXSyncSOE != nullptr && m_pauseXSyncSOE != cudaSOE) {
+        m_pauseXSyncSOE->enableXSync(true);
+    }
+    cudaSOE->enableXSync(false);
+    m_pauseXSyncSOE = cudaSOE;
+}
+
+void CudaExplicitAlpha::resumeXSync(void)
+{
+    if (m_pauseXSyncSOE != nullptr) {
+        m_pauseXSyncSOE->enableXSync(true);
+        m_pauseXSyncSOE = nullptr;
+    }
+}
+
 CudaExplicitAlpha::~CudaExplicitAlpha()
 {
+    resumeXSync();
     destroyDeviceImpl();
     delete Ut;
     delete Utdot;
@@ -886,6 +907,7 @@ int CudaExplicitAlpha::domainChanged()
     }
 
     ensureDeviceImpl(cudaSOE);
+    pauseXSync(cudaSOE);
 
     m_impl->destroySolvers();
     m_impl->allocate(size, areAlphaMFClose() ? 1 : 2);
@@ -939,6 +961,7 @@ int CudaExplicitAlpha::newStep(double _deltaT)
         return -3;
     }
     ensureDeviceImpl(cudaSOE);
+    pauseXSync(cudaSOE);
 
     *Ut = *U;
     *Utdot = *Udot;
@@ -1020,6 +1043,7 @@ int CudaExplicitAlpha::commit()
 
 int CudaExplicitAlpha::revertToLastStep()
 {
+    resumeXSync();
     if (U->Size() > 0) {
         *U = *Ut;
         *Udot = *Utdot;
@@ -1076,6 +1100,7 @@ void CudaExplicitAlpha::Print(OPS_Stream &s, int flag)
 
 int CudaExplicitAlpha::revertToStart()
 {
+    resumeXSync();
     if (U->Size() > 0) {
         Ut->Zero();
         Utdot->Zero();

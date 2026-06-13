@@ -112,6 +112,11 @@ private:
 
     void ensureDeviceImpl(CudaGenBcsrLinSOE *cudaSOE);
     void destroyDeviceImpl();
+
+    void pauseXSync(CudaGenBcsrLinSOE *cudaSOE);
+    void resumeXSync(void);
+
+    CudaGenBcsrLinSOE *m_pauseXSyncSOE = nullptr;
 };
 
 #ifdef _CUDSS

@@ -176,6 +176,32 @@ public:
     };
     MatrixStatus getMatrixStatus(void) const;
 
+    // Host/device authority tracking for lazy synchronization
+    enum class DataLocation {
+        Host,   // Host buffer is authoritative; device may be stale
+        Device, // Device buffer is authoritative; host may be stale
+        Both    // Host and device are in sync
+    };
+
+    // Declare primary data location after an in-place write (no copy).
+    // Use Host or Device only; Both is set by sync* after a transfer.
+    void setBPrimaryLocation(DataLocation loc);
+    void setXPrimaryLocation(DataLocation loc);
+    void setAValuesPrimaryLocation(DataLocation loc);
+    void setAIndicesPrimaryLocation(DataLocation loc);
+
+    // When enabled (default), getX() syncs from device before returning host m_X.
+    void enableXSync(bool enable);
+    bool isXSyncEnabled(void) const;
+
+    // Lazy sync: copy when stale and update primary location (implemented in *Impl).
+    virtual void syncBToDevice(void) = 0;
+    virtual void syncBToHost(void) = 0;
+    virtual void syncXToHost(void) = 0;
+    virtual void syncAValuesToDevice(void) = 0;
+    virtual void syncAValuesToHost(void) = 0;
+    virtual void syncIndicesToDevice(void) = 0;
+
     // Output methods
     int saveSparseA(OPS_Stream& output, int baseIndex = 0);
 
@@ -199,16 +225,7 @@ public:
     // Precision query method
     virtual CudaPrecision getPrecision() const = 0;
 
-    // Host-device data transfer methods
-    virtual void uploadVectorsToDevice(void) = 0;
-    virtual void downloadRhsFromDevice(void) = 0;
-    virtual void downloadSolutionFromDevice(void) = 0;
-    virtual void uploadAValuesToDevice(void) = 0;
-    virtual void downloadAValuesFromDevice(void) = 0;
     virtual void ensureDeviceVectorSizes(void) = 0;
-    // Copy host B data to device and add into device B (async when stream non-null). For overlapped recv in Distributed.
-    virtual void addToDeviceBFromHost(int n, const double* hostData, void* stream = nullptr) = 0;
-    virtual void uploadAIndicesToDevice(void) = 0;
     virtual const int* getDeviceRowPtrs(void) const = 0;
     virtual int* getDeviceRowPtrs(void) = 0;
     virtual const int* getDeviceColIndices(void) const = 0;
@@ -254,6 +271,15 @@ protected:
     CudaCsrMatrix *m_spmvMatrix = nullptr;
     int m_spmvStructureRows = -1;
 
+    // Host/device authority for B, X, and A coefficient values
+    DataLocation m_bLoc = DataLocation::Host;
+    DataLocation m_xLoc = DataLocation::Host;
+    DataLocation m_aLoc = DataLocation::Host;
+    DataLocation m_aIndicesLoc = DataLocation::Host;
+
+    // When false, getX() skips device-to-host sync; host m_X may be stale.
+    bool m_xSyncEnabled = true;
+
     // Set size helper methods
     int buildStandardCSR(Graph &theGraph);
     int buildBlockCSR(Graph &theGraph);
@@ -274,6 +300,13 @@ protected:
     bool isMatrixEmpty(void) const;
 
     int ensureSpMVOperator(void);
+
+    // formAp device scratch (does not use SOE B/X, so solve state is preserved)
+    virtual void ensureSpmvScratchSizes(void) = 0;
+    virtual void *getDeviceSpmvP(void) = 0;
+    virtual void *getDeviceSpmvY(void) = 0;
+    virtual void uploadSpmvPFromHost(const Vector &p, int n) = 0;
+    virtual void downloadSpmvYToHost(Vector &Ap, int n) = 0;
 };
 
 inline OPS_Stream& operator<<(OPS_Stream& os, CudaGenBcsrLinSOE::MatrixStatus status) {
