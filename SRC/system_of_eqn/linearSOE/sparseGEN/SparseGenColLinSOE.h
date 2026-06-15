@@ -61,6 +61,9 @@ class SparseGenColLinSOE : public LinearSOE
     
     virtual void zeroA(void);
     virtual void zeroB(void);
+
+    int formAp(const Vector &p, Vector &Ap) override;
+    LinearSOE *getCopy(void) const override;
     
     virtual const Vector &getX(void);
     virtual const Vector &getB(void);    
@@ -92,6 +95,9 @@ class SparseGenColLinSOE : public LinearSOE
     friend class PFEMSolver;
 
   protected:
+    /** Matvec Ap = A_vals * p using colStartA / rowA; avals has length nnz. */
+    int formApWithValues(const Vector &avals, const Vector &p, Vector &Ap);
+
     int size;            // order of A
     int nnz;             // number of non-zeros in A
     double *A, *B, *X;   // 1d arrays containing coefficients of A, B and X

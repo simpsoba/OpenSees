@@ -24,22 +24,44 @@ set freeVibrationSeconds 5.0
 set gmFile [file join $scriptDir ground_motions RSN960_NORTHR_LOS270.AT2]
 
 if {$argc >= 1} { set integratorMethod [lindex $argv 0] }
-if {$argc >= 2} { set rho [lindex $argv 1] }
-if {$argc >= 3} { set scaleFactor [lindex $argv 2] }
+
+proc _argvIsNumeric {s} {
+    return [string is double -strict $s]
+}
+
+set flagStart 1
+if {$argc >= 2 && [_argvIsNumeric [lindex $argv 1]]} {
+    set rho [lindex $argv 1]
+    set flagStart 2
+    if {$argc >= 3 && [_argvIsNumeric [lindex $argv 2]]} {
+        set scaleFactor [lindex $argv 2]
+        set flagStart 3
+    }
+}
 
 set useDiagonalMass 0
 set useIncrementalAccel 0
 set useAlphaCloseCheck 0
-for {set i 3} {$i < $argc} {incr i} {
-    set flag [string tolower [lindex $argv $i]]
-    switch -glob $flag {
+set systemOverride ""
+for {set i $flagStart} {$i < $argc} {incr i} {
+    set flag [lindex $argv $i]
+    set flagLower [string tolower $flag]
+    switch -glob $flagLower {
         diagonalmass -
         lumped { set useDiagonalMass 1 }
         -incrementalaccel { set useIncrementalAccel 1 }
         -alphaclosecheck { set useAlphaCloseCheck 1 }
+        -system {
+            incr i
+            if {$i >= $argc} {
+                puts stderr "ERROR: -system requires an argument (e.g. UmfPack, SuperLU, CuDSS)"
+                exit 1
+            }
+            set systemOverride [lindex $argv $i]
+        }
         default {
             puts stderr "Unknown flag: [lindex $argv $i]"
-            puts stderr "Optional flags: -incrementalAccel -alphaCloseCheck diagonalMass"
+            puts stderr "Optional flags: -incrementalAccel -alphaCloseCheck -system SOE diagonalMass"
             exit 1
         }
     }
@@ -138,6 +160,14 @@ switch -exact $integratorMethod {
     }
 }
 
+if {$systemOverride ne ""} {
+    if {$integratorMethod in {Newmark KRAlphaExplicitMultiSOE MKRAlphaExplicitMultiSOE CudaKRAlpha CudaMKRAlpha}} {
+        set linearSOE $systemOverride
+    } else {
+        puts stderr "WARNING two_story_MRF.tcl: -system $systemOverride ignored for $integratorMethod"
+    }
+}
+
 if {$integratorMethod in {KRAlphaExplicit MKRAlphaExplicit} && ($useIncrementalAccel || $useAlphaCloseCheck || $useDiagonalMass)} {
     puts stderr "WARNING two_story_MRF.tcl: -incrementalAccel/-alphaCloseCheck/-diagonalMass ignored for dense KRAlphaExplicit/MKRAlphaExplicit"
 }
@@ -146,9 +176,15 @@ if {$integratorMethod in {KRAlphaExplicit MKRAlphaExplicit} && ($useIncrementalA
 if {$integratorMethod eq "Newmark" && [info exists newmarkCpu] && $newmarkCpu} {
     set paramsLabel {[0.5, 0.25]}
     set outputFolder [file join $scriptDir results Newmark_FullGeneral_params-${paramsLabel}]
+} elseif {$integratorMethod eq "Newmark" && $systemOverride ne "" && $systemOverride ne "CuDSS"} {
+    set paramsLabel {[0.5, 0.25]}
+    set outputFolder [file join $scriptDir results Newmark_${systemOverride}_params-${paramsLabel}]
 } elseif {$integratorMethod eq "Newmark"} {
     set paramsLabel {[0.5, 0.25]}
     set outputFolder [file join $scriptDir results Newmark_params-${paramsLabel}]
+} elseif {$systemOverride ne "" && $systemOverride ne "CuDSS"} {
+    set paramsLabel [formatParamsLabel $integratorParams]
+    set outputFolder [file join $scriptDir results ${integratorMethod}_${systemOverride}_params-${paramsLabel}]
 } else {
     set paramsLabel [formatParamsLabel $integratorParams]
     set outputFolder [file join $scriptDir results ${integratorMethod}_params-${paramsLabel}]

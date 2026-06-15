@@ -75,12 +75,15 @@ def _tcl_method_and_args(
     if ops_method == "Newmark" and system == "FullGeneral":
         return ["NewmarkCPU"]
     if ops_method == "Newmark":
-        return ["Newmark"]
+        args: List[str] = ["Newmark"]
+        if system is not None and system != "CuDSS":
+            args.extend(["-system", system])
+        return args
 
     if not params:
         raise ValueError(f"integrator {ops_method} requires params")
 
-    args: List[str] = [ops_method, str(params[0]), str(scale)]
+    args = [ops_method, str(params[0]), str(scale)]
     for tok in params[1:]:
         if isinstance(tok, str):
             if not tok.startswith("-"):
@@ -88,6 +91,8 @@ def _tcl_method_and_args(
             args.append(tok)
         else:
             raise ValueError(f"unexpected integrator param after rho: {tok!r}")
+    if system is not None and system != "CuDSS":
+        args.extend(["-system", system])
     return args
 
 
@@ -206,7 +211,12 @@ def _cuda_runs(
 
 
 def _multisoe_runs(
-    rho: float, *, incremental: bool = False, alpha_close_check: bool = False
+    rho: float,
+    *,
+    incremental: bool = False,
+    alpha_close_check: bool = False,
+    system: Optional[str] = None,
+    label: Optional[str] = None,
 ) -> List[RunSpec]:
     sfx = ""
     extra: List[Union[float, str]] = []
@@ -216,35 +226,108 @@ def _multisoe_runs(
     if alpha_close_check:
         sfx += " (α close)"
         extra.append("-alphaCloseCheck")
+    if label:
+        sfx += f" ({label})"
     p: List[Union[float, str]] = [rho, *extra]
     return [
-        (f"MultiSOE KR ρ={rho:g}{sfx}", "KRAlphaExplicitMultiSOE", list(p), None),
-        (f"MultiSOE MKR ρ={rho:g}{sfx}", "MKRAlphaExplicitMultiSOE", list(p), None),
+        (f"MultiSOE KR ρ={rho:g}{sfx}", "KRAlphaExplicitMultiSOE", list(p), system),
+        (f"MultiSOE MKR ρ={rho:g}{sfx}", "MKRAlphaExplicitMultiSOE", list(p), system),
     ]
+
+
+def _build_soe_variant_runs(rhos: List[float], *, include_incremental: bool = True) -> List[RunSpec]:
+    """UmfPack/SuperLU Newmark + MultiSOE only (append to existing CuDSS matrix)."""
+    runs: List[RunSpec] = [
+        ("Newmark (UmfPack)", "Newmark", [0.5, 0.25], "UmfPack"),
+        ("Newmark (SuperLU)", "Newmark", [0.5, 0.25], "SuperLU"),
+    ]
+    for rho in rhos:
+        runs.extend(_multisoe_runs(rho, incremental=False, system="UmfPack", label="UmfPack"))
+        runs.extend(_multisoe_runs(rho, incremental=False, system="SuperLU", label="SuperLU"))
+        if include_incremental:
+            runs.extend(_multisoe_runs(rho, incremental=True, system="UmfPack", label="UmfPack"))
+            runs.extend(_multisoe_runs(rho, incremental=True, system="SuperLU", label="SuperLU"))
+        if abs(rho - 1.0) < 1e-12:
+            runs.extend(
+                _multisoe_runs(rho, alpha_close_check=True, system="UmfPack", label="UmfPack")
+            )
+            runs.extend(
+                _multisoe_runs(rho, alpha_close_check=True, system="SuperLU", label="SuperLU")
+            )
+            if include_incremental:
+                runs.extend(
+                    _multisoe_runs(
+                        rho,
+                        incremental=True,
+                        alpha_close_check=True,
+                        system="UmfPack",
+                        label="UmfPack",
+                    )
+                )
+                runs.extend(
+                    _multisoe_runs(
+                        rho,
+                        incremental=True,
+                        alpha_close_check=True,
+                        system="SuperLU",
+                        label="SuperLU",
+                    )
+                )
+    return runs
 
 
 def _build_runs(rhos: List[float], *, include_incremental: bool = True) -> List[RunSpec]:
     runs: List[RunSpec] = [
         ("Newmark (CuDSS)", "Newmark", [0.5, 0.25], None),
         ("Newmark (CPU)", "Newmark", [0.5, 0.25], "FullGeneral"),
+        ("Newmark (UmfPack)", "Newmark", [0.5, 0.25], "UmfPack"),
+        ("Newmark (SuperLU)", "Newmark", [0.5, 0.25], "SuperLU"),
     ]
     for rho in rhos:
         runs.append(_kr_cpu_run(rho))
         runs.append(_mkr_cpu_run(rho))
         runs.extend(_multisoe_runs(rho, incremental=False))
         runs.extend(_cuda_runs(rho, incremental=False))
+        runs.extend(_multisoe_runs(rho, incremental=False, system="UmfPack", label="UmfPack"))
+        runs.extend(_multisoe_runs(rho, incremental=False, system="SuperLU", label="SuperLU"))
         if include_incremental:
             runs.extend(_multisoe_runs(rho, incremental=True))
             runs.extend(_cuda_runs(rho, incremental=True))
+            runs.extend(_multisoe_runs(rho, incremental=True, system="UmfPack", label="UmfPack"))
+            runs.extend(_multisoe_runs(rho, incremental=True, system="SuperLU", label="SuperLU"))
         if abs(rho - 1.0) < 1e-12:
             runs.extend(_multisoe_runs(rho, alpha_close_check=True))
             runs.extend(_cuda_runs(rho, alpha_close_check=True))
+            runs.extend(
+                _multisoe_runs(rho, alpha_close_check=True, system="UmfPack", label="UmfPack")
+            )
+            runs.extend(
+                _multisoe_runs(rho, alpha_close_check=True, system="SuperLU", label="SuperLU")
+            )
             if include_incremental:
                 runs.extend(
                     _multisoe_runs(rho, incremental=True, alpha_close_check=True)
                 )
                 runs.extend(
                     _cuda_runs(rho, incremental=True, alpha_close_check=True)
+                )
+                runs.extend(
+                    _multisoe_runs(
+                        rho,
+                        incremental=True,
+                        alpha_close_check=True,
+                        system="UmfPack",
+                        label="UmfPack",
+                    )
+                )
+                runs.extend(
+                    _multisoe_runs(
+                        rho,
+                        incremental=True,
+                        alpha_close_check=True,
+                        system="SuperLU",
+                        label="SuperLU",
+                    )
                 )
     return runs
 
@@ -259,6 +342,7 @@ _SKIP_ARGS = frozenset(
         "--engine",
         "--tcl",
         "--python",
+        "--soe-variants",
     )
 )
 
@@ -333,12 +417,16 @@ def main() -> None:
 
     plots_only = "--plots-only" in argv
     append = "--append" in argv
+    soe_variants_only = "--soe-variants" in argv
     jobs = _parse_jobs(argv)
     engine = _parse_engine(argv)
     only_rhos = _parse_rho_args(argv)
     include_incremental = "--no-incremental" not in argv
     rhos = only_rhos if only_rhos else DEFAULT_RHOS
-    runs = _build_runs(rhos, include_incremental=include_incremental)
+    if soe_variants_only:
+        runs = _build_soe_variant_runs(rhos, include_incremental=include_incremental)
+    else:
+        runs = _build_runs(rhos, include_incremental=include_incremental)
 
     if not plots_only:
         from plot_config import DT_ANALYSIS

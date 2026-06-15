@@ -57,6 +57,9 @@ public:
     
     void zeroA(void);
     void zeroB(void);
+
+    int formAp(const Vector &p, Vector &Ap) override;
+    LinearSOE *getCopy(void) const override;
     
     const Vector &getX(void);
     const Vector &getB(void);    

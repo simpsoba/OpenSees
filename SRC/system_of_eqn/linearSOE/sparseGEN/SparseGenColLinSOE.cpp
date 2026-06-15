@@ -448,6 +448,48 @@ SparseGenColLinSOE::zeroB(void)
 	*Bptr++ = 0;
 }
 
+int
+SparseGenColLinSOE::formApWithValues(const Vector &avals, const Vector &p, Vector &Ap)
+{
+    if (size != p.Size() || size != Ap.Size()) {
+	opserr << "SparseGenColLinSOE::formAp -- vectors not of same size\n";
+	return -1;
+    }
+    if (size == 0) {
+	Ap.Zero();
+	return 0;
+    }
+    if (A == 0 || colStartA == 0 || rowA == 0) {
+	opserr << "SparseGenColLinSOE::formAp -- matrix not allocated\n";
+	return -1;
+    }
+    if (avals.Size() != nnz) {
+	opserr << "SparseGenColLinSOE::formAp -- internal error: avals.Size() != nnz\n";
+	return -1;
+    }
+
+    Ap.Zero();
+    for (int col = 0; col < size; col++) {
+	const double pj = p(col);
+	for (int k = colStartA[col]; k < colStartA[col + 1]; k++) {
+	    const int row = rowA[k];
+	    Ap(row) += avals(k) * pj;
+	}
+    }
+    return 0;
+}
+
+int
+SparseGenColLinSOE::formAp(const Vector &p, Vector &Ap)
+{
+    if (size == 0) {
+	Ap.Zero();
+	return 0;
+    }
+    Vector aWrap(A, nnz);
+    return formApWithValues(aWrap, p, Ap);
+}
+
 void 
 SparseGenColLinSOE::setX(int loc, double value)
 {
@@ -611,5 +653,25 @@ SparseGenColLinSOE::recvSelf(int cTag, Channel &theChannel,
 			     FEM_ObjectBroker &theBroker)  
 {
     return 0;
+}
+
+LinearSOE *
+SparseGenColLinSOE::getCopy(void) const
+{
+    const SparseGenColLinSolver *base =
+        dynamic_cast<const SparseGenColLinSolver *>(this->getSolver());
+    if (base == nullptr) {
+        return nullptr;
+    }
+    LinearSOESolver *newSol = base->getCopy();
+    if (newSol == nullptr) {
+        return nullptr;
+    }
+    SparseGenColLinSolver *ss = dynamic_cast<SparseGenColLinSolver *>(newSol);
+    if (ss == nullptr) {
+        delete newSol;
+        return nullptr;
+    }
+    return new SparseGenColLinSOE(*ss);
 }
 

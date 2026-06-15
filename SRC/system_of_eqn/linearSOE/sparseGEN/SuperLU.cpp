@@ -358,6 +358,12 @@ SuperLU::recvSelf(int ctag,
     return 0;
 }
 
+LinearSOESolver *
+SuperLU::getCopy(void) const
+{
+    return new SuperLU(permSpec, drop_tol, panelSize, relax, symmetric);
+}
+
 
 
 

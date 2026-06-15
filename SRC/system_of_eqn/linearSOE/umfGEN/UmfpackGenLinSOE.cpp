@@ -292,6 +292,34 @@ UmfpackGenLinSOE::zeroB(void)
     B.Zero();
 }
 
+int
+UmfpackGenLinSOE::formAp(const Vector &p, Vector &Ap)
+{
+    const int n = X.Size();
+    if (n != p.Size() || n != Ap.Size()) {
+	opserr << "UmfpackGenLinSOE::formAp -- vectors not of same size\n";
+	return -1;
+    }
+    if (n == 0) {
+	Ap.Zero();
+	return 0;
+    }
+    if (this->Ap.size() < static_cast<size_t>(n + 1) || Ai.size() != Ax.size() || Ax.empty()) {
+	opserr << "UmfpackGenLinSOE::formAp -- matrix not allocated\n";
+	return -1;
+    }
+
+    Ap.Zero();
+    for (int col = 0; col < n; col++) {
+	const double pj = p(col);
+	for (int k = this->Ap[col]; k < this->Ap[col + 1]; k++) {
+	    const int row = Ai[k];
+	    Ap(row) += Ax[k] * pj;
+	}
+    }
+    return 0;
+}
+
 void
 UmfpackGenLinSOE::setX(int loc, double value)
 {
@@ -446,4 +474,24 @@ UmfpackGenLinSOE::recvSelf(int cTag, Channel &theChannel,
 			   FEM_ObjectBroker &theBroker)
 {
     return 0;
+}
+
+LinearSOE *
+UmfpackGenLinSOE::getCopy(void) const
+{
+    const UmfpackGenLinSolver *us =
+        dynamic_cast<const UmfpackGenLinSolver *>(this->getSolver());
+    if (us == nullptr) {
+        return nullptr;
+    }
+    LinearSOESolver *newSol = us->getCopy();
+    if (newSol == nullptr) {
+        return nullptr;
+    }
+    UmfpackGenLinSolver *solver = dynamic_cast<UmfpackGenLinSolver *>(newSol);
+    if (solver == nullptr) {
+        delete newSol;
+        return nullptr;
+    }
+    return new UmfpackGenLinSOE(*solver);
 }

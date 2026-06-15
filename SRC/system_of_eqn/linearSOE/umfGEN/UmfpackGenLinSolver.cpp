@@ -301,3 +301,9 @@ UmfpackGenLinSolver::recvSelf(int ctag,
     // nothing to do
     return 0;
 }
+
+LinearSOESolver *
+UmfpackGenLinSolver::getCopy(void) const
+{
+    return new UmfpackGenLinSolver(useLongIndices);
+}

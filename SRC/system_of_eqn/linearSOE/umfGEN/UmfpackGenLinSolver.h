@@ -56,6 +56,8 @@ class UmfpackGenLinSolver : public LinearSOESolver
     int recvSelf(int commitTag, Channel &theChannel,
                  FEM_ObjectBroker &theBroker);
 
+    LinearSOESolver *getCopy(void) const override;
+
   protected:
 
   private:
