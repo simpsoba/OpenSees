@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Shared plots for KRAlphaExplicit Two-Story MRF (woodbury / modalDampingW layout).
 
-CUDA example (Two-Story MRF): per-integrator figures under ``figures/rho_*/<panel>/KR|MKR/``
-compare one run vs. Newmark (FullGeneral) across floor columns — e.g.
-``standard/KR/floor_disp_dense.png``, ``error_floor_disp_multisoe_cudss.png``.
+CUDA examples: per-integrator figures under ``figures/rho_*/<panel>/KR|MKR/`` compare
+one run vs. Newmark (FullGeneral) with one row per floor — e.g.
+``standard/KR/floor_disp_cuda_cudss.png``, ``error_floor_disp_multisoe_cudss.png``.
 
 Reference for errors: Newmark (FullGeneral). Under each ``figures/rho_*`` folder,
 ``standard/`` holds total-form runs and ``incrementalAccel/`` holds ``-incrementalAccel``
@@ -92,6 +92,16 @@ ERR_LOG_YMAX_MIN = {"disp": 1.0, "vel": 1.0, "accel": 1.0e7}
 # Floor acceleration history y-limits (m/s²); matches two_story_MRF gravity = 9.80665 m/s².
 GRAVITY_MS2 = 9.80665
 HIST_ACCEL_YLIM_G = 5.0
+
+# Method-vs-Newmark pair figures: width matches the old column layout; height scales per floor.
+FLOOR_PANEL_WIDTH_IN = 3.4
+FLOOR_PANEL_HEIGHT_IN = 2.5
+
+
+def floor_pair_figsize(n_floors: int) -> Tuple[float, float]:
+    """(width, height) for one-row-per-floor comparison figures."""
+    n = max(int(n_floors), 1)
+    return (FLOOR_PANEL_WIDTH_IN * n, FLOOR_PANEL_HEIGHT_IN * n)
 
 
 def result_tag(method: str, params: Sequence) -> str:
@@ -1068,26 +1078,27 @@ def run_cuda(example_dir: Path, *, jobs: int = 1) -> int:
                             if y_m.size == 0:
                                 continue
 
+                            pair_figsize = floor_pair_figsize(n_floors)
                             fig, axes = plt.subplots(
-                                1,
                                 n_floors,
-                                figsize=(3.4 * n_floors, 2.5),
+                                1,
+                                figsize=pair_figsize,
                                 sharex=True,
                                 layout="constrained",
                                 squeeze=False,
                             )
                             fig_err, axes_err = plt.subplots(
-                                1,
                                 n_floors,
-                                figsize=(3.4 * n_floors, 2.5),
+                                1,
+                                figsize=pair_figsize,
                                 sharex=True,
                                 layout="constrained",
                                 squeeze=False,
                             )
 
                             for col_i in range(n_floors):
-                                ax = axes[0, col_i]
-                                ax_err = axes_err[0, col_i]
+                                ax = axes[col_i, 0]
+                                ax_err = axes_err[col_i, 0]
                                 newmark_peak = 0.0
 
                                 if col_i < y_fg.shape[1]:

@@ -134,10 +134,9 @@ def _record_initial_state() -> int:
 
 
 def ic_initial_state(ic_tag: str, dt_analysis: float) -> tuple[float, float]:
+    del dt_analysis  # ICs are physical (independent of integrator Δt).
     ic = ic_case_by_tag(ic_tag)
-    u0 = float(ic["u0"])
-    v0 = float(ic["v0"]) if ic["v0"] is not None else 1.0 / dt_analysis
-    return u0, v0
+    return float(ic["u0"]), float(ic["v0"])
 
 
 def run_analysis(
