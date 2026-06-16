@@ -69,6 +69,11 @@ class SuperLU : public SparseGenColLinSolver
   protected:
 
   private:
+    void freeACStore(void);
+    /** Allocate factorA[], build SuperMatrix A/AC from SOE sparsity (setSize only). */
+    int allocateSuperMatrixA(void);
+    int copyAForFactorization(void);
+
     SuperMatrix A,L,U,B,AC;
     int *perm_r;
     int *perm_c;
@@ -79,6 +84,8 @@ class SuperLU : public SparseGenColLinSolver
     char symmetric;
     superlu_options_t options;
     SuperLUStat_t stat;
+    double *factorA;
+    int factorASize;
 };
 
 #endif

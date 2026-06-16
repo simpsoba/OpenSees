@@ -97,7 +97,8 @@ SuperLU::SuperLU(int perm,
 :SparseGenColLinSolver(SOLVER_TAGS_SuperLU),
  perm_r(0),perm_c(0), etree(0), sizePerm(0),
  relax(relx), permSpec(perm), panelSize(panel), 
- drop_tol(drop_tolerance), symmetric(symm)
+ drop_tol(drop_tolerance), symmetric(symm),
+ factorA(0), factorASize(0)
 {
   // set_default_options(&options);
   options.Fact = DOFACT;
@@ -137,15 +138,12 @@ SuperLU::~SuperLU()
     Destroy_SuperNode_Matrix(&L);
   if (U.ncol != 0)
     Destroy_CompCol_Matrix(&U);
-  if (AC.ncol != 0) {
-    NCPformat *ACstore = (NCPformat *)AC.Store;
-    SUPERLU_FREE(ACstore->colbeg);
-    SUPERLU_FREE(ACstore->colend);
-    SUPERLU_FREE(ACstore);
-  }
+  freeACStore();
   if (A.ncol != 0) {
     SUPERLU_FREE(A.Store);
   }
+  if (factorA != 0)
+    delete [] factorA;
   if (B.ncol != 0) {
     SUPERLU_FREE(B.Store);
   }
@@ -176,6 +174,72 @@ extern "C" void    dCreate_Dense_Matrix(SuperMatrix *, int, int, double *, int,
 	       	                     Stype_t, Dtype_t, Mtype_t);
 
 */
+
+void
+SuperLU::freeACStore(void)
+{
+    if (AC.ncol != 0) {
+        NCPformat *ACstore = (NCPformat *)AC.Store;
+        SUPERLU_FREE(ACstore->colbeg);
+        SUPERLU_FREE(ACstore->colend);
+        SUPERLU_FREE(ACstore);
+        AC.ncol = 0;
+    }
+}
+
+int
+SuperLU::allocateSuperMatrixA(void)
+{
+    const int n = theSOE->size;
+    const int nnz = theSOE->nnz;
+
+    if (nnz > factorASize) {
+        if (factorA != 0)
+            delete [] factorA;
+        factorA = new (nothrow) double[nnz];
+        if (factorA == 0) {
+            factorASize = 0;
+            opserr << "WARNING SuperLU::allocateSuperMatrixA() - ran out of memory\n";
+            return -1;
+        }
+        factorASize = nnz;
+    }
+
+    freeACStore();
+    if (A.ncol != 0) {
+        SUPERLU_FREE(A.Store);
+        A.ncol = 0;
+    }
+
+    // Values in factorA (copied from SOE->A before dgstrf); dgstrf must not touch SOE->A.
+    dCreate_CompCol_Matrix(&A, n, n, nnz, factorA,
+                           theSOE->rowA, theSOE->colStartA,
+                           SLU_NC, SLU_D, SLU_GE);
+
+    get_perm_c(permSpec, &A, perm_c);
+    sp_preorder(&options, &A, perm_c, etree, &AC);
+    return 0;
+}
+
+int
+SuperLU::copyAForFactorization(void)
+{
+    const int nnz = theSOE->nnz;
+    if (nnz == 0)
+        return 0;
+
+    if (factorA == 0 || factorASize != nnz || theSOE->A == 0) {
+        opserr << "WARNING SuperLU::copyAForFactorization() - "
+               << "factorA size (" << factorASize << ") != SOE nnz (" << nnz
+               << "); call setSize() first\n";
+        return -1;
+    }
+
+    for (int i = 0; i < nnz; i++)
+        factorA[i] = theSOE->A[i];
+
+    return 0;
+}
 
 int
 SuperLU::solve(void)
@@ -241,6 +305,9 @@ SuperLU::solve(void)
 	  Destroy_SuperNode_Matrix(&L);
 	  Destroy_CompCol_Matrix(&U);	  
 	}
+
+	if (copyAForFactorization() < 0)
+	  return -1;
 
 	dgstrf(&options, &AC, relax, panelSize,
 	       etree, NULL, 0, perm_c, perm_r, &L, &U, &Glu, &stat, &info);
@@ -311,15 +378,8 @@ SuperLU::setSize()
       // initialisation
       StatInit(&stat);
 
-      // create the SuperMatrix A	
-      dCreate_CompCol_Matrix(&A, n, n, theSOE->nnz, theSOE->A, 
-			     theSOE->rowA, theSOE->colStartA, 
-			     SLU_NC, SLU_D, SLU_GE);
-
-      // obtain and apply column permutation to give SuperMatrix AC
-      get_perm_c(permSpec, &A, perm_c);
-
-      sp_preorder(&options, &A, perm_c, etree, &AC);
+      if (allocateSuperMatrixA() < 0)
+	return -1;
 
       // create the rhs SuperMatrix B 
       dCreate_Dense_Matrix(&B, n, 1, theSOE->X, n, SLU_DN, SLU_D, SLU_GE);

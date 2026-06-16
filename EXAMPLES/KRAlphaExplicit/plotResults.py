@@ -300,17 +300,29 @@ CUDA_LEGEND_FAMILIES = (
     "newmark_fg",
 )
 
+# Linear SOE systems encoded as Method_{System}_params-... in result folder names.
+_TAG_SOE_SYSTEMS = ("UmfPack", "SuperLU")
+
+
+def tag_linear_soe(tag: str) -> str | None:
+    """Return UmfPack/SuperLU when present in a result tag; else None (default CuDSS)."""
+    for soe in _TAG_SOE_SYSTEMS:
+        if f"_{soe}_params-" in tag:
+            return soe
+    return None
+
 
 def legend_label(tag: str) -> str:
     fam = integrator_family(tag)
+    soe = tag_linear_soe(tag)
     if fam == "newmark_fg":
         return "Newmark (FullGeneral)"
     if fam == "newmark_cudss":
-        return "Newmark (CuDSS)"
+        return f"Newmark ({soe})" if soe else "Newmark (CuDSS)"
     if fam == "dense":
         return "Dense"
     if fam == "multisoe":
-        return "MultiSOE"
+        return f"MultiSOE ({soe})" if soe else "MultiSOE (CuDSS)"
     if fam == "cuda":
         return "Cuda" + (" diag. mass" if is_diagonal_mass_tag(tag) else "")
     return tag
