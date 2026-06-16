@@ -49,7 +49,7 @@
 #include <algorithm>
 
 #include "CudaGenBcsrLinSOEImpl.h"
-#include "CudaCsrMatrix.h"
+#include "CuSparseBackend.h"
 
 // CUDA includes
 #include <cuda_runtime.h>
@@ -183,8 +183,9 @@ bool CudaGenBcsrLinSOE::isSymmetricStorage(void) const
 
 CudaGenBcsrLinSOE::~CudaGenBcsrLinSOE() 
 {
-    delete m_spmvMatrix;
-    m_spmvMatrix = nullptr;
+    cudaDeviceSynchronize();
+    delete m_spmvBackend;
+    m_spmvBackend = nullptr;
 }
 
 // Validation methods
@@ -834,12 +835,12 @@ int CudaGenBcsrLinSOE::solve(void)
     }
 
     syncBToDevice();
-    if (m_matrixStatus == MatrixStatus::STRUCTURE_CHANGED) {
+    if (m_matrixStatus == MatrixStatus::STRUCTURE_CHANGED && m_aIndicesLoc == DataLocation::Host) {
         syncIndicesToDevice();
+    }
+    if (m_aLoc == DataLocation::Host) {
         syncAValuesToDevice();
-    } else if (m_matrixStatus == MatrixStatus::COEFFICIENTS_CHANGED) {
-        syncAValuesToDevice();
-    } else { /* pass */ }
+    }
     
     // Get the cuda solver
     CudaGenBcsrLinSolver* theCudaSolver = getCudaGenBcsrLinSolver();
@@ -1017,6 +1018,16 @@ CudaGenBcsrLinSOE::MatrixStatus CudaGenBcsrLinSOE::getMatrixStatus(void) const
     return m_matrixStatus;
 }
 
+void *CudaGenBcsrLinSOE::getSolverStream(void) const
+{
+    const LinearSOESolver *baseSolver = this->LinearSOE::getSolver();
+    const CudaGenBcsrLinSolver *cudaSolver = dynamic_cast<const CudaGenBcsrLinSolver *>(baseSolver);
+    if (cudaSolver == nullptr) {
+        return nullptr;
+    }
+    return cudaSolver->getSolverStream();
+}
+
 // set*PrimaryLocation: declare authority after an in-place write.
 // Prefer Host or Device; Both is reserved for sync* after a transfer.
 void CudaGenBcsrLinSOE::setBPrimaryLocation(DataLocation loc)
@@ -1052,17 +1063,12 @@ CudaGenBcsrLinSolver* CudaGenBcsrLinSOE::getCudaGenBcsrLinSolver(void)
 int
 CudaGenBcsrLinSOE::ensureSpMVOperator(void)
 {
-    if (m_blockSize != 1) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::ensureSpMVOperator() - "
-               << "formAp requires blockSize = 1, got " << m_blockSize << endln;
-        return -1;
-    }
-
     const int numRows = getNumRowBlocks();
-    const int numNZ = getNumNonZeroValues();
     if (numRows <= 0) {
         return -1;
     }
+
+    const int numNnz = (m_blockSize == 1) ? getNumNonZeroValues() : getNumNonZeroBlocks();
 
     ensureDeviceVectorSizes();
     syncIndicesToDevice();
@@ -1074,16 +1080,18 @@ CudaGenBcsrLinSOE::ensureSpMVOperator(void)
         return -1;
     }
 
-    if (m_spmvMatrix == nullptr) {
-        CudaCsrMatrix::Options opts;
-        opts.precision = getPrecision();
-        m_spmvMatrix = new CudaCsrMatrix(opts);
+    if (m_spmvBackend == nullptr) {
+        CuSparseBackend::Config cfg;
+        cfg.precision = getPrecision();
+        m_spmvBackend = new CuSparseBackend(cfg);
         m_spmvStructureRows = -1;
     }
 
     if (m_spmvStructureRows != numRows ||
         m_matrixStatus == MatrixStatus::STRUCTURE_CHANGED) {
-        if (m_spmvMatrix->bindStructure(numRows, numNZ, rowPtrs, colIndices) != 0) {
+        if (m_spmvBackend->bindStructure(m_blockSize, numRows, numNnz,
+                                         const_cast<int *>(rowPtrs),
+                                         const_cast<int *>(colIndices)) != 0) {
             return -1;
         }
         m_spmvStructureRows = numRows;
@@ -1120,10 +1128,10 @@ CudaGenBcsrLinSOE::formAp(const Vector &p, Vector &Ap)
         return -1;
     }
 
-    if (m_spmvMatrix->bindValues(deviceA) != 0) {
+    if (m_spmvBackend->bindValues(deviceA) != 0) {
         return -1;
     }
-    if (m_spmvMatrix->spmv(deviceP, deviceAp, 1.0, 0.0) != 0) {
+    if (m_spmvBackend->spmv(deviceP, deviceAp, 1.0, 0.0) != 0) {
         opserr << "WARNING: CudaGenBcsrLinSOE::formAp() - SpMV failed\n";
         return -1;
     }

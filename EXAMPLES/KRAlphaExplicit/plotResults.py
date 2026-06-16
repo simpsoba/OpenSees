@@ -556,8 +556,8 @@ def _finite_abs_max(arr: np.ndarray) -> float:
     return float(np.max(np.abs(a[ok])))
 
 
-def nrmse_aligned(y_newmark: np.ndarray, y_other: np.ndarray) -> float:
-    """NRMSE = mean((Newmark - other)^2) / (max(Newmark) - min(Newmark)) on aligned 1D series."""
+def nrms_aligned(y_newmark: np.ndarray, y_other: np.ndarray) -> float:
+    """NRMS = RMSE / (max(Newmark) - min(Newmark)) on aligned 1D series."""
     y_newmark = np.asarray(y_newmark, dtype=float).ravel()
     y_other = np.asarray(y_other, dtype=float).ravel()
     n = min(y_newmark.size, y_other.size)
@@ -566,14 +566,14 @@ def nrmse_aligned(y_newmark: np.ndarray, y_other: np.ndarray) -> float:
     y_newmark = y_newmark[:n]
     y_other = y_other[:n]
     diff = y_newmark - y_other
-    mse = float(np.mean(diff * diff))
+    rmse = float(np.sqrt(np.mean(diff * diff)))
     denom = float(np.max(y_newmark) - np.min(y_newmark))
     if denom < EPS:
         return float("nan")
-    return mse / denom
+    return rmse / denom
 
 
-def _format_nrmse(value: float) -> str:
+def _format_nrms(value: float) -> str:
     if not np.isfinite(value):
         return "—"
     if value < 0.01 or value >= 100.0:
@@ -581,12 +581,30 @@ def _format_nrmse(value: float) -> str:
     return f"{value:.3f}"
 
 
+def annotate_nrms(ax, value: float, *, label: str = "NRMS") -> None:
+    """Upper-right NRMS vs Newmark FullGeneral (RMSE / peak-to-peak Newmark)."""
+    ax.text(
+        0.98,
+        0.98,
+        f"{label}\n{_format_nrms(value)}",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=FS - 2,
+        linespacing=1.12,
+        color="#333333",
+        clip_on=True,
+        zorder=10,
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="none", alpha=0.85),
+    )
+
+
 def annotate_nrmse_history(ax, n_alpha_explicit: float, n_multisoe: float) -> None:
-    """Upper-right NRMSE vs Newmark for dense and MultiSOE integrators."""
+    """Upper-right NRMS vs Newmark for dense and MultiSOE integrators."""
     label = (
-        "NRMSE\n"
-        f"AlphaExplicit: {_format_nrmse(n_alpha_explicit)}\n"
-        f"AlphaExplicitMultiSOE: {_format_nrmse(n_multisoe)}"
+        "NRMS\n"
+        f"AlphaExplicit: {_format_nrms(n_alpha_explicit)}\n"
+        f"AlphaExplicitMultiSOE: {_format_nrms(n_multisoe)}"
     )
     ax.text(
         0.98,
@@ -1096,6 +1114,11 @@ def run_cuda(example_dir: Path, *, jobs: int = 1) -> int:
                                     t_r, y_r, y_a = align_with_ref(
                                         t_fg, y_fg, t_m, y_m, method_tag
                                     )
+                                    if col_i < y_a.shape[1] and col_i < y_r.shape[1]:
+                                        annotate_nrms(
+                                            ax,
+                                            nrms_aligned(y_r[:, col_i], y_a[:, col_i]),
+                                        )
                                     if col_i < y_a.shape[1]:
                                         err = np.abs(y_a[:, col_i] - y_r[:, col_i])
                                         err = np.where(
@@ -1347,7 +1370,7 @@ def run(example_dir: Path, *, jobs: int = 1) -> int:
         return fig, axes
 
     def nrmse_vs_newmark(tag: str, resp: str, floor_j: int, t_ref: np.ndarray, y_ref: np.ndarray) -> float:
-        """NRMSE of one integrator vs Newmark on the aligned reference time grid."""
+        """NRMS of one integrator vs Newmark on the aligned reference time grid."""
         t, y = load_resp(tag, resp)
         if t.size == 0 or y_ref.size == 0:
             return float("nan")
@@ -1355,7 +1378,7 @@ def run(example_dir: Path, *, jobs: int = 1) -> int:
         if floor_j >= y.shape[1] or floor_j >= y_ref.shape[1]:
             return float("nan")
         _, y_newmark, y_other = align_with_ref(t_ref, y_ref, t, y, tag, quiet=True)
-        return nrmse_aligned(y_newmark[:, floor_j], y_other[:, floor_j])
+        return nrms_aligned(y_newmark[:, floor_j], y_other[:, floor_j])
 
     def plot_series_on_ax(
         ax,

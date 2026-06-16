@@ -24,6 +24,7 @@
 #define CudaCsrMatrix_h
 
 #include "CuDSSBackend.h"
+#include "CuSparseBackend.h"
 #include "CudaUtils.h"
 
 #include <cuda_runtime.h>
@@ -31,53 +32,54 @@
 #include <thrust/device_vector.h>
 
 #include <cstddef>
-#include <string>
-#include <vector>
 
 class CudaCsrMatrix
 {
 public:
-    struct Options {
-        CudaPrecision precision = CudaPrecision::dDDI;
-        cudaStream_t stream = nullptr;
-        // When null, a private handle is created lazily on first spmv().
-        cusparseHandle_t cusparseHandle = nullptr;
-        bool syncAfterSolve = true;
-        CuDssMatrixKind matKind = CuDssMatrixKind::FULL;
-        bool verbose = false;
-        bool hybridMemoryMode = false;
-        std::vector<std::size_t> hybridDeviceMemoryLimits;
-        bool hybridExecuteMode = false;
-        bool multiThreadingMode = false;
-        std::string threadingLibPath = "/usr/lib/x86_64-linux-gnu/libcudss_mtlayer_gomp.so";
-        bool useMultiGPU = false;
-        std::vector<int> deviceIndices;
+    using SolverConfig = CuDSSBackend::Config;
+
+    struct SpmvConfig {
+        cusparseHandle_t externalHandle;
+        const CuSparseBackend *sharedPattern;
+
+        SpmvConfig() : externalHandle(nullptr), sharedPattern(nullptr) {}
     };
 
-    CudaCsrMatrix();
-    explicit CudaCsrMatrix(const Options &options);
+    struct ExecutionContext {
+        cudaStream_t stream;
+
+        ExecutionContext() : stream(nullptr) {}
+    };
+
+    CudaCsrMatrix(const SolverConfig &solver = SolverConfig{},
+                  SpmvConfig spmv = SpmvConfig{},
+                  ExecutionContext exec = ExecutionContext{});
     ~CudaCsrMatrix();
 
     CudaCsrMatrix(const CudaCsrMatrix &) = delete;
     CudaCsrMatrix &operator=(const CudaCsrMatrix &) = delete;
 
     void reset();
+    void detachSharedSpmvPattern() { m_spmv.sharedPattern = nullptr; }
 
-    // --- Structure: bind = borrow device pointers; copy = own a device copy ---
     int bindStructure(int numRows, int numNnz, const int *rowPtr, const int *colIdx);
     int copyStructure(int numRows, int numNnz, const int *rowPtr, const int *colIdx);
 
-    // --- Values: bind = borrow; copy = own (D2D into internal buffer) ---
     int bindValues(void *values);
     int copyValues(const void *deviceValues);
 
-    // y = alpha * A * x + beta * y  (lazy cuSPARSE SpMV setup)
-    int spmv(const void *x, void *y, double alpha = 1.0, double beta = 0.0);
+    int spmv(const void *x, void *y, double alpha = 1.0, double beta = 0.0,
+             const void *values = nullptr) const;
 
-    // Direct solve (lazy cuDSS setup); values must be bound before factorize/refactorize.
-    int factorize(void *rhs, void *solution, int numRhs = 1);
+    int factorize(void *rhs, void *solution, int numRhs = 1, const CudaCsrMatrix *symbolicSource = nullptr);
     int refactorize(void *rhs, void *solution, int numRhs = 1);
     int solve(void *rhs, void *solution, int numRhs = 1);
+
+    CuDSSBackend *getCuDSSBackend();
+    const CuDSSBackend *getCuDSSBackend() const;
+
+    CuSparseBackend *getSpmvBackend();
+    const CuSparseBackend *getSpmvBackend() const;
 
     bool isStructureBound() const { return m_structureBound; }
     bool isFactored() const;
@@ -89,11 +91,16 @@ public:
     void *getValues();
     const void *getValues() const;
 
-    cudaStream_t getStream() const { return m_options.stream; }
+    cudaStream_t getStream() const { return m_exec.stream; }
     cusparseHandle_t getCusparseHandle() const;
 
+    const SolverConfig &getSolverConfig() const { return m_solver; }
+    const SpmvConfig &getSpmvConfig() const { return m_spmv; }
+
 private:
-    Options m_options;
+    SolverConfig m_solver;
+    SpmvConfig m_spmv;
+    ExecutionContext m_exec;
 
     int m_numRows = 0;
     int m_numNnz = 0;
@@ -109,27 +116,17 @@ private:
     thrust::device_vector<int> m_ownedColIdx;
     thrust::device_vector<char> m_ownedValues;
 
-    cusparseHandle_t m_localCusparseHandle = nullptr;
-    bool m_ownsCusparseHandle = false;
-
-    cusparseSpMatDescr_t m_spmat = nullptr;
-    cusparseDnVecDescr_t m_vecX = nullptr;
-    cusparseDnVecDescr_t m_vecY = nullptr;
-    void *m_spmvBuffer = nullptr;
-    size_t m_spmvBufferSize = 0;
-    bool m_spmvReady = false;
+    CuSparseBackend *m_spmvBackend = nullptr;
 
     CuDSSBackend *m_cuDSS = nullptr;
 
-    void destroySpMV();
+    void destroySpmvBackend();
     void destroyCuDSS();
-    int ensureCusparseHandle();
-    int rebuildSpMV();
+    int syncSpmvBackend() const;
     CuDSSBackend::Config makeCuDSSConfig() const;
-    int *rowPtr();
-    int *colIdx();
+    int *rowPtr() const;
+    int *colIdx() const;
     std::size_t valueSize() const;
-    cudaDataType_t valueCudaType() const;
 };
 
 #endif

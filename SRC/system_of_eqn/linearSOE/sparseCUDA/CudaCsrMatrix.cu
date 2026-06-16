@@ -27,31 +27,35 @@
 using namespace CudaUtils;
 using thrust::raw_pointer_cast;
 
-CudaCsrMatrix::CudaCsrMatrix() = default;
-
-CudaCsrMatrix::CudaCsrMatrix(const Options &options) : m_options(options) {}
+CudaCsrMatrix::CudaCsrMatrix(const SolverConfig &solver, SpmvConfig spmv, ExecutionContext exec)
+    : m_solver(solver), m_spmv(spmv), m_exec(exec)
+{
+    if (m_spmv.sharedPattern == nullptr) {
+        CuSparseBackend::Config cfg;
+        cfg.precision = m_solver.precision;
+        cfg.externalHandle = m_spmv.externalHandle;
+        cfg.stream = m_exec.stream;
+        m_spmvBackend = new CuSparseBackend(cfg);
+    }
+}
 
 CudaCsrMatrix::~CudaCsrMatrix() { reset(); }
 
 std::size_t CudaCsrMatrix::valueSize() const
 {
-    return (m_options.precision == CudaPrecision::dFFI) ? sizeof(float) : sizeof(double);
+    return (m_solver.precision == CudaPrecision::dFFI) ? sizeof(float) : sizeof(double);
 }
 
-cudaDataType_t CudaCsrMatrix::valueCudaType() const
+void CudaCsrMatrix::destroySpmvBackend()
 {
-    return (m_options.precision == CudaPrecision::dFFI) ? CUDA_R_32F : CUDA_R_64F;
+    delete m_spmvBackend;
+    m_spmvBackend = nullptr;
 }
 
 void CudaCsrMatrix::reset()
 {
-    destroySpMV();
+    destroySpmvBackend();
     destroyCuDSS();
-    if (m_ownsCusparseHandle && m_localCusparseHandle != nullptr) {
-        cusparseDestroy(m_localCusparseHandle);
-    }
-    m_localCusparseHandle = nullptr;
-    m_ownsCusparseHandle = false;
 
     m_ownedRowPtr.clear();
     m_ownedColIdx.clear();
@@ -65,28 +69,14 @@ void CudaCsrMatrix::reset()
     m_structureBound = false;
     m_ownsStructure = false;
     m_ownsValues = false;
-}
 
-void CudaCsrMatrix::destroySpMV()
-{
-    if (m_spmvBuffer != nullptr) {
-        cudaFree(m_spmvBuffer);
-        m_spmvBuffer = nullptr;
-        m_spmvBufferSize = 0;
+    if (m_spmv.sharedPattern == nullptr) {
+        CuSparseBackend::Config cfg;
+        cfg.precision = m_solver.precision;
+        cfg.externalHandle = m_spmv.externalHandle;
+        cfg.stream = m_exec.stream;
+        m_spmvBackend = new CuSparseBackend(cfg);
     }
-    if (m_vecX != nullptr) {
-        cusparseDestroyDnVec(m_vecX);
-        m_vecX = nullptr;
-    }
-    if (m_vecY != nullptr) {
-        cusparseDestroyDnVec(m_vecY);
-        m_vecY = nullptr;
-    }
-    if (m_spmat != nullptr) {
-        cusparseDestroySpMat(m_spmat);
-        m_spmat = nullptr;
-    }
-    m_spmvReady = false;
 }
 
 void CudaCsrMatrix::destroyCuDSS()
@@ -97,57 +87,59 @@ void CudaCsrMatrix::destroyCuDSS()
 
 CuDSSBackend::Config CudaCsrMatrix::makeCuDSSConfig() const
 {
-    CuDSSBackend::Config cfg;
-    cfg.precision = m_options.precision;
-    cfg.verbose = m_options.verbose;
-    cfg.hybridMemoryMode = m_options.hybridMemoryMode;
-    cfg.hybridDeviceMemoryLimits = m_options.hybridDeviceMemoryLimits;
-    cfg.hybridExecuteMode = m_options.hybridExecuteMode;
-    cfg.multiThreadingMode = m_options.multiThreadingMode;
-    cfg.threadingLibPath = m_options.threadingLibPath;
-    cfg.matKind = m_options.matKind;
-    cfg.useMultiGPU = m_options.useMultiGPU;
-    cfg.deviceIndices = m_options.deviceIndices;
-    cfg.externalStream = m_options.stream;
-    cfg.syncAfterSolve = m_options.syncAfterSolve;
+    CuDSSBackend::Config cfg = m_solver;
+    cfg.externalStream = m_exec.stream;
     return cfg;
-}
-
-int CudaCsrMatrix::ensureCusparseHandle()
-{
-    if (m_options.cusparseHandle != nullptr) {
-        return 0;
-    }
-    if (m_localCusparseHandle == nullptr) {
-        cuSparseCheckError(cusparseCreate(&m_localCusparseHandle), "cusparseCreate");
-        m_ownsCusparseHandle = true;
-    }
-    if (m_options.stream != nullptr) {
-        cuSparseCheckError(cusparseSetStream(m_localCusparseHandle, m_options.stream), "cusparseSetStream");
-    }
-    return 0;
 }
 
 cusparseHandle_t CudaCsrMatrix::getCusparseHandle() const
 {
-    if (m_options.cusparseHandle != nullptr) {
-        return m_options.cusparseHandle;
+    if (m_spmv.sharedPattern != nullptr) {
+        return m_spmv.sharedPattern->getHandle();
     }
-    return m_localCusparseHandle;
+    if (m_spmvBackend != nullptr) {
+        return m_spmvBackend->getHandle();
+    }
+    return m_spmv.externalHandle;
 }
 
-int *CudaCsrMatrix::rowPtr()
+CuSparseBackend *CudaCsrMatrix::getSpmvBackend() { return m_spmvBackend; }
+
+const CuSparseBackend *CudaCsrMatrix::getSpmvBackend() const { return m_spmvBackend; }
+
+int CudaCsrMatrix::syncSpmvBackend() const
+{
+    if (m_spmvBackend == nullptr) {
+        return 0;
+    }
+    if (!m_structureBound) {
+        return -1;
+    }
+    if (m_spmvBackend->bindStructure(1, m_numRows, m_numNnz, rowPtr(), colIdx()) != 0) {
+        return -1;
+    }
+    if (m_values != nullptr && m_spmvBackend->bindValues(m_values) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int *CudaCsrMatrix::rowPtr() const
 {
     if (m_ownsStructure) {
-        return m_ownedRowPtr.empty() ? nullptr : raw_pointer_cast(m_ownedRowPtr.data());
+        return m_ownedRowPtr.empty()
+                   ? nullptr
+                   : const_cast<int *>(raw_pointer_cast(m_ownedRowPtr.data()));
     }
     return const_cast<int *>(m_rowPtr);
 }
 
-int *CudaCsrMatrix::colIdx()
+int *CudaCsrMatrix::colIdx() const
 {
     if (m_ownsStructure) {
-        return m_ownedColIdx.empty() ? nullptr : raw_pointer_cast(m_ownedColIdx.data());
+        return m_ownedColIdx.empty()
+                   ? nullptr
+                   : const_cast<int *>(raw_pointer_cast(m_ownedColIdx.data()));
     }
     return const_cast<int *>(m_colIdx);
 }
@@ -163,7 +155,9 @@ int CudaCsrMatrix::bindStructure(int numRows, int numNnz, const int *rowPtr, con
         return 0;
     }
 
-    destroySpMV();
+    if (m_spmvBackend != nullptr) {
+        m_spmvBackend->reset();
+    }
     destroyCuDSS();
 
     m_ownedRowPtr.clear();
@@ -174,7 +168,7 @@ int CudaCsrMatrix::bindStructure(int numRows, int numNnz, const int *rowPtr, con
     m_rowPtr = rowPtr;
     m_colIdx = colIdx;
     m_structureBound = true;
-    return 0;
+    return syncSpmvBackend();
 }
 
 int CudaCsrMatrix::copyStructure(int numRows, int numNnz, const int *rowPtr, const int *colIdx)
@@ -184,7 +178,9 @@ int CudaCsrMatrix::copyStructure(int numRows, int numNnz, const int *rowPtr, con
         return -1;
     }
 
-    destroySpMV();
+    if (m_spmvBackend != nullptr) {
+        m_spmvBackend->reset();
+    }
     destroyCuDSS();
 
     const std::size_t rowPtrCount = static_cast<std::size_t>(numRows) + 1u;
@@ -204,7 +200,7 @@ int CudaCsrMatrix::copyStructure(int numRows, int numNnz, const int *rowPtr, con
     m_colIdx = raw_pointer_cast(m_ownedColIdx.data());
     m_ownsStructure = true;
     m_structureBound = true;
-    return 0;
+    return syncSpmvBackend();
 }
 
 int CudaCsrMatrix::bindValues(void *values)
@@ -216,8 +212,8 @@ int CudaCsrMatrix::bindValues(void *values)
     m_ownedValues.clear();
     m_ownsValues = false;
     m_values = values;
-    if (m_spmvReady) {
-        return rebuildSpMV();
+    if (m_spmvBackend != nullptr) {
+        return m_spmvBackend->bindValues(m_values);
     }
     return 0;
 }
@@ -240,93 +236,40 @@ int CudaCsrMatrix::copyValues(const void *deviceValues)
                    "copyValues");
     m_values = raw_pointer_cast(m_ownedValues.data());
     m_ownsValues = true;
-    if (m_spmvReady) {
-        return rebuildSpMV();
+    if (m_spmvBackend != nullptr) {
+        return m_spmvBackend->bindValues(m_values);
     }
     return 0;
 }
 
-int CudaCsrMatrix::rebuildSpMV()
+int CudaCsrMatrix::spmv(const void *x, void *y, double alpha, double beta, const void *values) const
 {
-    destroySpMV();
-    if (!m_structureBound || m_values == nullptr) {
-        return -1;
-    }
-    if (ensureCusparseHandle() != 0) {
-        return -1;
+    const void *coeffs = (values != nullptr) ? values : m_values;
+    if (m_spmv.sharedPattern != nullptr) {
+        return m_spmv.sharedPattern->spmv(x, y, alpha, beta, coeffs);
     }
 
-    const cudaDataType_t valueType = valueCudaType();
-    cusparseHandle_t handle = getCusparseHandle();
-    cuSparseCheckError(cusparseCreateCsr(&m_spmat, m_numRows, m_numRows, m_numNnz, rowPtr(), colIdx(), m_values,
-                                         CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO,
-                                         valueType),
-                       "cusparseCreateCsr");
-
-    // Placeholder pointers; actual x/y are set in spmv() via cusparseDnVecSetValues.
-    cuSparseCheckError(cusparseCreateDnVec(&m_vecX, m_numRows, m_values, valueType), "cusparseCreateDnVec x");
-    cuSparseCheckError(cusparseCreateDnVec(&m_vecY, m_numRows, m_values, valueType), "cusparseCreateDnVec y");
-
-    size_t bufSize = 0;
-    if (valueType == CUDA_R_32F) {
-        float one = 1.0f;
-        float zero = 0.0f;
-        cuSparseCheckError(cusparseSpMV_bufferSize(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, &one, m_spmat, m_vecX,
-                                                     &zero, m_vecY, CUDA_R_32F, CUSPARSE_SPMV_ALG_DEFAULT, &bufSize),
-                           "cusparseSpMV_bufferSize");
-    } else {
-        double one = 1.0;
-        double zero = 0.0;
-        cuSparseCheckError(cusparseSpMV_bufferSize(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, &one, m_spmat, m_vecX,
-                                                     &zero, m_vecY, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &bufSize),
-                           "cusparseSpMV_bufferSize");
-    }
-    if (bufSize > 0) {
-        cudaCheckError(cudaMalloc(&m_spmvBuffer, bufSize), "allocate SpMV buffer");
-        m_spmvBufferSize = bufSize;
-    }
-    m_spmvReady = true;
-    return 0;
-}
-
-int CudaCsrMatrix::spmv(const void *x, void *y, double alpha, double beta)
-{
-    if (!m_structureBound || m_values == nullptr) {
+    if (!m_structureBound || coeffs == nullptr || m_spmvBackend == nullptr) {
         opserr << "ERROR CudaCsrMatrix::spmv() - matrix not ready\n";
         return -1;
     }
-    if (!m_spmvReady && rebuildSpMV() != 0) {
+    if (syncSpmvBackend() != 0) {
         return -1;
     }
-
-    cusparseHandle_t handle = getCusparseHandle();
-    cuSparseCheckError(cusparseDnVecSetValues(m_vecX, const_cast<void *>(x)), "cusparseDnVecSetValues x");
-    cuSparseCheckError(cusparseDnVecSetValues(m_vecY, y), "cusparseDnVecSetValues y");
-
-    if (valueCudaType() == CUDA_R_32F) {
-        const float alphaF = static_cast<float>(alpha);
-        const float betaF = static_cast<float>(beta);
-        cuSparseCheckError(cusparseSpMV(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alphaF, m_spmat, m_vecX, &betaF,
-                                        m_vecY, CUDA_R_32F, CUSPARSE_SPMV_ALG_DEFAULT, m_spmvBuffer),
-                           "cusparseSpMV");
-    } else {
-        cuSparseCheckError(cusparseSpMV(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, m_spmat, m_vecX, &beta, m_vecY,
-                                        CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, m_spmvBuffer),
-                           "cusparseSpMV");
-    }
-    return 0;
+    return m_spmvBackend->spmv(x, y, alpha, beta, coeffs);
 }
 
 bool CudaCsrMatrix::isFactored() const
 {
-    return m_cuDSS != nullptr && m_cuDSS->isFactored();
+    return m_cuDSS != nullptr &&
+           m_cuDSS->getPhaseStatus() >= CuDSSBackend::PhaseStatus::FactorizationComplete;
 }
 
 void *CudaCsrMatrix::getValues() { return m_values; }
 
 const void *CudaCsrMatrix::getValues() const { return m_values; }
 
-int CudaCsrMatrix::factorize(void *rhs, void *solution, int numRhs)
+int CudaCsrMatrix::factorize(void *rhs, void *solution, int numRhs, const CudaCsrMatrix *symbolicSource)
 {
     if (!m_structureBound || m_values == nullptr) {
         opserr << "ERROR CudaCsrMatrix::factorize() - structure/values not bound\n";
@@ -335,17 +278,24 @@ int CudaCsrMatrix::factorize(void *rhs, void *solution, int numRhs)
     if (m_cuDSS == nullptr) {
         m_cuDSS = new CuDSSBackend(makeCuDSSConfig());
     }
-    if (!m_cuDSS->isStructureBound()) {
-        if (m_cuDSS->bindStructure(m_numRows, m_numNnz, rowPtr(), colIdx(), m_values, rhs, solution, numRhs) != 0) {
+    if (m_cuDSS->getPhaseStatus() < CuDSSBackend::PhaseStatus::PatternBound) {
+        const CuDSSBackend *sharedBackend =
+            (symbolicSource != nullptr) ? symbolicSource->getCuDSSBackend() : nullptr;
+        if (m_cuDSS->bindStructure(m_numRows, m_numNnz, rowPtr(), colIdx(), m_values, rhs, solution, numRhs,
+                                   sharedBackend) != 0) {
             return -1;
         }
     }
     return m_cuDSS->factorize(m_values, rhs, solution, numRhs);
 }
 
+CuDSSBackend *CudaCsrMatrix::getCuDSSBackend() { return m_cuDSS; }
+
+const CuDSSBackend *CudaCsrMatrix::getCuDSSBackend() const { return m_cuDSS; }
+
 int CudaCsrMatrix::refactorize(void *rhs, void *solution, int numRhs)
 {
-    if (m_cuDSS == nullptr || !m_cuDSS->isFactored()) {
+    if (m_cuDSS == nullptr || m_cuDSS->getPhaseStatus() < CuDSSBackend::PhaseStatus::FactorizationComplete) {
         opserr << "ERROR CudaCsrMatrix::refactorize() - not factored\n";
         return -1;
     }
@@ -358,7 +308,7 @@ int CudaCsrMatrix::refactorize(void *rhs, void *solution, int numRhs)
 
 int CudaCsrMatrix::solve(void *rhs, void *solution, int numRhs)
 {
-    if (m_cuDSS == nullptr || !m_cuDSS->isFactored()) {
+    if (m_cuDSS == nullptr || m_cuDSS->getPhaseStatus() < CuDSSBackend::PhaseStatus::FactorizationComplete) {
         opserr << "ERROR CudaCsrMatrix::solve() - not factored\n";
         return -1;
     }

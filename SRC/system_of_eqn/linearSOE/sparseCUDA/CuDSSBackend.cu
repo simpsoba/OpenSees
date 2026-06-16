@@ -22,6 +22,7 @@
 #include "CuDSSBackend.h"
 #include <OPS_Globals.h>
 #include <stdexcept>
+#include <vector>
 
 using namespace CudaUtils;
 
@@ -36,9 +37,9 @@ CuDSSBackend::CuDSSBackend(const Config &config)
       m_Solution(nullptr),
       m_IndexType(CUDA_R_32I),
       m_numRows(0),
+      m_numNnz(0),
       m_numRhs(1),
-      m_structureBound(false),
-      m_factored(false),
+      m_phaseStatus(PhaseStatus::Unbound),
       m_ownsStream(false)
 {
     if (!isUniformPrecision(m_config.precision)) {
@@ -50,6 +51,10 @@ CuDSSBackend::CuDSSBackend(const Config &config)
 
 CuDSSBackend::~CuDSSBackend()
 {
+    if (m_cudaStream != nullptr) {
+        cudaStreamSynchronize(m_cudaStream);
+    }
+    cudaDeviceSynchronize();
     destroyMatrixObjects();
     if (m_Data != nullptr) {
         cuDSSCheckError(cudssDataDestroy(m_Handle, m_Data), "destroy cuDSS solver data", false);
@@ -154,8 +159,141 @@ void CuDSSBackend::destroyMatrixObjects()
         cuDSSCheckError(cudssMatrixDestroy(m_Solution), "destroy cuDSS solution", false);
         m_Solution = nullptr;
     }
-    m_structureBound = false;
-    m_factored = false;
+    m_phaseStatus = PhaseStatus::Unbound;
+    m_rowPtr = nullptr;
+    m_colIdx = nullptr;
+    m_numNnz = 0;
+}
+
+bool CuDSSBackend::matchesSparsityPattern(const CuDSSBackend &other, int numRows, int numNnz, const int *rowPtr,
+                                          const int *colIdx) const
+{
+    return other.getPhaseStatus() >= PhaseStatus::AnalysisComplete && other.m_numRows == numRows &&
+           other.m_numNnz == numNnz && other.m_rowPtr == rowPtr && other.m_colIdx == colIdx;
+}
+
+int CuDSSBackend::importSymbolicAnalysisFrom(const CuDSSBackend &source)
+{
+    if (source.getPhaseStatus() < PhaseStatus::AnalysisComplete) {
+        return -1;
+    }
+
+    static const cudssDataParam_t kCopyParams[] = {CUDSS_DATA_PERM_REORDER_ROW, CUDSS_DATA_PERM_REORDER_COL,
+                                                   CUDSS_DATA_PERM_ROW, CUDSS_DATA_PERM_COL, CUDSS_DATA_LU_NNZ,
+                                                   CUDSS_DATA_NSUPERPANELS};
+
+    for (cudssDataParam_t param : kCopyParams) {
+        size_t sizeWritten = 0;
+        int64_t probe = 0;
+        const cudssStatus_t probeStatus =
+            cudssDataGet(source.m_Handle, source.m_Data, param, &probe, sizeof(probe), &sizeWritten);
+        if (probeStatus != CUDSS_STATUS_SUCCESS || sizeWritten == 0) {
+            continue;
+        }
+
+        std::vector<char> buffer(sizeWritten);
+        if (cudssDataGet(source.m_Handle, source.m_Data, param, buffer.data(), sizeWritten, &sizeWritten) !=
+            CUDSS_STATUS_SUCCESS) {
+            continue;
+        }
+        if (cudssDataSet(m_Handle, m_Data, param, buffer.data(), sizeWritten) != CUDSS_STATUS_SUCCESS) {
+            if (m_config.verbose) {
+                opserr << "WARNING CuDSSBackend::importSymbolicAnalysisFrom() - cudssDataSet failed for param "
+                       << static_cast<int>(param) << endln;
+            }
+            return -1;
+        }
+    }
+
+    m_phaseStatus = PhaseStatus::AnalysisComplete;
+    return 0;
+}
+
+int CuDSSBackend::bindPattern(int numRows, int numNnz, int *rowPtr, int *colIdx, void *values, void *rhs,
+                              void *solution, int numRhs)
+{
+    if (m_config.useMultiGPU && !m_deviceIndices.empty()) {
+        cudaCheckError(cudaSetDevice(m_deviceIndices.front()), "set device for bindPattern");
+    }
+
+    destroyMatrixObjects();
+    m_numRows = numRows;
+    m_numNnz = numNnz;
+    m_rowPtr = rowPtr;
+    m_colIdx = colIdx;
+
+    cudssMatrixType_t mtype = CUDSS_MTYPE_GENERAL;
+    cudssMatrixViewType_t mview = CUDSS_MVIEW_FULL;
+    if (m_config.matType == CuDSSMatrixType::SYMMETRIC) {
+        mtype = CUDSS_MTYPE_SYMMETRIC;
+        mview = CUDSS_MVIEW_LOWER;
+    } else if (m_config.matType == CuDSSMatrixType::SPD) {
+        mtype = CUDSS_MTYPE_SPD;
+        mview = CUDSS_MVIEW_LOWER;
+    }
+
+    cuDSSCheckError(cudssMatrixCreateCsr(&m_Matrix, numRows, numRows, numNnz, rowPtr, nullptr, colIdx, values,
+                                         m_IndexType, m_ValueType, mtype, mview, CUDSS_BASE_ZERO),
+                    "create cuDSS CSR matrix");
+
+    if (recreateDenseDescriptors(numRows, rhs, solution, numRhs) != 0) {
+        return -1;
+    }
+
+    m_phaseStatus = PhaseStatus::PatternBound;
+    return 0;
+}
+
+int CuDSSBackend::runSymbolicAnalysis()
+{
+    if (m_phaseStatus != PhaseStatus::PatternBound) {
+        opserr << "ERROR CuDSSBackend::runSymbolicAnalysis() - CSR pattern not bound\n";
+        return -1;
+    }
+
+    cuDSSCheckError(cudssExecute(m_Handle, CUDSS_PHASE_ANALYSIS, m_Config, m_Data, m_Matrix, m_Solution, m_RHS),
+                    "cuDSS symbolic analysis");
+    m_phaseStatus = PhaseStatus::AnalysisComplete;
+
+    if (applyHybridMemoryLimits() != 0) {
+        return -1;
+    }
+
+    if (m_config.verbose) {
+        opserr << "INFO CuDSSBackend::runSymbolicAnalysis() - symbolic analysis complete\n";
+    }
+
+    return 0;
+}
+
+int CuDSSBackend::bindStructure(int numRows, int numNnz, int *rowPtr, int *colIdx, void *values, void *rhs,
+                                void *solution, int numRhs, const CuDSSBackend *symbolicSource)
+{
+    if (symbolicSource != nullptr && matchesSparsityPattern(*symbolicSource, numRows, numNnz, rowPtr, colIdx)) {
+        if (bindPattern(numRows, numNnz, rowPtr, colIdx, values, rhs, solution, numRhs) != 0) {
+            return -1;
+        }
+        if (importSymbolicAnalysisFrom(*symbolicSource) != 0) {
+            if (m_config.verbose) {
+                opserr << "WARNING CuDSSBackend::bindStructure() - symbolic import failed; "
+                          "running full analysis\n";
+            }
+            destroyMatrixObjects();
+            return bindStructure(numRows, numNnz, rowPtr, colIdx, values, rhs, solution, numRhs, nullptr);
+        }
+        if (applyHybridMemoryLimits() != 0) {
+            return -1;
+        }
+        if (m_config.verbose) {
+            opserr << "INFO CuDSSBackend::bindStructure() - reused symbolic analysis\n";
+        }
+        return 0;
+    }
+
+    if (bindPattern(numRows, numNnz, rowPtr, colIdx, values, rhs, solution, numRhs) != 0) {
+        return -1;
+    }
+    return runSymbolicAnalysis();
 }
 
 int CuDSSBackend::applyHybridMemoryLimits()
@@ -235,55 +373,9 @@ int CuDSSBackend::recreateDenseDescriptors(int numRows, void *rhs, void *solutio
     return 0;
 }
 
-int CuDSSBackend::bindStructure(int numRows, int numNnz, int *rowPtr, int *colIdx, void *values,
-                                       void *rhs, void *solution, int numRhs)
-{
-    if (m_config.useMultiGPU && !m_deviceIndices.empty()) {
-        cudaCheckError(cudaSetDevice(m_deviceIndices.front()), "set device for bindStructure");
-    }
-
-    destroyMatrixObjects();
-    m_numRows = numRows;
-
-    cudssMatrixType_t mtype = CUDSS_MTYPE_GENERAL;
-    cudssMatrixViewType_t mview = CUDSS_MVIEW_FULL;
-    if (m_config.matKind == CuDssMatrixKind::SYMMETRIC) {
-        mtype = CUDSS_MTYPE_SYMMETRIC;
-        mview = CUDSS_MVIEW_LOWER;
-    } else if (m_config.matKind == CuDssMatrixKind::SPD) {
-        mtype = CUDSS_MTYPE_SPD;
-        mview = CUDSS_MVIEW_LOWER;
-    }
-
-    cuDSSCheckError(cudssMatrixCreateCsr(&m_Matrix, numRows, numRows, numNnz, rowPtr, nullptr, colIdx,
-                                         values, m_IndexType, m_ValueType, mtype, mview,
-                                         CUDSS_BASE_ZERO),
-                    "create cuDSS CSR matrix");
-
-    if (recreateDenseDescriptors(numRows, rhs, solution, numRhs) != 0) {
-        return -1;
-    }
-
-    m_structureBound = true;
-    m_factored = false;
-
-    cuDSSCheckError(cudssExecute(m_Handle, CUDSS_PHASE_ANALYSIS, m_Config, m_Data, m_Matrix, m_Solution,
-                                 m_RHS),
-                    "cuDSS symbolic analysis");
-
-    if (applyHybridMemoryLimits() != 0) {
-        return -1;
-    }
-
-    if (m_config.verbose) {
-        opserr << "INFO CuDSSBackend::bindStructure() - symbolic analysis complete\n";
-    }
-    return 0;
-}
-
 int CuDSSBackend::setMatrixValues(void *values)
 {
-    if (!m_structureBound) {
+    if (getPhaseStatus() < PhaseStatus::PatternBound) {
         opserr << "ERROR CuDSSBackend::setMatrixValues() - structure not bound\n";
         return -1;
     }
@@ -293,8 +385,8 @@ int CuDSSBackend::setMatrixValues(void *values)
 
 int CuDSSBackend::factorize(void *values, void *rhs, void *solution, int numRhs)
 {
-    if (!m_structureBound) {
-        opserr << "ERROR CuDSSBackend::factorize() - structure not bound\n";
+    if (getPhaseStatus() < PhaseStatus::AnalysisComplete) {
+        opserr << "ERROR CuDSSBackend::factorize() - symbolic analysis not complete\n";
         return -1;
     }
 
@@ -312,13 +404,13 @@ int CuDSSBackend::factorize(void *values, void *rhs, void *solution, int numRhs)
     cuDSSCheckError(cudssExecute(m_Handle, CUDSS_PHASE_FACTORIZATION, m_Config, m_Data, m_Matrix, m_Solution,
                                  m_RHS),
                     "cuDSS numeric factorization");
-    m_factored = true;
+    m_phaseStatus = PhaseStatus::FactorizationComplete;
     return 0;
 }
 
 int CuDSSBackend::refactorize(void *values, void *rhs, void *solution, int numRhs)
 {
-    if (!m_structureBound || !m_factored) {
+    if (getPhaseStatus() < PhaseStatus::FactorizationComplete) {
         opserr << "ERROR CuDSSBackend::refactorize() - not factored\n";
         return -1;
     }
@@ -341,7 +433,7 @@ int CuDSSBackend::refactorize(void *values, void *rhs, void *solution, int numRh
 
 int CuDSSBackend::solve(void *rhs, void *solution, int numRhs)
 {
-    if (!m_factored) {
+    if (getPhaseStatus() < PhaseStatus::FactorizationComplete) {
         opserr << "ERROR CuDSSBackend::solve() - matrix not factored\n";
         return -1;
     }

@@ -18,6 +18,7 @@ if(TARGET OPS_Cuda)
     PUBLIC
       CudaGenBcsrLinSOE.h
       CudaGenBcsrLinSolver.h
+      CuSparseBackend.h
   )
 
   target_include_directories(OPS_Cuda PUBLIC ${CMAKE_CURRENT_LIST_DIR})

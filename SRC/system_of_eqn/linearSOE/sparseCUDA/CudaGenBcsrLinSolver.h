@@ -56,6 +56,8 @@ public:
     int solve(void) override = 0;
     virtual int setSize(void) override;
     LinearSOESolver *getCopy(void) const override;
+    /** CUDA stream used by the solver backend, or nullptr if unavailable. */
+    virtual void *getSolverStream(void) const { return nullptr; }
 
     // Parallel communication methods
     int sendSelf(int commitTag, Channel &theChannel) override;   

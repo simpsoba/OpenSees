@@ -907,6 +907,7 @@ target_link_libraries(OpenSeesLIB
 # CUDA support as OPS_ sublibrary
 if(HAVE_CUDA)
   add_library(OPS_Cuda OBJECT
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuSparseBackend.cu
     ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaGenBcsrLinSOE.cu
     ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaGenBcsrLinSolver.cu
   )

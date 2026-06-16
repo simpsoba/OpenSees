@@ -88,19 +88,24 @@ CudaDirectSparseSolver::CudaDirectSparseSolver(CudaPrecision precision, bool ver
 
 void CudaDirectSparseSolver::init(CudaPrecision precision)
 {
-    CudaCsrMatrix::Options opts;
-    opts.precision = precision;
-    opts.syncAfterSolve = true;
-    opts.verbose = m_verbose;
-    opts.hybridMemoryMode = m_hybridMemoryMode;
-    opts.hybridDeviceMemoryLimits = m_hybridDeviceMemoryLimits;
-    opts.hybridExecuteMode = m_hybridExecuteMode;
-    opts.multiThreadingMode = m_multiThreadingMode;
-    opts.threadingLibPath = m_threadingLibPath;
-    opts.matKind = toCuDssMatrixKind(m_cudssMatType);
-    opts.useMultiGPU = m_useMultiGPU;
-    opts.deviceIndices = m_deviceIndices;
-    m_matrix = new CudaCsrMatrix(opts);
+    CudaCsrMatrix::SolverConfig solver;
+    solver.precision = precision;
+    solver.syncAfterSolve = true;
+    solver.verbose = m_verbose;
+    solver.hybridMemoryMode = m_hybridMemoryMode;
+    solver.hybridDeviceMemoryLimits = m_hybridDeviceMemoryLimits;
+    solver.hybridExecuteMode = m_hybridExecuteMode;
+    solver.multiThreadingMode = m_multiThreadingMode;
+    solver.threadingLibPath = m_threadingLibPath;
+    solver.matType = m_cudssMatType;
+    solver.useMultiGPU = m_useMultiGPU;
+    solver.deviceIndices = m_deviceIndices;
+    if (m_solverStream == nullptr) {
+        cudaCheckError(cudaStreamCreate(&m_solverStream), "create cuDSS solver stream");
+    }
+    CudaCsrMatrix::ExecutionContext exec;
+    exec.stream = m_solverStream;
+    m_matrix = new CudaCsrMatrix(solver, CudaCsrMatrix::SpmvConfig{}, exec);
     return;
 }
 
@@ -108,19 +113,12 @@ CudaDirectSparseSolver::~CudaDirectSparseSolver()
 {
     delete m_matrix;
     m_matrix = nullptr;
-    return;
-}
-
-CuDssMatrixKind CudaDirectSparseSolver::toCuDssMatrixKind(CuDSSMatrixType type)
-{
-    switch (type) {
-        case CuDSSMatrixType::SYMMETRIC:
-            return CuDssMatrixKind::SYMMETRIC;
-        case CuDSSMatrixType::SPD:
-            return CuDssMatrixKind::SPD;
-        default:
-            return CuDssMatrixKind::FULL;
+    if (m_solverStream != nullptr) {
+        cudaStreamSynchronize(m_solverStream);
+        cudaStreamDestroy(m_solverStream);
+        m_solverStream = nullptr;
     }
+    return;
 }
 
 int CudaDirectSparseSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE) {
@@ -171,7 +169,11 @@ int CudaDirectSparseSolver::solve(void) {
 
     m_matrix->bindValues(AValues);
 
-    if (matrixStatus == CudaGenBcsrLinSOE::MatrixStatus::STRUCTURE_CHANGED) {
+    if (!m_matrix->isFactored()) {
+        if (m_matrix->factorize(bValues, xValues) != 0) {
+            return -1;
+        }
+    } else if (matrixStatus == CudaGenBcsrLinSOE::MatrixStatus::STRUCTURE_CHANGED) {
         if (m_matrix->factorize(bValues, xValues) != 0) {
             return -1;
         }
@@ -215,6 +217,11 @@ CudaDirectSparseSolver::getCopy(void) const
         m_deviceIndices);
 }
 
+void *CudaDirectSparseSolver::getSolverStream(void) const
+{
+    return static_cast<void *>(m_solverStream);
+}
+
 int CudaDirectSparseSolver::setupMatrices() {
     if (m_matrix == nullptr) {
         opserr << "ERROR: CudaDirectSparseSolver::setupMatrices() - direct solver not initialized\n";
@@ -227,7 +234,8 @@ int CudaDirectSparseSolver::setupMatrices() {
     }
 
     CudaGenBcsrLinSOE::MatrixStatus matrixStatus = theSOE->getMatrixStatus();
-    if (matrixStatus != CudaGenBcsrLinSOE::MatrixStatus::STRUCTURE_CHANGED) {
+    if (matrixStatus != CudaGenBcsrLinSOE::MatrixStatus::STRUCTURE_CHANGED &&
+        m_matrix->isStructureBound()) {
         return 0;
     }
 

@@ -49,7 +49,7 @@
 
 // Matrix type for cuDSS: full, symmetric, or SPD (symmetric positive definite).
 // symmetric and spd both use symmetric lower storage in CudaGenBcsrLinSOE.
-enum class CuDSSMatrixType { FULL, SYMMETRIC, SPD };
+// CuDSSMatrixType is defined in CuDSSBackend.h.
 
 class CudaDirectSparseSolver : public CudaGenBcsrLinSolver
 {
@@ -77,6 +77,7 @@ public:
     int setSize(void) override;
     int setLinearSOE(CudaGenBcsrLinSOE &theSOE) override;
     LinearSOESolver *getCopy(void) const override;
+    void *getSolverStream(void) const override;
 
 protected:
 
@@ -106,8 +107,7 @@ private:
     // Helper function to initialize cuDSS matrices when structure changes
     int setupMatrices();
 
-    static CuDssMatrixKind toCuDssMatrixKind(CuDSSMatrixType type);
-
     CudaCsrMatrix *m_matrix = nullptr;
+    cudaStream_t m_solverStream = nullptr;
 };
 #endif

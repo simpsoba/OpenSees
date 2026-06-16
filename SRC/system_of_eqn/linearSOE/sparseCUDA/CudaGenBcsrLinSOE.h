@@ -63,7 +63,7 @@
 
 // Forward declarations
 class CudaGenBcsrLinSolver;
-class CudaCsrMatrix;
+class CuSparseBackend;
 
 // Pinned memory allocators for improved host-device transfer performance
 using pinned_mr = thrust::universal_host_pinned_memory_resource;
@@ -175,6 +175,8 @@ public:
         STRUCTURE_CHANGED // Both the size and coefficients of the matrix have changed
     };
     MatrixStatus getMatrixStatus(void) const;
+    /** CUDA stream used by the attached solver, or nullptr if unavailable. */
+    void *getSolverStream(void) const;
 
     // Host/device authority tracking for lazy synchronization
     enum class DataLocation {
@@ -189,6 +191,8 @@ public:
     void setXPrimaryLocation(DataLocation loc);
     void setAValuesPrimaryLocation(DataLocation loc);
     void setAIndicesPrimaryLocation(DataLocation loc);
+    DataLocation getAValuesPrimaryLocation(void) const { return m_aLoc; }
+    DataLocation getAIndicesPrimaryLocation(void) const { return m_aIndicesLoc; }
 
     // When true (default), getX() syncs from device; when false, host m_X may be stale.
     void setXSyncMode(bool mode);
@@ -267,8 +271,8 @@ protected:
     // Storage mode: full matrix or symmetric lower triangle
     MatrixStorageMode m_storageMode;
 
-    // Lazy cuSPARSE operator for formAp (SpMV only; separate from solver factorization)
-    CudaCsrMatrix *m_spmvMatrix = nullptr;
+    // Lazy cuSPARSE backend for formAp (SpMV only; independent of direct solver / cuDSS)
+    CuSparseBackend *m_spmvBackend = nullptr;
     int m_spmvStructureRows = -1;
 
     // Host/device authority for B, X, and A coefficient values

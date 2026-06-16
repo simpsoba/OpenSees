@@ -19,12 +19,56 @@ EXAMPLE_DIRS = (
 
 _PARAMS_RE = re.compile(r"^(.+)_params-\[(.+)\]$")
 
+# Longest-first so MultiSOE names match before shorter prefixes.
+_KNOWN_INTEGRATORS = (
+    "MKRAlphaExplicitMultiSOE",
+    "KRAlphaExplicitMultiSOE",
+    "MKRAlphaExplicit",
+    "KRAlphaExplicit",
+    "CudaMKRAlpha",
+    "CudaKRAlpha",
+    "Newmark",
+)
 
-def _parse_result_folder(name: str) -> Tuple[str, str]:
+_SOE_SUFFIXES = ("CuDSS_dFFI", "FullGeneral", "UmfPack", "SuperLU")
+
+_DEFAULT_SOLVER = {
+    "Newmark": "CuDSS",
+    "KRAlphaExplicit": "FullGeneral",
+    "MKRAlphaExplicit": "FullGeneral",
+    "KRAlphaExplicitMultiSOE": "CuDSS",
+    "MKRAlphaExplicitMultiSOE": "CuDSS",
+    "CudaKRAlpha": "CuDSS",
+    "CudaMKRAlpha": "CuDSS",
+}
+
+
+def _parse_method_solver(folder_prefix: str) -> Tuple[str, str]:
+    """Split result-folder prefix into integrator name and linear SOE solver."""
+    for soe in _SOE_SUFFIXES:
+        suffix = f"_{soe}"
+        if folder_prefix.endswith(suffix):
+            base = folder_prefix[: -len(suffix)]
+            if base in _KNOWN_INTEGRATORS:
+                return base, soe
+            return base, soe
+
+    if folder_prefix in _KNOWN_INTEGRATORS:
+        return folder_prefix, _DEFAULT_SOLVER.get(folder_prefix, "")
+
+    return folder_prefix, ""
+
+
+def _parse_result_folder(name: str) -> Tuple[str, str, str, str]:
+    """Return (integrator, solver, params, legacy_method) from a results folder name."""
     m = _PARAMS_RE.match(name)
     if not m:
-        return name, ""
-    return m.group(1), f"[{m.group(2)}]"
+        integrator, solver = _parse_method_solver(name)
+        return integrator, solver, "", name
+    integrator, solver = _parse_method_solver(m.group(1))
+    params = f"[{m.group(2)}]"
+    legacy_method = m.group(1)
+    return integrator, solver, params, legacy_method
 
 
 def _read_timing(timing_path: Path) -> Tuple[Optional[float], str]:
@@ -60,7 +104,7 @@ def collect_rows(example_dir: Path, *, example_name: Optional[str] = None) -> Li
     for folder in sorted(results_root.iterdir()):
         if not folder.is_dir():
             continue
-        method, params = _parse_result_folder(folder.name)
+        integrator, solver, params, _legacy = _parse_result_folder(folder.name)
         wall, label = _read_timing(folder / "timing.txt")
         try:
             rel = folder.relative_to(example_dir)
@@ -70,7 +114,8 @@ def collect_rows(example_dir: Path, *, example_name: Optional[str] = None) -> Li
             {
                 "example": example,
                 "result_folder": str(rel).replace("\\", "/"),
-                "method": method,
+                "integrator": integrator,
+                "solver": solver,
                 "params": params,
                 "wall_time_s": "" if wall is None else f"{wall:.6f}",
                 "label": label,
@@ -91,7 +136,8 @@ def write_timing_summary(
     fieldnames = [
         "example",
         "result_folder",
-        "method",
+        "integrator",
+        "solver",
         "params",
         "wall_time_s",
         "label",
@@ -128,7 +174,8 @@ def write_all_summaries(
     fieldnames = [
         "example",
         "result_folder",
-        "method",
+        "integrator",
+        "solver",
         "params",
         "wall_time_s",
         "label",

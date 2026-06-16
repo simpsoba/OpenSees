@@ -30,10 +30,11 @@
 #include <cudss.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
-enum class CuDssMatrixKind { FULL, SYMMETRIC, SPD };
+enum class CuDSSMatrixType { FULL, SYMMETRIC, SPD };
 
 class CuDSSBackend
 {
@@ -46,7 +47,7 @@ public:
         bool hybridExecuteMode;
         bool multiThreadingMode;
         std::string threadingLibPath;
-        CuDssMatrixKind matKind;
+        CuDSSMatrixType matType;
         bool useMultiGPU;
         std::vector<int> deviceIndices;
         // When set, cuDSS work is enqueued on this caller-owned stream and the
@@ -62,7 +63,7 @@ public:
               hybridExecuteMode(false),
               multiThreadingMode(false),
               threadingLibPath("/usr/lib/x86_64-linux-gnu/libcudss_mtlayer_gomp.so"),
-              matKind(CuDssMatrixKind::FULL),
+              matType(CuDSSMatrixType::FULL),
               useMultiGPU(false),
               externalStream(nullptr),
               syncAfterSolve(true)
@@ -87,9 +88,14 @@ public:
 
     cudaStream_t stream() const { return m_cudaStream; }
 
-    /** Bind CSR structure (device pointers, not owned). Runs symbolic analysis. */
-    int bindStructure(int numRows, int numNnz, int *rowPtr, int *colIdx, void *values, void *rhs,
-                      void *solution, int numRhs = 1);
+    /**
+     * Bind CSR structure (device pointers, not owned) and prepare symbolic analysis.
+     * When \a symbolicSource is null, runs full symbolic analysis on this pattern.
+     * When non-null and the sparsity pattern matches, imports symbolic data from
+     * \a symbolicSource; otherwise falls back to full symbolic analysis.
+     */
+    int bindStructure(int numRows, int numNnz, int *rowPtr, int *colIdx, void *values, void *rhs, void *solution,
+                      int numRhs = 1, const CuDSSBackend *symbolicSource = nullptr);
 
     /** Update sparse values pointer (same structure). */
     int setMatrixValues(void *values);
@@ -103,8 +109,19 @@ public:
     /** Solve using existing factorization; updates RHS/solution pointers. */
     int solve(void *rhs, void *solution, int numRhs = 1);
 
-    bool isStructureBound() const { return m_structureBound; }
-    bool isFactored() const { return m_factored; }
+    /**
+     * Highest completed setup milestone (ordered for >= comparisons).
+     * Names mirror cuDSS execute phases in cudssPhase_t; PatternBound is the
+     * pre-ANALYSIS state used while importing shared symbolic data.
+     */
+    enum class PhaseStatus : std::uint8_t {
+        Unbound,
+        PatternBound,
+        AnalysisComplete,       // CUDSS_PHASE_ANALYSIS
+        FactorizationComplete,  // CUDSS_PHASE_FACTORIZATION
+    };
+
+    PhaseStatus getPhaseStatus() const { return m_phaseStatus; }
 
 private:
     Config m_config;
@@ -127,11 +144,20 @@ private:
     cudaDataType_t m_IndexType;
 
     int m_numRows;
+    int m_numNnz;
     int m_numRhs;
-    bool m_structureBound;
-    bool m_factored;
+    const int *m_rowPtr = nullptr;
+    const int *m_colIdx = nullptr;
+    PhaseStatus m_phaseStatus = PhaseStatus::Unbound;
     bool m_ownsStream;
     std::vector<int> m_deviceIndices;
+
+    int bindPattern(int numRows, int numNnz, int *rowPtr, int *colIdx, void *values, void *rhs, void *solution,
+                    int numRhs);
+    int runSymbolicAnalysis();
+    bool matchesSparsityPattern(const CuDSSBackend &other, int numRows, int numNnz, const int *rowPtr,
+                                const int *colIdx) const;
+    int importSymbolicAnalysisFrom(const CuDSSBackend &source);
 };
 
 #endif

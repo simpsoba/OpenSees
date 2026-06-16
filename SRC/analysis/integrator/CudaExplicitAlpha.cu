@@ -199,6 +199,7 @@ struct CudaExplicitAlpha::ImplBase {
     virtual HostMotionPtrs ensureHostMotionBuffers(int n) = 0;
     virtual int newStepPredictor(CudaExplicitAlpha *integrator) = 0;
     virtual int formUnbalance(CudaGenBcsrLinSOE *cudaSOE) = 0;
+    virtual int useSolverStream(CudaGenBcsrLinSOE *cudaSOE) = 0;
     virtual int updateState(CudaGenBcsrLinSOE *cudaSOE, bool incrementalAccel) = 0;
     virtual void zeroState() = 0;
     virtual int getSize() const = 0;
@@ -224,9 +225,14 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
 
     cusparseHandle_t cusparseHandle = nullptr;
     cudaStream_t stream = nullptr;
+    bool ownsStream = false;
     CudaCsrMatrix *matM = nullptr;
     CudaCsrMatrix *matAlpha = nullptr;
     CudaCsrMatrix *matA = nullptr;
+    int boundStructureRows = 0;
+    int boundStructureNnz = 0;
+    const int *boundRowPtr = nullptr;
+    const int *boundColIdx = nullptr;
 
     int getSize() const override { return size; }
 
@@ -242,9 +248,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
 
     void allocate(int n, int alphaNumRhsIn) override
     {
-        if (stream == nullptr) {
-            cudaCheckError(cudaStreamCreate(&stream), "create integrator stream");
-        }
         size = n;
         alphaNumRhs = alphaNumRhsIn;
         const T zero = static_cast<T>(0.0);
@@ -328,36 +331,79 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
 
     void destroySolvers() override
     {
-        delete matM;
+        if (matAlpha != nullptr) {
+            matAlpha->detachSharedSpmvPattern();
+        }
+        if (matA != nullptr) {
+            matA->detachSharedSpmvPattern();
+        }
         delete matAlpha;
         delete matA;
+        delete matM;
         matM = nullptr;
         matAlpha = nullptr;
         matA = nullptr;
+        boundStructureRows = 0;
+        boundStructureNnz = 0;
+        boundRowPtr = nullptr;
+        boundColIdx = nullptr;
     }
 
     void shutdown() override
     {
+        if (stream != nullptr) {
+            cudaStreamSynchronize(stream);
+        }
+        cudaDeviceSynchronize();
         destroySolvers();
         if (cusparseHandle != nullptr) {
             cusparseDestroy(cusparseHandle);
             cusparseHandle = nullptr;
         }
-        if (stream != nullptr) {
+        if (ownsStream && stream != nullptr) {
             cudaStreamSynchronize(stream);
             cudaStreamDestroy(stream);
-            stream = nullptr;
         }
+        stream = nullptr;
+        ownsStream = false;
     }
 
-    CudaCsrMatrix::Options matrixOptions(CudaPrecision prec) const
+    void makeMatrixConfigs(CudaPrecision prec, CudaCsrMatrix::SolverConfig &solver,
+                           CudaCsrMatrix::SpmvConfig &spmv, CudaCsrMatrix::ExecutionContext &exec,
+                           const CuSparseBackend *sharedPattern = nullptr) const
     {
-        CudaCsrMatrix::Options opts;
-        opts.precision = prec;
-        opts.stream = stream;
-        opts.cusparseHandle = cusparseHandle;
-        opts.syncAfterSolve = false;
-        return opts;
+        solver = CudaCsrMatrix::SolverConfig{};
+        solver.precision = prec;
+        solver.syncAfterSolve = false;
+        exec.stream = stream;
+        spmv.externalHandle = cusparseHandle;
+        spmv.sharedPattern = sharedPattern;
+    }
+
+    int useSolverStream(CudaGenBcsrLinSOE *cudaSOE) override
+    {
+        if (cudaSOE == nullptr) {
+            return -1;
+        }
+        void *streamPtr = cudaSOE->getSolverStream();
+        if (streamPtr == nullptr) {
+            if (stream == nullptr) {
+                cudaCheckError(cudaStreamCreate(&stream), "create integrator fallback stream");
+                ownsStream = true;
+            }
+            return 0;
+        }
+        cudaStream_t solverStream = static_cast<cudaStream_t>(streamPtr);
+        if (ownsStream && stream != nullptr && stream != solverStream) {
+            cudaStreamSynchronize(stream);
+            cudaStreamDestroy(stream);
+        }
+        stream = solverStream;
+        ownsStream = false;
+        if (cusparseHandle != nullptr) {
+            cuSparseCheckError(cusparseSetStream(cusparseHandle, stream), "cusparseSetStream");
+        }
+        return 0;
     }
 
     void initCusparse()
@@ -371,11 +417,18 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
     void ensureMatrices(CudaPrecision prec)
     {
         initCusparse();
-        const CudaCsrMatrix::Options opts = matrixOptions(prec);
         if (matM == nullptr) {
-            matM = new CudaCsrMatrix(opts);
-            matAlpha = new CudaCsrMatrix(opts);
-            matA = new CudaCsrMatrix(opts);
+            CudaCsrMatrix::SolverConfig solver;
+            CudaCsrMatrix::SpmvConfig spmv;
+            CudaCsrMatrix::ExecutionContext exec;
+            makeMatrixConfigs(prec, solver, spmv, exec);
+            matM = new CudaCsrMatrix(solver, spmv, exec);
+
+            makeMatrixConfigs(prec, solver, spmv, exec, matM->getSpmvBackend());
+            matAlpha = new CudaCsrMatrix(solver, spmv, exec);
+
+            makeMatrixConfigs(prec, solver, spmv, exec, matM->getSpmvBackend());
+            matA = new CudaCsrMatrix(solver, spmv, exec);
         }
     }
 
@@ -387,20 +440,29 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         if (rowPtr == nullptr || colIdx == nullptr) {
             return -1;
         }
-        if (!matM->isStructureBound()) {
+
+        const bool samePattern = boundStructureRows == size && boundStructureNnz == nnz && boundRowPtr == rowPtr &&
+                                 boundColIdx == colIdx && matM != nullptr && matM->isStructureBound();
+
+        if (!samePattern) {
+            if (matM != nullptr && matM->isStructureBound()) {
+                matM->reset();
+                matAlpha->reset();
+                matA->reset();
+            }
             if (matM->bindStructure(size, nnz, rowPtr, colIdx) != 0) {
                 return -1;
             }
-        }
-        if (!matAlpha->isStructureBound()) {
             if (matAlpha->bindStructure(size, nnz, rowPtr, colIdx) != 0) {
                 return -1;
             }
-        }
-        if (!matA->isStructureBound()) {
             if (matA->bindStructure(size, nnz, rowPtr, colIdx) != 0) {
                 return -1;
             }
+            boundStructureRows = size;
+            boundStructureNnz = nnz;
+            boundRowPtr = rowPtr;
+            boundColIdx = colIdx;
         }
         return 0;
     }
@@ -424,6 +486,9 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         const int numRhs = areClose ? 1 : 2;
         ensureAlphaBuffers(numRhs);
 
+        if (useSolverStream(cudaSOE) != 0) {
+            return -1;
+        }
         cudaSOE->syncIndicesToDevice();
         cudaSOE->ensureDeviceVectorSizes();
         ensureMatrices(cudaSOE->getPrecision());
@@ -476,7 +541,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
             return -4;
         }
         if (!matAlpha->isFactored()) {
-            if (matAlpha->factorize(rhsAlpha, solAlpha1, numRhs) != 0) {
+            if (matAlpha->factorize(rhsAlpha, solAlpha1, numRhs, matM) != 0) {
                 return -4;
             }
         } else if (matAlpha->refactorize(rhsAlpha, solAlpha1, numRhs) != 0) {
@@ -524,30 +589,24 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
 
         if (alphaClose) {
             applyM(dUddot, dAlphaRhs);
-            cudaCheckError(cudaStreamSynchronize(stream), "newStep applyM sync");
             if (matAlpha->solve(dAlphaRhs, dAlphaSol1, 1) != 0) {
                 return -5;
             }
-            cudaCheckError(cudaStreamSynchronize(stream), "newStep alpha solve sync");
             kernelNewStep<<<gridBlocks(size), 256, 0, stream>>>(
                 size, dt, gammaT, alphaFT, alphaMT, static_cast<const T *>(nullptr), dU, dUdot, dUddot, dAlphaSol1,
                 dUalpha, dUalphadot, dUalphadotdot, incAccel, 1);
         } else {
             applyM(dUddot, dAlphaRhs);
-            cudaCheckError(cudaStreamSynchronize(stream), "newStep applyM sync");
             matA->spmv(dUddot, dAlphaRhs + size);
-            cudaCheckError(cudaStreamSynchronize(stream), "newStep A spmv sync");
             if (matAlpha->solve(dAlphaRhs, dAlphaSol1, alphaNumRhs) != 0) {
                 return -5;
             }
-            cudaCheckError(cudaStreamSynchronize(stream), "newStep alpha solve sync");
             kernelNewStep<<<gridBlocks(size), 256, 0, stream>>>(size, dt, gammaT, alphaFT, alphaMT, dAlphaSol2, dU,
                                                                 dUdot, dUddot, dAlphaSol1, dUalpha, dUalphadot,
                                                                 dUalphadotdot, incAccel, 0);
         }
-        // syncAfterSolve=false: device ops above share stream (ordered), but Thrust D2H uses a
-        // different path — sync here before reading predictor outputs on the host.
-        cudaCheckError(cudaStreamSynchronize(stream), "newStep predictor sync");
+        // All predictor ops share integrator stream; sync once before Thrust D2H host mirror update.
+        cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync before host read");
         h_state_alpha = d_state_alpha;
         return 0;
     }
@@ -566,7 +625,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
             return -3;
         }
         matAlpha->spmv(w2, b);
-        cudaCheckError(cudaStreamSynchronize(stream), "formUnbalance residual sync");
         cudaSOE->setBPrimaryLocation(CudaGenBcsrLinSOE::DataLocation::Device);
         return 0;
     }
@@ -584,7 +642,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         } else {
             cudaMemcpyAsync(dUddot, dX, static_cast<std::size_t>(size) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
         }
-        cudaCheckError(cudaStreamSynchronize(stream), "update state sync");
+        cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync before host read");
         h_state_cur = d_state_cur;
         return 0;
     }
@@ -893,6 +951,10 @@ int CudaExplicitAlpha::domainChanged()
     cudaSOE->setXSyncMode(false);
 
     m_impl->destroySolvers();
+    if (m_impl->useSolverStream(cudaSOE) != 0) {
+        operatorsBuilt = false;
+        return -1;
+    }
     m_impl->allocate(size, areAlphaMFClose() ? 1 : 2);
     const ImplBase::HostMotionPtrs buf = m_impl->ensureHostMotionBuffers(size);
     Ut->setData(buf.Ut, size);
@@ -982,7 +1044,8 @@ int CudaExplicitAlpha::formUnbalance()
     if (validateCudaSOE(cudaSOE) != 0) {
         return -2;
     }
-    return m_impl->formUnbalance(cudaSOE);
+    const int rc = m_impl->formUnbalance(cudaSOE);
+    return rc;
 }
 
 int CudaExplicitAlpha::update(const Vector &aiPlusOne)
