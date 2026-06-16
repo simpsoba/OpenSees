@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Shared plots for KRAlphaExplicit Two-Story MRF (woodbury / modalDampingW layout).
 
-Reference for errors: Newmark (default form D). Each figure uses four rows (integrator trios):
-  KR, KR TP, MKR, MKR TP — each row overlays Newmark plus dense/MultiSOE (total form).
-Columns are floors (peak-profile columns are disp / vel / accel / drift).
-Under each ``figures/rho_*`` folder, ``standard/`` holds total-form runs and
-``incrementalAccel/`` holds ``-incrementalAccel`` runs (same filenames in each).
-For ``rho_1`` only, ``standardAlphaCloseCheck/`` and ``incrementalAccelAlphaCloseCheck/``
-add runs with ``-alphaCloseCheck`` on all explicit integrators (dense and MultiSOE).
+CUDA example (Two-Story MRF): per-integrator figures under ``figures/rho_*/<panel>/KR|MKR/``
+compare one run vs. Newmark (FullGeneral) across floor columns — e.g.
+``standard/KR/floor_disp_dense.png``, ``error_floor_disp_multisoe_cudss.png``.
+
+Reference for errors: Newmark (FullGeneral). Under each ``figures/rho_*`` folder,
+``standard/`` holds total-form runs and ``incrementalAccel/`` holds ``-incrementalAccel``
+runs (same layout in each). For ``rho_1`` only, ``standardAlphaCloseCheck/`` and
+``incrementalAccelAlphaCloseCheck/`` add runs with ``-alphaCloseCheck``.
 
 Parallelize per-``rho_*`` figure generation: ``python3 plotResults.py --jobs auto``.
 """
@@ -23,7 +24,7 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Sequence, Tuple
+from typing import Callable, List, Sequence, Tuple
 
 import matplotlib
 
@@ -268,6 +269,11 @@ def resp_error_label(resp: str) -> str:
     return rf"$|{sym}|$ error vs. Newmark"
 
 
+def resp_error_vs_fg_label(resp: str) -> str:
+    sym = RESP_SYMBOL[resp]
+    return rf"$|{sym}|$ error vs. Newmark (FullGeneral)"
+
+
 def resp_fft_error_label(resp: str) -> str:
     sym = RESP_SYMBOL[resp]
     return rf"$|\mathrm{{FFT}}({sym})|$ error vs. Newmark"
@@ -301,11 +307,17 @@ CUDA_LEGEND_FAMILIES = (
 )
 
 # Linear SOE systems encoded as Method_{System}_params-... in result folder names.
-_TAG_SOE_SYSTEMS = ("UmfPack", "SuperLU")
+_TAG_SOE_SYSTEMS = ("CuDSS_dFFI", "UmfPack", "SuperLU")
+
+
+def _soe_legend_name(soe: str) -> str:
+    if soe == "CuDSS_dFFI":
+        return "CuDSS dFFI"
+    return soe
 
 
 def tag_linear_soe(tag: str) -> str | None:
-    """Return UmfPack/SuperLU when present in a result tag; else None (default CuDSS)."""
+    """Return encoded linear SOE when present in a result tag; else None (default CuDSS)."""
     for soe in _TAG_SOE_SYSTEMS:
         if f"_{soe}_params-" in tag:
             return soe
@@ -318,12 +330,15 @@ def legend_label(tag: str) -> str:
     if fam == "newmark_fg":
         return "Newmark (FullGeneral)"
     if fam == "newmark_cudss":
-        return f"Newmark ({soe})" if soe else "Newmark (CuDSS)"
+        return f"Newmark ({_soe_legend_name(soe)})" if soe else "Newmark (CuDSS)"
     if fam == "dense":
         return "Dense"
     if fam == "multisoe":
-        return f"MultiSOE ({soe})" if soe else "MultiSOE (CuDSS)"
+        return f"MultiSOE ({_soe_legend_name(soe)})" if soe else "MultiSOE (CuDSS)"
     if fam == "cuda":
+        base = "CudaExplicit" + (" diag. mass" if is_diagonal_mass_tag(tag) else "")
+        if soe == "CuDSS_dFFI":
+            return f"{base} (CuDSS dFFI)"
         return "Cuda" + (" diag. mass" if is_diagonal_mass_tag(tag) else "")
     return tag
 
@@ -336,6 +351,20 @@ def ordered_cuda_legend_tags(tags: Sequence[str]) -> List[str]:
         if fam not in by_fam:
             by_fam[fam] = tag
     return [by_fam[fam] for fam in CUDA_LEGEND_FAMILIES if fam in by_fam]
+
+
+def filter_tags_with_resp(
+    tags: Sequence[str],
+    resp: str,
+    load_resp: Callable[[str, str], Tuple[np.ndarray, np.ndarray]],
+) -> List[str]:
+    """Drop tags with no recorder output for ``resp`` (omit from legend)."""
+    present: List[str] = []
+    for tag in tags:
+        t, y = load_resp(tag, resp)
+        if t.size > 0 and y.size > 0:
+            present.append(tag)
+    return present
 
 
 def style_axes(ax, *, logy: bool = False) -> None:
@@ -356,9 +385,32 @@ def add_legend(fig, handles, labels, ncol: int = 2) -> None:
     )
 
 
-def legend_proxy_for_tag(tag: str) -> Line2D:
+def cuda_comparison_legend_label(tag: str, row_lab: str) -> str:
+    """Legend for KR/MKR pair plots: ``KR-$\\alpha$ Dense``, etc."""
+    prefix = rf"{row_lab}-$\alpha$"
+    fam = integrator_family(tag)
+    soe = tag_linear_soe(tag)
+    if fam == "newmark_fg":
+        return "Newmark (FullGeneral)"
+    if fam == "newmark_cudss":
+        soe_name = _soe_legend_name(soe) if soe else "CuDSS"
+        return f"{prefix} Newmark ({soe_name})"
+    if fam == "dense":
+        return f"{prefix} Dense"
+    if fam == "multisoe":
+        soe_name = _soe_legend_name(soe) if soe else "CuDSS"
+        return f"{prefix} MultiSOE ({soe_name})"
+    if fam == "cuda":
+        dm = " diag. mass" if is_diagonal_mass_tag(tag) else ""
+        if soe == "CuDSS_dFFI":
+            return f"{prefix} CudaExplicit{dm} (CuDSS dFFI)"
+        return f"{prefix} CudaExplicit{dm} (CuDSS)"
+    return legend_label(tag)
+
+
+def legend_proxy_for_tag(tag: str, *, label: str | None = None) -> Line2D:
     ls, col, lw, _z = plot_style(tag)
-    line = Line2D([0], [0], color=col, lw=lw, label=legend_label(tag))
+    line = Line2D([0], [0], color=col, lw=lw, label=label if label is not None else legend_label(tag))
     apply_line_dashes(line, ls)
     return line
 
@@ -388,12 +440,19 @@ def ordered_cuda_tags(
     return integrators
 
 
-def add_figure_legend(fig, tags: Sequence[str], *, nrow: int = 2) -> None:
+def add_figure_legend(
+    fig,
+    tags: Sequence[str],
+    *,
+    nrow: int = 2,
+    label_fn: Callable[[str], str] | None = None,
+) -> None:
     """Single figure-level legend above the full subplot grid (KRAlphaSparse layout)."""
     if not tags:
         return
-    handles = [legend_proxy_for_tag(t) for t in tags]
-    labels = [legend_label(t) for t in tags]
+    lab_fn = label_fn or legend_label
+    handles = [legend_proxy_for_tag(t, label=lab_fn(t)) for t in tags]
+    labels = [lab_fn(t) for t in tags]
     ncol = (len(handles) + nrow - 1) // nrow
     add_legend(fig, handles, labels, ncol=ncol)
 
@@ -616,6 +675,11 @@ def cuda_panel_rows_with_flags(
     p_cpu = [rho]
     p_cuda = integrator_params(rho, incremental=incremental, alpha_close_check=alpha_close_check)
     multi = lambda m: result_tag_with_system(m, p_cuda, soe_system)
+    cuda = (
+        (lambda m: result_tag_with_system(m, p_cuda, soe_system))
+        if soe_system == "CuDSS_dFFI"
+        else (lambda m: result_tag(m, p_cuda))
+    )
     return [
         (
             "KR",
@@ -623,7 +687,7 @@ def cuda_panel_rows_with_flags(
                 *refs,
                 result_tag("KRAlphaExplicit", p_cpu),
                 multi("KRAlphaExplicitMultiSOE"),
-                result_tag("CudaKRAlpha", p_cuda),
+                cuda("CudaKRAlpha"),
             ],
         ),
         (
@@ -632,7 +696,7 @@ def cuda_panel_rows_with_flags(
                 *refs,
                 result_tag("MKRAlphaExplicit", p_cpu),
                 multi("MKRAlphaExplicitMultiSOE"),
-                result_tag("CudaMKRAlpha", p_cuda),
+                cuda("CudaMKRAlpha"),
             ],
         ),
     ]
@@ -708,7 +772,56 @@ CUDA_SOE_PLOT_VARIANTS: List[Tuple[str, str | None]] = [
     ("", None),
     ("_umfpack", "UmfPack"),
     ("_superlu", "SuperLU"),
+    ("_cudss_dFFI", "CuDSS_dFFI"),
 ]
+
+
+def comparison_slug_for_tag(tag: str) -> str:
+    """Filesystem slug for one-integrator-vs-FG comparison figures."""
+    fam = integrator_family(tag)
+    soe = tag_linear_soe(tag)
+    if fam == "dense":
+        return "dense"
+    if fam == "multisoe":
+        if soe == "CuDSS_dFFI":
+            return "multisoe_cudss_dFFI"
+        if soe:
+            return f"multisoe_{soe.lower()}"
+        return "multisoe_cudss"
+    if fam == "cuda":
+        if soe == "CuDSS_dFFI":
+            return "cuda_cudss_dFFI"
+        return "cuda_cudss"
+    if fam == "newmark_cudss":
+        if soe == "CuDSS_dFFI":
+            return "newmark_cudss_dFFI"
+        if soe:
+            return f"newmark_{soe.lower()}"
+        return "newmark_cudss"
+    return "other"
+
+
+def cuda_row_comparison_specs(
+    row_tags: Sequence[str],
+    ref_cpu: str | None,
+) -> List[Tuple[str, str]]:
+    """(filename slug, method tag) pairs — every run except Newmark FullGeneral."""
+    specs: List[Tuple[str, str]] = []
+    for tag in row_tags:
+        if ref_cpu and tag == ref_cpu:
+            continue
+        specs.append((comparison_slug_for_tag(tag), tag))
+    return specs
+
+
+def filter_comparison_specs_for_soe_variant(
+    specs: Sequence[Tuple[str, str]],
+    soe_system: str | None,
+) -> List[Tuple[str, str]]:
+    """Base pass: default CuDSS paths only; variant pass: matching SOE tags only."""
+    if soe_system is None:
+        return [(slug, tag) for slug, tag in specs if tag_linear_soe(tag) is None]
+    return [(slug, tag) for slug, tag in specs if tag_linear_soe(tag) == soe_system]
 
 
 def _is_cuda_example(results: Path) -> bool:
@@ -880,6 +993,18 @@ def run_cuda(example_dir: Path, *, jobs: int = 1) -> int:
     n_floors = len(cfg.PLOT_FLOOR_NODES)
     floor_labs = list(cfg.FLOOR_LABELS)
 
+    if ref_cpu is None:
+        print(
+            "WARNING: no Newmark FullGeneral reference — CUDA pair figures skipped",
+            flush=True,
+        )
+
+    resp_panels = (
+        ("disp", "floor_disp"),
+        ("vel", "floor_vel"),
+        ("accel", "floor_accel"),
+    )
+
     for rho in rhos:
         if load_resp(ref, "disp")[0].size == 0:
             print(f"SKIP rho={rho:g}: missing reference disp.out", flush=True)
@@ -887,163 +1012,151 @@ def run_cuda(example_dir: Path, *, jobs: int = 1) -> int:
 
         rho_ylabel = rf"$\rho = {rho:g}$"
 
-        for fname_suffix, soe_system in CUDA_SOE_PLOT_VARIANTS:
-            if soe_system is not None:
-                ref_plot = resolve_newmark_soe_tag(results, soe_system)
-                if ref_plot is None:
-                    print(
-                        f"SKIP rho={rho:g} SOE={soe_system}: missing Newmark reference",
-                        flush=True,
-                    )
-                    continue
-            else:
-                ref_plot = ref
-
-            ref_tags = {ref_plot}
-            if ref_cpu:
-                ref_tags.add(ref_cpu)
+        for _fname_suffix, soe_system in CUDA_SOE_PLOT_VARIANTS:
+            if soe_system is not None and resolve_newmark_soe_tag(results, soe_system) is None:
+                print(
+                    f"SKIP rho={rho:g} SOE={soe_system}: missing Newmark reference",
+                    flush=True,
+                )
+                continue
 
             for subdir, row_fn in cuda_panel_variants_for_rho(rho, soe_system=soe_system):
                 rows = row_fn(ref, rho, ref_cpu)
                 out_dir = figures_root / f"rho_{rho:g}" / subdir
                 out_dir.mkdir(parents=True, exist_ok=True)
-                legend_tags = ordered_cuda_tags(
-                    ref_plot, rho, ref_cpu=ref_cpu, include_newmark=True, rows=rows
-                )
-                legend_tags_err = ordered_cuda_tags(
-                    ref_plot, rho, ref_cpu=ref_cpu, include_newmark=False, rows=rows
-                )
 
-                for resp, cmp_fname, err_fname in (
-                    ("disp", "floor_disp.png", "floor_disp_error.png"),
-                    ("vel", "floor_vel.png", "floor_vel_error.png"),
-                    ("accel", "floor_accel.png", "floor_accel_error.png"),
-                ):
-                    if fname_suffix:
-                        cmp_fname = cmp_fname.replace(".png", f"{fname_suffix}.png")
-                        err_fname = err_fname.replace(".png", f"{fname_suffix}.png")
-
-                    t_ref, y_ref = load_resp(ref_plot, resp)
-                    y_ref = pick_floors(y_ref)
-                    if t_ref.size == 0 or y_ref.size == 0:
-                        print(
-                            f"SKIP rho={rho:g}/{subdir}{fname_suffix}: missing reference {resp}.out",
-                            flush=True,
-                        )
+                for row_lab, row_tags in rows:
+                    specs = filter_comparison_specs_for_soe_variant(
+                        cuda_row_comparison_specs(row_tags, ref_cpu),
+                        soe_system,
+                    )
+                    if not specs or ref_cpu is None:
                         continue
 
-                    newmark_peak = [_finite_abs_max(y_ref[:, j]) for j in range(y_ref.shape[1])]
+                    family_dir = out_dir / row_lab
+                    family_dir.mkdir(parents=True, exist_ok=True)
 
-                    fig, axes = plt.subplots(
-                        len(rows),
-                        n_floors,
-                        figsize=(3.4 * n_floors, 2.5 * len(rows)),
-                        sharex=True,
-                        layout="constrained",
-                        squeeze=False,
-                    )
-                    fig_err, axes_err = plt.subplots(
-                        len(rows),
-                        n_floors,
-                        figsize=(3.4 * n_floors, 2.5 * len(rows)),
-                        sharex=True,
-                        layout="constrained",
-                        squeeze=False,
-                    )
+                    for slug, method_tag in specs:
+                        for resp, stem in resp_panels:
+                            t_fg, y_fg = load_resp(ref_cpu, resp)
+                            y_fg = pick_floors(y_fg)
+                            if t_fg.size == 0 or y_fg.size == 0:
+                                continue
 
-                    for row_i, (row_lab, tags) in enumerate(rows):
-                        for col_i in range(n_floors):
-                            ax = axes[row_i, col_i]
-                            ax_err = axes_err[row_i, col_i]
-                            for tag in tags:
-                                if tag in ref_tags:
-                                    continue
-                                t, y = load_resp(tag, resp)
-                                if t.size == 0:
-                                    continue
-                                y = pick_floors(y)
-                                if col_i >= y.shape[1]:
-                                    continue
-                                ls, col, lw, z = plot_style(tag)
-                                yy = y[:, col_i]
-                                if plot_stride > 1:
-                                    tt = t[::plot_stride]
-                                    yy = yy[::plot_stride]
-                                else:
-                                    tt = t
-                                line = ax.plot(tt, yy, "-", color=col, lw=lw, zorder=z)[0]
-                                apply_line_dashes(line, ls)
+                            t_m, y_m = load_resp(method_tag, resp)
+                            if t_m.size == 0:
+                                continue
+                            y_m = pick_floors(y_m)
+                            if y_m.size == 0:
+                                continue
 
-                                t_r, y_r, y_a = align_with_ref(t_ref, y_ref, t, y, tag)
-                                err = np.abs(y_a[:, col_i] - y_r[:, col_i])
-                                err = np.where(np.isfinite(err), np.maximum(err, EPS), np.nan)
-                                if plot_stride > 1:
-                                    t_r = t_r[::plot_stride]
-                                    err = err[::plot_stride]
-                                if not np.any(np.isfinite(err)):
-                                    continue
-                                line_e = ax_err.semilogy(
-                                    t_r, err, "-", color=col, lw=lw, zorder=z
-                                )[0]
-                                apply_line_dashes(line_e, ls)
+                            fig, axes = plt.subplots(
+                                1,
+                                n_floors,
+                                figsize=(3.4 * n_floors, 2.5),
+                                sharex=True,
+                                layout="constrained",
+                                squeeze=False,
+                            )
+                            fig_err, axes_err = plt.subplots(
+                                1,
+                                n_floors,
+                                figsize=(3.4 * n_floors, 2.5),
+                                sharex=True,
+                                layout="constrained",
+                                squeeze=False,
+                            )
 
-                            ref_line_tags = [ref_plot] + ([ref_cpu] if ref_cpu else [])
-                            for ref_tag in ref_line_tags:
-                                t_nr, y_nr = load_resp(ref_tag, resp)
-                                if t_nr.size == 0:
-                                    continue
-                                y_nr = pick_floors(y_nr)
-                                if col_i >= y_nr.shape[1]:
-                                    continue
-                                ls, col, lw, z = plot_style(ref_tag)
-                                yy_ref = y_nr[:, col_i]
-                                tt_ref = t_nr[::plot_stride] if plot_stride > 1 else t_nr
-                                yy_ref = yy_ref[::plot_stride] if plot_stride > 1 else yy_ref
-                                line = ax.plot(
-                                    tt_ref, yy_ref, "-", color=col, lw=lw, zorder=z
-                                )[0]
-                                apply_line_dashes(line, ls)
+                            for col_i in range(n_floors):
+                                ax = axes[0, col_i]
+                                ax_err = axes_err[0, col_i]
+                                newmark_peak = 0.0
 
-                            if row_i == 0:
+                                if col_i < y_fg.shape[1]:
+                                    ls, col, lw, z = plot_style(ref_cpu)
+                                    yy_fg = y_fg[:, col_i]
+                                    tt_fg = t_fg[::plot_stride] if plot_stride > 1 else t_fg
+                                    yy_fg = yy_fg[::plot_stride] if plot_stride > 1 else yy_fg
+                                    line_fg = ax.plot(
+                                        tt_fg, yy_fg, "-", color=col, lw=lw, zorder=z
+                                    )[0]
+                                    apply_line_dashes(line_fg, ls)
+                                    newmark_peak = _finite_abs_max(y_fg[:, col_i])
+
+                                if col_i < y_m.shape[1]:
+                                    ls, col, lw, z = plot_style(method_tag)
+                                    yy_m = y_m[:, col_i]
+                                    tt_m = t_m[::plot_stride] if plot_stride > 1 else t_m
+                                    yy_m = yy_m[::plot_stride] if plot_stride > 1 else yy_m
+                                    line_m = ax.plot(
+                                        tt_m, yy_m, "-", color=col, lw=lw, zorder=z
+                                    )[0]
+                                    apply_line_dashes(line_m, ls)
+
+                                    t_r, y_r, y_a = align_with_ref(
+                                        t_fg, y_fg, t_m, y_m, method_tag
+                                    )
+                                    if col_i < y_a.shape[1]:
+                                        err = np.abs(y_a[:, col_i] - y_r[:, col_i])
+                                        err = np.where(
+                                            np.isfinite(err), np.maximum(err, EPS), np.nan
+                                        )
+                                        if plot_stride > 1:
+                                            t_r = t_r[::plot_stride]
+                                            err = err[::plot_stride]
+                                        if np.any(np.isfinite(err)):
+                                            line_e = ax_err.semilogy(
+                                                t_r, err, "-", color=col, lw=lw, zorder=z
+                                            )[0]
+                                            apply_line_dashes(line_e, ls)
+
                                 ax.set_title(floor_labs[col_i])
                                 ax_err.set_title(floor_labs[col_i])
-                            if col_i == 0:
-                                ax.set_ylabel(row_lab)
-                                ax_err.set_ylabel(row_lab)
-                            style_axes(ax)
-                            if col_i < len(newmark_peak) and newmark_peak[col_i] > 0.0:
-                                ylim = 1.5 * newmark_peak[col_i]
-                                ax.set_ylim(-ylim, ylim)
-                            if ax_err.get_lines():
-                                style_axes(ax_err, logy=True)
-                                err_hi = 0.0
-                                for line in ax_err.get_lines():
-                                    yd = np.asarray(line.get_ydata(), dtype=float)
-                                    yd = yd[np.isfinite(yd) & (yd > 0.0)]
-                                    if yd.size:
-                                        err_hi = max(err_hi, float(np.max(yd)))
-                                err_floor = ERR_LOG_YMAX_MIN.get(resp, 1.0)
-                                ymax = max(err_hi * 1.05, err_floor) if err_hi > 0.0 else err_floor
-                                ymax = min(ymax, 1.0e12)
-                                ax_err.set_yscale("log")
-                                ax_err.set_ylim(EPS, ymax)
-                                ax_err.set_autoscaley_on(False)
-                            else:
-                                style_axes(ax_err)
-                                ax_err.set_visible(False)
-                            if row_i == len(rows) - 1:
-                                ax.set_xlabel("time (s)")
-                                ax_err.set_xlabel("time (s)")
+                                style_axes(ax)
+                                if newmark_peak > 0.0:
+                                    ylim = 1.5 * newmark_peak
+                                    ax.set_ylim(-ylim, ylim)
+                                if ax_err.get_lines():
+                                    style_axes(ax_err, logy=True)
+                                    err_hi = 0.0
+                                    for line in ax_err.get_lines():
+                                        yd = np.asarray(line.get_ydata(), dtype=float)
+                                        yd = yd[np.isfinite(yd) & (yd > 0.0)]
+                                        if yd.size:
+                                            err_hi = max(err_hi, float(np.max(yd)))
+                                    err_floor = ERR_LOG_YMAX_MIN.get(resp, 1.0)
+                                    ymax = (
+                                        max(err_hi * 1.05, err_floor)
+                                        if err_hi > 0.0
+                                        else err_floor
+                                    )
+                                    ymax = min(ymax, 1.0e12)
+                                    ax_err.set_yscale("log")
+                                    ax_err.set_ylim(EPS, ymax)
+                                    ax_err.set_autoscaley_on(False)
+                                else:
+                                    style_axes(ax_err)
+                                    ax_err.set_visible(False)
 
-                    fig.supylabel(f"{resp_time_label(resp)}\n{rho_ylabel}")
-                    fig_err.supylabel(f"{resp_error_label(resp)}\n{rho_ylabel}")
-                    add_figure_legend(fig, ordered_cuda_legend_tags(legend_tags), nrow=4)
-                    add_figure_legend(fig_err, ordered_cuda_legend_tags(legend_tags_err), nrow=3)
-                    fig.supxlabel("time (s)")
-                    fig_err.supxlabel("time (s)")
-                    save_fig(fig, out_dir / cmp_fname)
-                    save_fig(fig_err, out_dir / err_fname)
-                    any_ok = True
+                            fig.supylabel(f"{resp_time_label(resp)}\n{rho_ylabel}")
+                            fig_err.supylabel(f"{resp_error_vs_fg_label(resp)}\n{rho_ylabel}")
+                            pair_tags = [method_tag, ref_cpu]
+                            pair_tags = filter_tags_with_resp(pair_tags, resp, load_resp)
+                            if len(pair_tags) < 2:
+                                plt.close(fig)
+                                plt.close(fig_err)
+                                continue
+                            pair_label = lambda t: cuda_comparison_legend_label(t, row_lab)
+                            add_figure_legend(fig, pair_tags, nrow=1, label_fn=pair_label)
+                            if method_tag in filter_tags_with_resp([method_tag], resp, load_resp):
+                                add_figure_legend(
+                                    fig_err, [method_tag], nrow=1, label_fn=pair_label
+                                )
+                            fig.supxlabel("time (s)")
+                            fig_err.supxlabel("time (s)")
+                            save_fig(fig, family_dir / f"{stem}_{slug}.png")
+                            save_fig(fig_err, family_dir / f"error_{stem}_{slug}.png")
+                            any_ok = True
 
     if plot_cuda_convergence(
         results, figures_root, ref, ref_cpu, plot_stride=plot_stride, save_fig=save_fig
@@ -1470,9 +1583,9 @@ def run(example_dir: Path, *, jobs: int = 1) -> int:
                 save_fig(fig, out_dir / "profile_peak_resp.png")
 
         panels = (
-            ("disp", "floor_disp.png", "floor_disp_error.png", "floor_disp_error_fft.png"),
-            ("vel", "floor_vel.png", "floor_vel_error.png", "floor_vel_error_fft.png"),
-            ("accel", "floor_accel.png", "floor_accel_error.png", "floor_accel_error_fft.png"),
+            ("disp", "floor_disp.png", "error_floor_disp.png", "error_floor_disp_fft.png"),
+            ("vel", "floor_vel.png", "error_floor_vel.png", "error_floor_vel_fft.png"),
+            ("accel", "floor_accel.png", "error_floor_accel.png", "error_floor_accel_fft.png"),
         )
 
         for resp, cmp_fname, err_fname, fft_fname in panels:

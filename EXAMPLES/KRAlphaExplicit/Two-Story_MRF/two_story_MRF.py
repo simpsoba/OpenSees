@@ -471,8 +471,14 @@ def _default_system(integrator_method: str) -> str:
     return "FullGeneral"
 
 
-def _set_transient_linear_system(integrator_method: str, system: str | None = None) -> None:
+def _set_transient_linear_system(
+    integrator_method: str, system: str | None = None, cudss_precision: str | None = None
+) -> None:
     """CuDSS for Newmark, Cuda*, and *MultiSOE*; FullGeneral for dense KRAlpha."""
+    effective = system if system is not None else _default_system(integrator_method)
+    if cudss_precision == "dFFI" and effective == "CuDSS":
+        ops.system("CuDSS", "-precision", "dFFI")
+        return
     if system is not None:
         ops.system(system)
         return
@@ -483,6 +489,10 @@ def _result_folder(integrator: dict) -> str:
     method = integrator["method"]
     params = integrator["params"]
     system = integrator.get("system")
+    cudss_precision = integrator.get("cudss_precision")
+    effective = system if system is not None else _default_system(method)
+    if cudss_precision == "dFFI" and effective == "CuDSS":
+        return f"results/{method}_CuDSS_dFFI_params-{params!s}"
     if system is not None and not (method == "Newmark" and system == "CuDSS"):
         return f"results/{method}_{system}_params-{params!s}"
     return f"results/{method}_params-{params!s}"
@@ -532,7 +542,11 @@ def run_dynamic_analysis(
     
     # Setup dynamic analysis
     ops.wipeAnalysis()
-    _set_transient_linear_system(integrator["method"], integrator.get("system"))
+    _set_transient_linear_system(
+        integrator["method"],
+        integrator.get("system"),
+        integrator.get("cudss_precision"),
+    )
     ops.constraints('Transformation')
     ops.numberer('Plain')
     # OpenSees 'test' print flag: 0 for Newmark; verbose (5) for 1-iter explicit runs
@@ -613,7 +627,11 @@ def run_dynamic_analysis(
         ops.printA('-file', f'{output_folder}/matrixA.txt')
         ops.printB('-file', f'{output_folder}/vectorB.txt')
         Neqn = ops.systemSize()
-        _set_transient_linear_system(integrator["method"], integrator.get("system"))
+        _set_transient_linear_system(
+            integrator["method"],
+            integrator.get("system"),
+            integrator.get("cudss_precision"),
+        )
 
         # Element Connectivity Matrix. 
         # Reference: Scott, M. H. (2022). OpenSees Spy. Portwood Digital. url=https://portwooddigital.com/2022/03/13/opensees-spy/

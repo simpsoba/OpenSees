@@ -33,6 +33,11 @@ def main() -> int:
     ap.add_argument("--scale", type=float, default=3.0)
     ap.add_argument("--system", default=None, help="Linear SOE override, e.g. CuDSS or FullGeneral")
     ap.add_argument(
+        "--cudss-precision",
+        default=None,
+        help="CuDSS precision mode when using CuDSS (e.g. dFFI for single precision)",
+    )
+    ap.add_argument(
         "--test",
         default=None,
         help='Optional JSON convergence test, e.g. {"type":"NormUnbalance","tol":1e-4}',
@@ -52,6 +57,8 @@ def main() -> int:
         integrator["pFlag"] = args.pFlag
     if args.system:
         integrator["system"] = args.system
+    if args.cudss_precision:
+        integrator["cudss_precision"] = args.cudss_precision
     if args.test:
         try:
             integrator["test"] = json.loads(args.test)

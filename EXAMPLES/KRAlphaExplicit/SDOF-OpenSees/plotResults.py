@@ -281,9 +281,9 @@ def _plot_rho_variant(
 
     produced = False
     for resp, cmp_fname, err_fname in (
-        ("disp", "floor_disp.png", "floor_disp_error.png"),
-        ("vel", "floor_vel.png", "floor_vel_error.png"),
-        ("accel", "floor_accel.png", "floor_accel_error.png"),
+        ("disp", "floor_disp.png", "error_floor_disp.png"),
+        ("vel", "floor_vel.png", "error_floor_vel.png"),
+        ("accel", "floor_accel.png", "error_floor_accel.png"),
     ):
         y_th_ref = (
             theory_resp[resp]

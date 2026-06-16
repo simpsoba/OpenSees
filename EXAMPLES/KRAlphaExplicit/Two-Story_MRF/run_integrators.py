@@ -20,6 +20,7 @@ Usage:
   python3 run_integrators.py --append 1.0
   python3 run_integrators.py --plots-only
   python3 run_integrators.py --no-incremental
+  python3 run_integrators.py --cudss-dffi --append 1.0
   python3 run_integrators.py --jobs auto
 
 Environment:
@@ -40,7 +41,7 @@ from pathlib import Path
 from typing import List, Literal, Optional, Tuple, Union
 
 Engine = Literal["tcl", "python"]
-RunSpec = Tuple[str, str, List[Union[float, str]], Optional[str]]
+RunSpec = Tuple[str, str, List[Union[float, str]], Optional[str], Optional[str]]
 
 DEFAULT_RHOS: List[float] = [1.0, 0.5]
 DEFAULT_SCALE = 3.0
@@ -70,7 +71,11 @@ def _python_env(here: Path) -> dict[str, str]:
 
 
 def _tcl_method_and_args(
-    ops_method: str, params: List[Union[float, str]], scale: float, system: Optional[str]
+    ops_method: str,
+    params: List[Union[float, str]],
+    scale: float,
+    system: Optional[str],
+    cudss_precision: Optional[str] = None,
 ) -> List[str]:
     if ops_method == "Newmark" and system == "FullGeneral":
         return ["NewmarkCPU"]
@@ -78,6 +83,8 @@ def _tcl_method_and_args(
         args: List[str] = ["Newmark"]
         if system is not None and system != "CuDSS":
             args.extend(["-system", system])
+        if cudss_precision is not None:
+            args.extend(["-cudssPrecision", cudss_precision])
         return args
 
     if not params:
@@ -93,6 +100,8 @@ def _tcl_method_and_args(
             raise ValueError(f"unexpected integrator param after rho: {tok!r}")
     if system is not None and system != "CuDSS":
         args.extend(["-system", system])
+    if cudss_precision is not None:
+        args.extend(["-cudssPrecision", cudss_precision])
     return args
 
 
@@ -103,9 +112,14 @@ def _run_tcl(
     params: List[Union[float, str]],
     scale: float,
     system: Optional[str],
+    cudss_precision: Optional[str],
 ) -> int:
     tcl_script = here / "two_story_MRF.tcl"
-    cmd = [str(opensees), str(tcl_script), *_tcl_method_and_args(method, params, scale, system)]
+    cmd = [
+        str(opensees),
+        str(tcl_script),
+        *_tcl_method_and_args(method, params, scale, system, cudss_precision),
+    ]
     print(" ".join(cmd), flush=True)
     return subprocess.run(cmd, cwd=here).returncode
 
@@ -121,6 +135,7 @@ def _run_python(
     gm_file: Path,
     pflag: Optional[int],
     system: Optional[str],
+    cudss_precision: Optional[str],
 ) -> int:
     cmd = [
         py,
@@ -142,6 +157,8 @@ def _run_python(
         cmd += ["--pFlag", str(pflag)]
     if system is not None:
         cmd += ["--system", system]
+    if cudss_precision is not None:
+        cmd += ["--cudss-precision", cudss_precision]
     print(" ".join(cmd), flush=True)
     return subprocess.run(cmd, cwd=here, env=_python_env(here)).returncode
 
@@ -154,6 +171,7 @@ RunTask = Tuple[
     List[Union[float, str]],
     float,  # scale
     Optional[str],  # system
+    Optional[str],  # cudss_precision
     Path,  # gm_file
     float,  # dt_analysis
     Optional[Path],  # opensees (tcl)
@@ -170,6 +188,7 @@ def _run_task(task: RunTask) -> Tuple[str, int]:
         params,
         scale,
         system,
+        cudss_precision,
         gm_file,
         dt_analysis,
         opensees,
@@ -178,44 +197,28 @@ def _run_task(task: RunTask) -> Tuple[str, int]:
     max_iter = 25 if method == "Newmark" else 1
     pflag = 0 if method == "Newmark" else 5
     if engine == "tcl":
-        rc = _run_tcl(opensees, here, method, params, scale, system)
+        rc = _run_tcl(opensees, here, method, params, scale, system, cudss_precision)
     else:
-        rc = _run_python(py, here, method, params, max_iter, dt_analysis, scale, gm_file, pflag, system)
+        rc = _run_python(
+            py, here, method, params, max_iter, dt_analysis, scale, gm_file, pflag, system, cudss_precision
+        )
     return label, rc
 
 
 def _kr_cpu_run(rho: float) -> RunSpec:
-    return (f"KR ρ={rho:g}", "KRAlphaExplicit", [rho], None)
+    return (f"KR ρ={rho:g}", "KRAlphaExplicit", [rho], None, None)
 
 
 def _mkr_cpu_run(rho: float) -> RunSpec:
-    return (f"MKR ρ={rho:g}", "MKRAlphaExplicit", [rho], None)
+    return (f"MKR ρ={rho:g}", "MKRAlphaExplicit", [rho], None, None)
 
 
 def _cuda_runs(
-    rho: float, *, incremental: bool = False, alpha_close_check: bool = False
-) -> List[RunSpec]:
-    sfx = ""
-    extra: List[Union[float, str]] = []
-    if incremental:
-        sfx += " (incr)"
-        extra.append("-incrementalAccel")
-    if alpha_close_check:
-        sfx += " (α close)"
-        extra.append("-alphaCloseCheck")
-    p: List[Union[float, str]] = [rho, *extra]
-    return [
-        (f"CudaKR ρ={rho:g}{sfx}", "CudaKRAlpha", list(p), None),
-        (f"CudaMKR ρ={rho:g}{sfx}", "CudaMKRAlpha", list(p), None),
-    ]
-
-
-def _multisoe_runs(
     rho: float,
     *,
     incremental: bool = False,
     alpha_close_check: bool = False,
-    system: Optional[str] = None,
+    cudss_precision: Optional[str] = None,
     label: Optional[str] = None,
 ) -> List[RunSpec]:
     sfx = ""
@@ -230,16 +233,42 @@ def _multisoe_runs(
         sfx += f" ({label})"
     p: List[Union[float, str]] = [rho, *extra]
     return [
-        (f"MultiSOE KR ρ={rho:g}{sfx}", "KRAlphaExplicitMultiSOE", list(p), system),
-        (f"MultiSOE MKR ρ={rho:g}{sfx}", "MKRAlphaExplicitMultiSOE", list(p), system),
+        (f"CudaKR ρ={rho:g}{sfx}", "CudaKRAlpha", list(p), None, cudss_precision),
+        (f"CudaMKR ρ={rho:g}{sfx}", "CudaMKRAlpha", list(p), None, cudss_precision),
+    ]
+
+
+def _multisoe_runs(
+    rho: float,
+    *,
+    incremental: bool = False,
+    alpha_close_check: bool = False,
+    system: Optional[str] = None,
+    cudss_precision: Optional[str] = None,
+    label: Optional[str] = None,
+) -> List[RunSpec]:
+    sfx = ""
+    extra: List[Union[float, str]] = []
+    if incremental:
+        sfx += " (incr)"
+        extra.append("-incrementalAccel")
+    if alpha_close_check:
+        sfx += " (α close)"
+        extra.append("-alphaCloseCheck")
+    if label:
+        sfx += f" ({label})"
+    p: List[Union[float, str]] = [rho, *extra]
+    return [
+        (f"MultiSOE KR ρ={rho:g}{sfx}", "KRAlphaExplicitMultiSOE", list(p), system, cudss_precision),
+        (f"MultiSOE MKR ρ={rho:g}{sfx}", "MKRAlphaExplicitMultiSOE", list(p), system, cudss_precision),
     ]
 
 
 def _build_soe_variant_runs(rhos: List[float], *, include_incremental: bool = True) -> List[RunSpec]:
     """UmfPack/SuperLU Newmark + MultiSOE only (append to existing CuDSS matrix)."""
     runs: List[RunSpec] = [
-        ("Newmark (UmfPack)", "Newmark", [0.5, 0.25], "UmfPack"),
-        ("Newmark (SuperLU)", "Newmark", [0.5, 0.25], "SuperLU"),
+        ("Newmark (UmfPack)", "Newmark", [0.5, 0.25], "UmfPack", None),
+        ("Newmark (SuperLU)", "Newmark", [0.5, 0.25], "SuperLU", None),
     ]
     for rho in rhos:
         runs.extend(_multisoe_runs(rho, incremental=False, system="UmfPack", label="UmfPack"))
@@ -276,12 +305,57 @@ def _build_soe_variant_runs(rhos: List[float], *, include_incremental: bool = Tr
     return runs
 
 
+def _build_cudss_sp_runs(rhos: List[float], *, include_incremental: bool = True) -> List[RunSpec]:
+    """CuDSS single-precision (dFFI) for all CuDSS code paths (append mode)."""
+    sp = "dFFI"
+    runs: List[RunSpec] = [
+        ("Newmark (CuDSS sp)", "Newmark", [0.5, 0.25], None, sp),
+    ]
+    for rho in rhos:
+        runs.extend(_multisoe_runs(rho, incremental=False, cudss_precision=sp, label="CuDSS sp"))
+        runs.extend(_cuda_runs(rho, incremental=False, cudss_precision=sp, label="CuDSS sp"))
+        if include_incremental:
+            runs.extend(
+                _multisoe_runs(rho, incremental=True, cudss_precision=sp, label="CuDSS sp")
+            )
+            runs.extend(_cuda_runs(rho, incremental=True, cudss_precision=sp, label="CuDSS sp"))
+        if abs(rho - 1.0) < 1e-12:
+            runs.extend(
+                _multisoe_runs(
+                    rho, alpha_close_check=True, cudss_precision=sp, label="CuDSS sp"
+                )
+            )
+            runs.extend(
+                _cuda_runs(rho, alpha_close_check=True, cudss_precision=sp, label="CuDSS sp")
+            )
+            if include_incremental:
+                runs.extend(
+                    _multisoe_runs(
+                        rho,
+                        incremental=True,
+                        alpha_close_check=True,
+                        cudss_precision=sp,
+                        label="CuDSS sp",
+                    )
+                )
+                runs.extend(
+                    _cuda_runs(
+                        rho,
+                        incremental=True,
+                        alpha_close_check=True,
+                        cudss_precision=sp,
+                        label="CuDSS sp",
+                    )
+                )
+    return runs
+
+
 def _build_runs(rhos: List[float], *, include_incremental: bool = True) -> List[RunSpec]:
     runs: List[RunSpec] = [
-        ("Newmark (CuDSS)", "Newmark", [0.5, 0.25], None),
-        ("Newmark (CPU)", "Newmark", [0.5, 0.25], "FullGeneral"),
-        ("Newmark (UmfPack)", "Newmark", [0.5, 0.25], "UmfPack"),
-        ("Newmark (SuperLU)", "Newmark", [0.5, 0.25], "SuperLU"),
+        ("Newmark (CuDSS)", "Newmark", [0.5, 0.25], None, None),
+        ("Newmark (CPU)", "Newmark", [0.5, 0.25], "FullGeneral", None),
+        ("Newmark (UmfPack)", "Newmark", [0.5, 0.25], "UmfPack", None),
+        ("Newmark (SuperLU)", "Newmark", [0.5, 0.25], "SuperLU", None),
     ]
     for rho in rhos:
         runs.append(_kr_cpu_run(rho))
@@ -343,6 +417,8 @@ _SKIP_ARGS = frozenset(
         "--tcl",
         "--python",
         "--soe-variants",
+        "--cudss-sp",
+        "--cudss-dffi",
     )
 )
 
@@ -418,12 +494,15 @@ def main() -> None:
     plots_only = "--plots-only" in argv
     append = "--append" in argv
     soe_variants_only = "--soe-variants" in argv
+    cudss_sp_only = "--cudss-sp" in argv or "--cudss-dffi" in argv
     jobs = _parse_jobs(argv)
     engine = _parse_engine(argv)
     only_rhos = _parse_rho_args(argv)
     include_incremental = "--no-incremental" not in argv
     rhos = only_rhos if only_rhos else DEFAULT_RHOS
-    if soe_variants_only:
+    if cudss_sp_only:
+        runs = _build_cudss_sp_runs(rhos, include_incremental=include_incremental)
+    elif soe_variants_only:
         runs = _build_soe_variant_runs(rhos, include_incremental=include_incremental)
     else:
         runs = _build_runs(rhos, include_incremental=include_incremental)
@@ -449,7 +528,7 @@ def main() -> None:
 
         print(f"Analysis engine: {engine}", flush=True)
         tasks: List[RunTask] = []
-        for label, ops_method, params, system in runs:
+        for label, ops_method, params, system, cudss_precision in runs:
             tasks.append(
                 (
                     label,
@@ -459,6 +538,7 @@ def main() -> None:
                     params,
                     DEFAULT_SCALE,
                     system,
+                    cudss_precision,
                     gm_file,
                     float(DT_ANALYSIS),
                     opensees,

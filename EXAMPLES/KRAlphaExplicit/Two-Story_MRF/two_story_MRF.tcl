@@ -43,6 +43,7 @@ set useDiagonalMass 0
 set useIncrementalAccel 0
 set useAlphaCloseCheck 0
 set systemOverride ""
+set cudssPrecision ""
 for {set i $flagStart} {$i < $argc} {incr i} {
     set flag [lindex $argv $i]
     set flagLower [string tolower $flag]
@@ -59,9 +60,17 @@ for {set i $flagStart} {$i < $argc} {incr i} {
             }
             set systemOverride [lindex $argv $i]
         }
+        -cudssprecision {
+            incr i
+            if {$i >= $argc} {
+                puts stderr "ERROR: -cudssPrecision requires an argument (dFFI)"
+                exit 1
+            }
+            set cudssPrecision [lindex $argv $i]
+        }
         default {
             puts stderr "Unknown flag: [lindex $argv $i]"
-            puts stderr "Optional flags: -incrementalAccel -alphaCloseCheck -system SOE diagonalMass"
+            puts stderr "Optional flags: -incrementalAccel -alphaCloseCheck -system SOE -cudssPrecision dFFI diagonalMass"
             exit 1
         }
     }
@@ -173,18 +182,25 @@ if {$integratorMethod in {KRAlphaExplicit MKRAlphaExplicit} && ($useIncrementalA
 }
 
 # Match Python result folder names
+set folderSystemLabel ""
+if {$linearSOE eq "CuDSS" && $cudssPrecision eq "dFFI"} {
+    set folderSystemLabel CuDSS_dFFI
+} elseif {$systemOverride ne "" && $systemOverride ne "CuDSS"} {
+    set folderSystemLabel $systemOverride
+}
+
 if {$integratorMethod eq "Newmark" && [info exists newmarkCpu] && $newmarkCpu} {
     set paramsLabel {[0.5, 0.25]}
     set outputFolder [file join $scriptDir results Newmark_FullGeneral_params-${paramsLabel}]
-} elseif {$integratorMethod eq "Newmark" && $systemOverride ne "" && $systemOverride ne "CuDSS"} {
+} elseif {$integratorMethod eq "Newmark" && $folderSystemLabel ne ""} {
     set paramsLabel {[0.5, 0.25]}
-    set outputFolder [file join $scriptDir results Newmark_${systemOverride}_params-${paramsLabel}]
+    set outputFolder [file join $scriptDir results Newmark_${folderSystemLabel}_params-${paramsLabel}]
 } elseif {$integratorMethod eq "Newmark"} {
     set paramsLabel {[0.5, 0.25]}
     set outputFolder [file join $scriptDir results Newmark_params-${paramsLabel}]
-} elseif {$systemOverride ne "" && $systemOverride ne "CuDSS"} {
+} elseif {$folderSystemLabel ne ""} {
     set paramsLabel [formatParamsLabel $integratorParams]
-    set outputFolder [file join $scriptDir results ${integratorMethod}_${systemOverride}_params-${paramsLabel}]
+    set outputFolder [file join $scriptDir results ${integratorMethod}_${folderSystemLabel}_params-${paramsLabel}]
 } else {
     set paramsLabel [formatParamsLabel $integratorParams]
     set outputFolder [file join $scriptDir results ${integratorMethod}_params-${paramsLabel}]
@@ -385,7 +401,7 @@ proc setupRayleighDamping {} {
 
 proc runDynamicAnalysis {} {
     global scriptDir gmFile gravity scaleFactor dtAnalysis freeVibrationSeconds
-    global integratorMethod integratorParams maxIter pFlag algo linearSOE
+    global integratorMethod integratorParams maxIter pFlag algo linearSOE cudssPrecision
     global outputFolder MONITOR_NODES MONITOR_DOFS sec
 
     file mkdir $outputFolder
@@ -397,7 +413,13 @@ proc runDynamicAnalysis {} {
     pattern UniformExcitation 2 1 -accel 2 -fact $scaleFactor
 
     wipeAnalysis
-    system $linearSOE
+    if {$linearSOE eq "CuDSS" && $cudssPrecision eq "dFFI"} {
+        eval system CuDSS -precision dFFI
+        set systemLog "CuDSS -precision dFFI"
+    } else {
+        system $linearSOE
+        set systemLog $linearSOE
+    }
     constraints Transformation
     numberer Plain
     test NormUnbalance 1.0e-8 $maxIter $pFlag
@@ -421,7 +443,7 @@ proc runDynamicAnalysis {} {
     set gmLogName [file tail $gmDat]
 
     puts $resultsFd "$currentTime - Running $gmLogName (dt = $dtFile s, npts = $nPts) with dt_analysis = $dtAnalysis s, n_steps = $nSteps (t_end = $tFinal s), scale factor = $scaleFactor."
-    puts $resultsFd "$currentTime - test NormUnbalance 1.0e-8 $maxIter $pFlag; algorithm $algo; system $linearSOE; integrator $integratorMethod $integratorParams."
+    puts $resultsFd "$currentTime - test NormUnbalance 1.0e-8 $maxIter $pFlag; algorithm $algo; system $systemLog; integrator $integratorMethod $integratorParams."
     close $resultsFd
 
     foreach resp {disp vel accel} {
