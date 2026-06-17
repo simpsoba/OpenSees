@@ -886,6 +886,37 @@ def load_convergence(results: Path, tag: str) -> Tuple[np.ndarray, np.ndarray, n
     return data[:, 0], data[:, 1], data[:, 2]
 
 
+def discover_newmark_convergence_variants(results: Path, ref_cpu: str | None) -> List[str]:
+    """Newmark runs with convergence.dat, excluding the FullGeneral reference."""
+    if ref_cpu is None or not results.is_dir():
+        return []
+    variants: List[str] = []
+    for path in sorted(results.iterdir()):
+        if not path.is_dir() or not path.name.startswith("Newmark"):
+            continue
+        if path.name == ref_cpu:
+            continue
+        if load_convergence(results, path.name)[0].size:
+            variants.append(path.name)
+    return variants
+
+
+def _style_convergence_axes(ax_iters, ax_norm) -> None:
+    ax_iters.set_ylabel("NR iterations")
+    ax_norm.set_ylabel("final unbalance norm")
+    style_axes(ax_iters)
+    style_axes(ax_norm, logy=True)
+    max_iters = 0.0
+    for line in ax_iters.get_lines():
+        yd = np.asarray(line.get_ydata(), dtype=float)
+        yd = yd[np.isfinite(yd)]
+        if yd.size:
+            max_iters = max(max_iters, float(np.max(yd)))
+    if max_iters > 0:
+        ax_iters.set_ylim(0.0, max(max_iters * 1.05, 1.0))
+        ax_iters.set_yticks(np.arange(0, int(max_iters) + 2))
+
+
 def _plot_convergence_series(
     ax,
     ax_norm,
@@ -919,35 +950,44 @@ def plot_cuda_convergence(
     plot_stride: int,
     save_fig,
 ) -> bool:
-    """NR convergence history for Newmark CuDSS vs FullGeneral only."""
-    newmark_tags = [ref] + ([ref_cpu] if ref_cpu else [])
-    newmark_tags = [t for t in newmark_tags if load_convergence(results, t)[0].size]
-    if not newmark_tags:
+    """NR convergence history for each Newmark variant vs FullGeneral."""
+    del ref  # Newmark variants are discovered directly from results/
+    if ref_cpu is None or load_convergence(results, ref_cpu)[0].size == 0:
+        return False
+
+    variant_tags = discover_newmark_convergence_variants(results, ref_cpu)
+    if not variant_tags:
         return False
 
     conv_dir = figures_root / "convergence"
     conv_dir.mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(2, 1, figsize=(7.0, 4.8), sharex=True, layout="constrained", squeeze=False)
-    ax_iters, ax_norm = axes[0, 0], axes[1, 0]
-    for tag in newmark_tags:
-        _plot_convergence_series(ax_iters, ax_norm, tag, results, plot_stride=plot_stride)
-    ax_iters.set_ylabel("NR iterations")
-    ax_norm.set_ylabel("final unbalance norm")
-    style_axes(ax_iters)
-    style_axes(ax_norm, logy=True)
-    max_iters = 0.0
-    for line in ax_iters.get_lines():
-        yd = np.asarray(line.get_ydata(), dtype=float)
-        yd = yd[np.isfinite(yd)]
-        if yd.size:
-            max_iters = max(max_iters, float(np.max(yd)))
-    if max_iters > 0:
-        ax_iters.set_ylim(0.0, max(max_iters * 1.05, 1.0))
-        ax_iters.set_yticks(np.arange(0, int(max_iters) + 2))
-    add_figure_legend(fig, newmark_tags, nrow=1)
-    fig.supxlabel("time (s)")
-    save_fig(fig, conv_dir / "newmark.png")
-    return True
+    any_ok = False
+    pair_tags = [ref_cpu]
+
+    for method_tag in variant_tags:
+        if not method_tag.startswith("Newmark"):
+            continue
+        slug = comparison_slug_for_tag(method_tag)
+        pair_tags_with_method = pair_tags + [method_tag]
+
+        fig, axes = plt.subplots(
+            2, 1, figsize=(7.0, 4.8), sharex=True, layout="constrained", squeeze=False
+        )
+        ax_iters, ax_norm = axes[0, 0], axes[1, 0]
+        plotted = False
+        for tag in pair_tags_with_method:
+            if _plot_convergence_series(ax_iters, ax_norm, tag, results, plot_stride=plot_stride):
+                plotted = True
+        if not plotted:
+            plt.close(fig)
+            continue
+        _style_convergence_axes(ax_iters, ax_norm)
+        add_figure_legend(fig, pair_tags_with_method, nrow=1)
+        fig.supxlabel("time (s)")
+        save_fig(fig, conv_dir / f"{slug}.png")
+        any_ok = True
+
+    return any_ok
 
 
 def run_cuda(example_dir: Path, *, jobs: int = 1) -> int:
