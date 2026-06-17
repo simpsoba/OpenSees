@@ -44,6 +44,7 @@ set useIncrementalAccel 0
 set useAlphaCloseCheck 0
 set systemOverride ""
 set cudssPrecision ""
+set cudssIrNSteps 0
 for {set i $flagStart} {$i < $argc} {incr i} {
     set flag [lindex $argv $i]
     set flagLower [string tolower $flag]
@@ -68,9 +69,21 @@ for {set i $flagStart} {$i < $argc} {incr i} {
             }
             set cudssPrecision [lindex $argv $i]
         }
+        -cudssirnsteps {
+            incr i
+            if {$i >= $argc} {
+                puts stderr "ERROR: -cudssIrNSteps requires an integer argument"
+                exit 1
+            }
+            set cudssIrNSteps [lindex $argv $i]
+            if {![string is integer -strict $cudssIrNSteps] || $cudssIrNSteps < 0} {
+                puts stderr "ERROR: -cudssIrNSteps must be a non-negative integer"
+                exit 1
+            }
+        }
         default {
             puts stderr "Unknown flag: [lindex $argv $i]"
-            puts stderr "Optional flags: -incrementalAccel -alphaCloseCheck -system SOE -cudssPrecision dFFI diagonalMass"
+            puts stderr "Optional flags: -incrementalAccel -alphaCloseCheck -system SOE -cudssPrecision dFFI -cudssIrNSteps N diagonalMass"
             exit 1
         }
     }
@@ -184,7 +197,11 @@ if {$integratorMethod in {KRAlphaExplicit MKRAlphaExplicit} && ($useIncrementalA
 # Match Python result folder names
 set folderSystemLabel ""
 if {$linearSOE eq "CuDSS" && $cudssPrecision eq "dFFI"} {
-    set folderSystemLabel CuDSS_dFFI
+    if {$cudssIrNSteps > 0} {
+        set folderSystemLabel CuDSS_dFFI_ir$cudssIrNSteps
+    } else {
+        set folderSystemLabel CuDSS_dFFI
+    }
 } elseif {$systemOverride ne "" && $systemOverride ne "CuDSS"} {
     set folderSystemLabel $systemOverride
 }
@@ -401,7 +418,7 @@ proc setupRayleighDamping {} {
 
 proc runDynamicAnalysis {} {
     global scriptDir gmFile gravity scaleFactor dtAnalysis freeVibrationSeconds
-    global integratorMethod integratorParams maxIter pFlag algo linearSOE cudssPrecision
+    global integratorMethod integratorParams maxIter pFlag algo linearSOE cudssPrecision cudssIrNSteps
     global outputFolder MONITOR_NODES MONITOR_DOFS sec
 
     file mkdir $outputFolder
@@ -414,8 +431,13 @@ proc runDynamicAnalysis {} {
 
     wipeAnalysis
     if {$linearSOE eq "CuDSS" && $cudssPrecision eq "dFFI"} {
-        eval system CuDSS -precision dFFI
-        set systemLog "CuDSS -precision dFFI"
+        if {$cudssIrNSteps > 0} {
+            eval system CuDSS -precision dFFI -irNSteps $cudssIrNSteps
+            set systemLog "CuDSS -precision dFFI -irNSteps $cudssIrNSteps"
+        } else {
+            eval system CuDSS -precision dFFI
+            set systemLog "CuDSS -precision dFFI"
+        }
     } else {
         system $linearSOE
         set systemLog $linearSOE

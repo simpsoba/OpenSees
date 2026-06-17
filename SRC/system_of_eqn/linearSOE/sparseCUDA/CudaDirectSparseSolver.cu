@@ -64,7 +64,9 @@ CudaDirectSparseSolver::CudaDirectSparseSolver(CudaPrecision precision, bool ver
                                const char* threadingLibPath,
                                CuDSSMatrixType cudssMatType,
                                bool useMultiGPU,
-                               const std::vector<int>& deviceIndices)
+                               const std::vector<int>& deviceIndices,
+                               int irNSteps,
+                               double irTol)
     :CudaGenBcsrLinSolver(SOLVER_TAGS_CudaDirectSparseSolver, precision), 
     m_verbose(verbose),
     m_hybridMemoryMode(hybridMemoryMode),
@@ -75,6 +77,8 @@ CudaDirectSparseSolver::CudaDirectSparseSolver(CudaPrecision precision, bool ver
     m_cudssMatType(cudssMatType),
     m_useMultiGPU(useMultiGPU),
     m_deviceIndices(deviceIndices),
+    m_irNSteps(irNSteps),
+    m_irTol(irTol),
     m_matrix(nullptr)
 {
     if (!isUniformPrecision(precision)) {
@@ -100,6 +104,8 @@ void CudaDirectSparseSolver::init(CudaPrecision precision)
     solver.matType = m_cudssMatType;
     solver.useMultiGPU = m_useMultiGPU;
     solver.deviceIndices = m_deviceIndices;
+    solver.irNSteps = m_irNSteps;
+    solver.irTol = m_irTol;
     if (m_solverStream == nullptr) {
         cudaCheckError(cudaStreamCreate(&m_solverStream), "create cuDSS solver stream");
     }
@@ -214,7 +220,9 @@ CudaDirectSparseSolver::getCopy(void) const
         m_threadingLibPath.empty() ? nullptr : m_threadingLibPath.c_str(),
         m_cudssMatType,
         m_useMultiGPU,
-        m_deviceIndices);
+        m_deviceIndices,
+        m_irNSteps,
+        m_irTol);
 }
 
 void *CudaDirectSparseSolver::getSolverStream(void) const
@@ -282,6 +290,8 @@ struct CuDSSConfig {
     std::string parallelMode = "single";  // single | multiGPU | MGMN (parallelism across processes/GPUs)
     int distributed = 0;                  // For MGMN: 0 = root-only (gather-scatter), 1 = row-wise distributed
     std::vector<int> deviceIndices;       // For multiGPU: empty = use all devices; else list of device IDs
+    int irNSteps = 0;                     // Iterative refinement steps (0 = disabled)
+    double irTol = 0.0;                   // IR tolerance (0 = fixed-step, no convergence check)
 };
 
 class CuDSSParameterParser {
@@ -395,6 +405,22 @@ CuDSSParameterParser::configParsers = {
             if (OPS_GetIntInput(&numData, &next) != 0) break;
             config.deviceIndices.push_back(next);
         }
+    }},
+    {"irNSteps", [](CuDSSConfig& config) {
+        int numData = 1;
+        int steps = 0;
+        if (OPS_GetIntInput(&numData, &steps) == 0) {
+            if (steps < 0) throw std::invalid_argument("irNSteps must be >= 0");
+            config.irNSteps = steps;
+        }
+    }},
+    {"irTol", [](CuDSSConfig& config) {
+        int numData = 1;
+        double tol = 0.0;
+        if (OPS_GetDoubleInput(&numData, &tol) == 0) {
+            if (tol < 0.0) throw std::invalid_argument("irTol must be >= 0");
+            config.irTol = tol;
+        }
     }}
 };
 
@@ -464,6 +490,10 @@ void CuDSSParameterParser::printUsageInfo() {
     opserr << "                                   use 'NULL' to let cuDSS use CUDSS_THREADING_LIB env var)" << endln;
     opserr << "  -matrixType <full|symmetric|spd> Matrix type: full (default), symmetric, or spd" << endln;
     opserr << "                                  (symmetric and spd use lower storage; halves matrix memory)" << endln;
+    opserr << "  -irNSteps <int>                 Iterative refinement steps (default: 0, disabled)" << endln;
+    opserr << "  -irTol <double>                 IR relative-residual tolerance (default: 0)" << endln;
+    opserr << "                                  irTol=0: exactly irNSteps iterations, no convergence check" << endln;
+    opserr << "                                  irTol>0: early stop when ||r||/||b|| < irTol (max irNSteps)" << endln;
     opserr << "Notes:" << endln;
     opserr << "  - hybridMemoryMode and hybridExecuteMode are mutually exclusive; hybridExecute mode is not allowed with parallelMode MGMN" << endln;
     opserr << "  - MGMN is only valid in OpenSeesMP (getNP > 1); multiGPU is only valid for single process" << endln;
@@ -495,7 +525,9 @@ CudaGenBcsrLinSolver* createCuDSSSolverFromConfig(const CuDSSConfig& config) {
         config.threadingLibPath.c_str(),
         cudssMatType,
         useMultiGPU,
-        config.deviceIndices
+        config.deviceIndices,
+        config.irNSteps,
+        config.irTol
     );
 }
 

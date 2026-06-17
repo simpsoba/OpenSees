@@ -24,6 +24,10 @@
 #include <stdexcept>
 #include <vector>
 
+#if CUDSS_VERSION < 800
+#error "OpenSees-CUDA requires cuDSS 0.8.0 or later"
+#endif
+
 using namespace CudaUtils;
 
 CuDSSBackend::CuDSSBackend(const Config &config)
@@ -35,7 +39,8 @@ CuDSSBackend::CuDSSBackend(const Config &config)
       m_Matrix(nullptr),
       m_RHS(nullptr),
       m_Solution(nullptr),
-      m_IndexType(CUDA_R_32I),
+      m_OffsetType(CUDSS_R_32I),
+      m_IndexType(CUDSS_R_32I),
       m_numRows(0),
       m_numNnz(0),
       m_numRhs(1),
@@ -45,7 +50,7 @@ CuDSSBackend::CuDSSBackend(const Config &config)
     if (!isUniformPrecision(m_config.precision)) {
         throw std::invalid_argument("CuDSSBackend only supports uniform precision (dDDI or dFFI)");
     }
-    m_ValueType = (m_config.precision == CudaPrecision::dFFI) ? CUDA_R_32F : CUDA_R_64F;
+    m_ValueType = (m_config.precision == CudaPrecision::dFFI) ? CUDSS_R_32F : CUDSS_R_64F;
     initHandle();
 }
 
@@ -128,13 +133,15 @@ void CuDSSBackend::initHandle()
             "set device indices");
     }
 
-    cudssAlgType_t reorderAlgorithm = CUDSS_ALG_DEFAULT;
-    cudssConfigSet(m_Config, CUDSS_CONFIG_REORDERING_ALG, &reorderAlgorithm, sizeof(cudssAlgType_t));
+    cudssReorderingAlg_t reorderAlgorithm = CUDSS_REORDERING_ALG_DEFAULT;
+    cuDSSCheckError(
+        cudssConfigSet(m_Config, CUDSS_CONFIG_REORDERING_ALG, &reorderAlgorithm, sizeof(cudssReorderingAlg_t)),
+        "set cuDSS reordering algorithm");
 
     if (m_config.hybridMemoryMode) {
         int hybridMemoryModeEnabled = 1;
         cuDSSCheckError(
-            cudssConfigSet(m_Config, CUDSS_CONFIG_HYBRID_MODE, &hybridMemoryModeEnabled, sizeof(int)),
+            cudssConfigSet(m_Config, CUDSS_CONFIG_HYBRID_MEMORY_MODE, &hybridMemoryModeEnabled, sizeof(int)),
             "enable hybrid memory mode");
     }
     if (m_config.hybridExecuteMode) {
@@ -142,6 +149,16 @@ void CuDSSBackend::initHandle()
         cuDSSCheckError(
             cudssConfigSet(m_Config, CUDSS_CONFIG_HYBRID_EXECUTE_MODE, &hybridExecuteModeEnabled, sizeof(int)),
             "enable hybrid execute mode");
+    }
+    if (m_config.irNSteps > 0) {
+        const int irSteps = m_config.irNSteps;
+        cuDSSCheckError(
+            cudssConfigSet(m_Config, CUDSS_CONFIG_IR_N_STEPS, &irSteps, sizeof(irSteps)),
+            "set cuDSS iterative refinement steps");
+        const double irTol = m_config.irTol;
+        cuDSSCheckError(
+            cudssConfigSet(m_Config, CUDSS_CONFIG_IR_TOL, &irTol, sizeof(irTol)),
+            "set cuDSS iterative refinement tolerance");
     }
 }
 
@@ -180,7 +197,7 @@ int CuDSSBackend::importSymbolicAnalysisFrom(const CuDSSBackend &source)
 
     static const cudssDataParam_t kCopyParams[] = {CUDSS_DATA_PERM_REORDER_ROW, CUDSS_DATA_PERM_REORDER_COL,
                                                    CUDSS_DATA_PERM_ROW, CUDSS_DATA_PERM_COL, CUDSS_DATA_LU_NNZ,
-                                                   CUDSS_DATA_NSUPERPANELS};
+                                                   CUDSS_DATA_NSUPERPANELS, CUDSS_DATA_ND_PARTITION_TREE};
 
     for (cudssDataParam_t param : kCopyParams) {
         size_t sizeWritten = 0;
@@ -233,7 +250,7 @@ int CuDSSBackend::bindPattern(int numRows, int numNnz, int *rowPtr, int *colIdx,
     }
 
     cuDSSCheckError(cudssMatrixCreateCsr(&m_Matrix, numRows, numRows, numNnz, rowPtr, nullptr, colIdx, values,
-                                         m_IndexType, m_ValueType, mtype, mview, CUDSS_BASE_ZERO),
+                                         m_OffsetType, m_IndexType, m_ValueType, mtype, mview, CUDSS_BASE_ZERO),
                     "create cuDSS CSR matrix");
 
     if (recreateDenseDescriptors(numRows, rhs, solution, numRhs) != 0) {

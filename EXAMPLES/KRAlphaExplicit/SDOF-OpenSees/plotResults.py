@@ -48,6 +48,9 @@ plot_stride_for = kr_plot.plot_stride_for
 plot_style = kr_plot.plot_style
 resp_time_label = kr_plot.resp_time_label
 result_tag = kr_plot.result_tag
+result_tag_with_system = kr_plot.result_tag_with_system
+CUDA_SOE_PLOT_VARIANTS = kr_plot.CUDA_SOE_PLOT_VARIANTS
+_is_cudss_dffi_soe = kr_plot._is_cudss_dffi_soe
 style_axes = kr_plot.style_axes
 _parse_plot_jobs = kr_plot._parse_plot_jobs
 
@@ -142,58 +145,79 @@ def sdof_panel_rows_with_flags(
     *,
     incremental: bool = False,
     alpha_close_check: bool = False,
+    soe_system: str | None = None,
 ) -> List[Tuple[str, List[str]]]:
     p_cpu = [rho]
     p_cuda = integrator_params(
         rho, incremental=incremental, alpha_close_check=alpha_close_check
     )
+    if _is_cudss_dffi_soe(soe_system):
+        tag = lambda m: result_tag_with_system(m, p_cuda, soe_system)
+    else:
+        tag = lambda m: result_tag(m, p_cuda)
     return [
         (
             "KR",
             [
                 result_tag("KRAlphaExplicit", p_cpu),
-                result_tag("KRAlphaExplicitMultiSOE", p_cuda),
-                result_tag("CudaKRAlpha", p_cuda),
+                tag("KRAlphaExplicitMultiSOE"),
+                tag("CudaKRAlpha"),
             ],
         ),
         (
             "MKR",
             [
                 result_tag("MKRAlphaExplicit", p_cpu),
-                result_tag("MKRAlphaExplicitMultiSOE", p_cuda),
-                result_tag("CudaMKRAlpha", p_cuda),
+                tag("MKRAlphaExplicitMultiSOE"),
+                tag("CudaMKRAlpha"),
             ],
         ),
     ]
 
 
-SDOF_PANEL_VARIANTS: List[Tuple[str, RowFn]] = [
-    (FIG_SUBDIR_STANDARD, lambda rho: sdof_panel_rows_with_flags(rho)),
-    (
-        FIG_SUBDIR_INCREMENTAL,
-        lambda rho: sdof_panel_rows_with_flags(rho, incremental=True),
-    ),
-]
-
-SDOF_PANEL_VARIANTS_RHO_ONE_AC: List[Tuple[str, RowFn]] = [
-    (
-        FIG_SUBDIR_STANDARD_AC,
-        lambda rho: sdof_panel_rows_with_flags(rho, alpha_close_check=True),
-    ),
-    (
-        FIG_SUBDIR_INCREMENTAL_AC,
-        lambda rho: sdof_panel_rows_with_flags(
-            rho, incremental=True, alpha_close_check=True
+def sdof_panel_variants_for_rho(
+    rho: float, *, soe_system: str | None = None
+) -> List[Tuple[str, RowFn]]:
+    variants: List[Tuple[str, RowFn]] = [
+        (
+            FIG_SUBDIR_STANDARD,
+            lambda r: sdof_panel_rows_with_flags(r, soe_system=soe_system),
         ),
-    ),
-]
-
-
-def sdof_panel_variants_for_rho(rho: float) -> List[Tuple[str, RowFn]]:
-    variants = list(SDOF_PANEL_VARIANTS)
+        (
+            FIG_SUBDIR_INCREMENTAL,
+            lambda r: sdof_panel_rows_with_flags(
+                r, incremental=True, soe_system=soe_system
+            ),
+        ),
+    ]
     if abs(rho - 1.0) < 1e-12:
-        variants.extend(SDOF_PANEL_VARIANTS_RHO_ONE_AC)
+        variants.extend(
+            [
+                (
+                    FIG_SUBDIR_STANDARD_AC,
+                    lambda r: sdof_panel_rows_with_flags(
+                        r, alpha_close_check=True, soe_system=soe_system
+                    ),
+                ),
+                (
+                    FIG_SUBDIR_INCREMENTAL_AC,
+                    lambda r: sdof_panel_rows_with_flags(
+                        r,
+                        incremental=True,
+                        alpha_close_check=True,
+                        soe_system=soe_system,
+                    ),
+                ),
+            ]
+        )
     return variants
+
+
+def _has_soe_results(results_root: Path, soe_system: str | None) -> bool:
+    if soe_system is None:
+        return True
+    pattern = f"*_{soe_system}_params-*"
+    return any(results_root.glob(f"**/{pattern}"))
 
 
 def sdof_row_comparison_specs(row_tags: Sequence[str]) -> List[Tuple[str, str]]:
@@ -413,9 +437,19 @@ def run(example_dir: Path, *, jobs: int = 1) -> int:
             continue
         ref_dt = results_ic / dt_tags[0]
         rhos = _discover_rhos(ref_dt)
-        for rho in rhos:
-            for subdir, row_fn in sdof_panel_variants_for_rho(rho):
-                tasks.append((ic_tag, ic, rho, subdir, row_fn))
+        for _fname_suffix, soe_system in CUDA_SOE_PLOT_VARIANTS:
+            if not _has_soe_results(results_root, soe_system):
+                if soe_system is not None:
+                    print(
+                        f"SKIP IC={ic_tag} SOE={soe_system}: no matching result folders",
+                        flush=True,
+                    )
+                continue
+            for rho in rhos:
+                for subdir, row_fn in sdof_panel_variants_for_rho(
+                    rho, soe_system=soe_system
+                ):
+                    tasks.append((ic_tag, ic, rho, subdir, row_fn))
 
     any_ok = False
 

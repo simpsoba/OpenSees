@@ -540,7 +540,7 @@ if(HAVE_CUDA)
       set(AMGX_INCLUDE_DIR "")
       set(HAVE_AMGX FALSE)
   else()
-      message(STATUS "Compiling with AMGX from ${AMGX_NO_MPI_DIR}")
+      message(STATUS "Compiling with AMGX from ${AMGX_NO_MPI_DIR} (expected non-MPI build)")
 
       set(AMGX_FLAG -D_AMGX)
       set(HAVE_AMGX TRUE)
@@ -550,6 +550,12 @@ if(HAVE_CUDA)
       else()
           set(AMGX_LIBRARIES "${AMGX_NO_MPI_DIR}/libamgx.a")
       endif()
+
+      if(NOT EXISTS "${AMGX_LIBRARIES}")
+          message(FATAL_ERROR
+              "AMGX_NO_MPI_DIR='${AMGX_NO_MPI_DIR}' but library not found: ${AMGX_LIBRARIES}")
+      endif()
+
       if(EXISTS "${AMGX_NO_MPI_DIR}/../include/amgx_c.h")
         set(AMGX_INCLUDE_DIR "${AMGX_NO_MPI_DIR}/../include")
       else()
@@ -562,10 +568,10 @@ if(HAVE_CUDA)
   
   # CuDSS configuration using CMake config (Linux/Unix only)
   if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    # Common cuDSS install locations on Linux
+    # Common cuDSS install locations on Linux (match CUDA toolkit major version)
     set(CUDSS_HINTS
-      /usr/lib/x86_64-linux-gnu/libcudss/12/cmake
-      /usr/lib/aarch64-linux-gnu/libcudss/12/cmake
+      /usr/lib/x86_64-linux-gnu/libcudss/${CUDAToolkit_VERSION_MAJOR}/cmake
+      /usr/lib/aarch64-linux-gnu/libcudss/${CUDAToolkit_VERSION_MAJOR}/cmake
     )
     
     find_package(cudss QUIET HINTS ${CUDSS_HINTS})

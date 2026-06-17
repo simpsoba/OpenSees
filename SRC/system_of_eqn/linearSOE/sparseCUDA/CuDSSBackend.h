@@ -50,6 +50,8 @@ public:
         CuDSSMatrixType matType;
         bool useMultiGPU;
         std::vector<int> deviceIndices;
+        int irNSteps;
+        double irTol;
         // When set, cuDSS work is enqueued on this caller-owned stream and the
         // caller is responsible for synchronization (pair with syncAfterSolve=false).
         cudaStream_t externalStream;
@@ -65,6 +67,8 @@ public:
               threadingLibPath("/usr/lib/x86_64-linux-gnu/libcudss_mtlayer_gomp.so"),
               matType(CuDSSMatrixType::FULL),
               useMultiGPU(false),
+              irNSteps(0),
+              irTol(0.0),
               externalStream(nullptr),
               syncAfterSolve(true)
         {
@@ -140,8 +144,9 @@ private:
     cudssMatrix_t m_RHS;
     cudssMatrix_t m_Solution;
 
-    cudaDataType_t m_ValueType;
-    cudaDataType_t m_IndexType;
+    cudssDataType_t m_ValueType;
+    cudssDataType_t m_OffsetType;
+    cudssDataType_t m_IndexType;
 
     int m_numRows;
     int m_numNnz;

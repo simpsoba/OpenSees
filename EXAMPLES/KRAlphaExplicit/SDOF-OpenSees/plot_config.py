@@ -30,4 +30,4 @@ IC_CASES = (
     {"tag": "init_vel", "u0": 0.0, "v0": INIT_VEL_V0},
 )
 
-DEFAULT_RHOS = (1.0, 0.5)
+DEFAULT_RHOS = (0.0, 0.25, 0.50, 0.75, 0.90, 0.99, 0.999, 1.0)

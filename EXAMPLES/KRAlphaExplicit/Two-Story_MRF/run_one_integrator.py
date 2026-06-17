@@ -38,6 +38,12 @@ def main() -> int:
         help="CuDSS precision mode when using CuDSS (e.g. dFFI for single precision)",
     )
     ap.add_argument(
+        "--cudss-ir-n-steps",
+        type=int,
+        default=0,
+        help="CuDSS iterative refinement steps when using dFFI (0 = disabled)",
+    )
+    ap.add_argument(
         "--test",
         default=None,
         help='Optional JSON convergence test, e.g. {"type":"NormUnbalance","tol":1e-4}',
@@ -59,6 +65,8 @@ def main() -> int:
         integrator["system"] = args.system
     if args.cudss_precision:
         integrator["cudss_precision"] = args.cudss_precision
+    if args.cudss_ir_n_steps > 0:
+        integrator["cudss_ir_n_steps"] = args.cudss_ir_n_steps
     if args.test:
         try:
             integrator["test"] = json.loads(args.test)

@@ -66,7 +66,9 @@ public:
         const char* threadingLibPath = nullptr,
         CuDSSMatrixType cudssMatType = CuDSSMatrixType::FULL,
         bool useMultiGPU = false,
-        const std::vector<int>& deviceIndices = {}
+        const std::vector<int>& deviceIndices = {},
+        int irNSteps = 0,
+        double irTol = 0.0
     );
     
     // Destructor
@@ -100,6 +102,10 @@ private:
     // Multi-GPU (MG) mode: when true, use cudssCreateMg; otherwise cudssCreate
     bool m_useMultiGPU;
     std::vector<int> m_deviceIndices;
+
+    // Iterative refinement (CUDSS_CONFIG_IR_N_STEPS / CUDSS_CONFIG_IR_TOL); 0 steps = disabled
+    int m_irNSteps;
+    double m_irTol;
 
     // cuDSS initializer (to be used by constructors only)
     void init(CudaPrecision precision);

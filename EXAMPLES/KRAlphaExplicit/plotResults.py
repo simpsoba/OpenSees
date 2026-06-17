@@ -317,12 +317,22 @@ CUDA_LEGEND_FAMILIES = (
 )
 
 # Linear SOE systems encoded as Method_{System}_params-... in result folder names.
-_TAG_SOE_SYSTEMS = ("CuDSS_dFFI", "UmfPack", "SuperLU")
+_TAG_SOE_SYSTEMS = ("CuDSS_dFFI_ir5", "CuDSS_dFFI_ir2", "CuDSS_dFFI", "UmfPack", "SuperLU")
+
+
+def _is_cudss_dffi_soe(soe: str | None) -> bool:
+    return soe is not None and soe.startswith("CuDSS_dFFI")
 
 
 def _soe_legend_name(soe: str) -> str:
     if soe == "CuDSS_dFFI":
         return "CuDSS dFFI"
+    if soe == "CuDSS_dFFI_ir2":
+        return "CuDSS dFFI IR=2"
+    if soe == "CuDSS_dFFI_ir5":
+        return "CuDSS dFFI IR=5"
+    if _is_cudss_dffi_soe(soe):
+        return soe.replace("_", " ")
     return soe
 
 
@@ -347,8 +357,8 @@ def legend_label(tag: str) -> str:
         return f"MultiSOE ({_soe_legend_name(soe)})" if soe else "MultiSOE (CuDSS)"
     if fam == "cuda":
         base = "CudaExplicit" + (" diag. mass" if is_diagonal_mass_tag(tag) else "")
-        if soe == "CuDSS_dFFI":
-            return f"{base} (CuDSS dFFI)"
+        if _is_cudss_dffi_soe(soe):
+            return f"{base} ({_soe_legend_name(soe)})"
         return "Cuda" + (" diag. mass" if is_diagonal_mass_tag(tag) else "")
     return tag
 
@@ -412,8 +422,8 @@ def cuda_comparison_legend_label(tag: str, row_lab: str) -> str:
         return f"{prefix} MultiSOE ({soe_name})"
     if fam == "cuda":
         dm = " diag. mass" if is_diagonal_mass_tag(tag) else ""
-        if soe == "CuDSS_dFFI":
-            return f"{prefix} CudaExplicit{dm} (CuDSS dFFI)"
+        if _is_cudss_dffi_soe(soe):
+            return f"{prefix} CudaExplicit{dm} ({_soe_legend_name(soe)})"
         return f"{prefix} CudaExplicit{dm} (CuDSS)"
     return legend_label(tag)
 
@@ -705,7 +715,7 @@ def cuda_panel_rows_with_flags(
     multi = lambda m: result_tag_with_system(m, p_cuda, soe_system)
     cuda = (
         (lambda m: result_tag_with_system(m, p_cuda, soe_system))
-        if soe_system == "CuDSS_dFFI"
+        if _is_cudss_dffi_soe(soe_system)
         else (lambda m: result_tag(m, p_cuda))
     )
     return [
@@ -801,6 +811,8 @@ CUDA_SOE_PLOT_VARIANTS: List[Tuple[str, str | None]] = [
     ("_umfpack", "UmfPack"),
     ("_superlu", "SuperLU"),
     ("_cudss_dFFI", "CuDSS_dFFI"),
+    ("_cudss_dFFI_ir2", "CuDSS_dFFI_ir2"),
+    ("_cudss_dFFI_ir5", "CuDSS_dFFI_ir5"),
 ]
 
 
@@ -811,18 +823,18 @@ def comparison_slug_for_tag(tag: str) -> str:
     if fam == "dense":
         return "dense"
     if fam == "multisoe":
-        if soe == "CuDSS_dFFI":
-            return "multisoe_cudss_dFFI"
+        if _is_cudss_dffi_soe(soe):
+            return f"multisoe_{soe.lower()}"
         if soe:
             return f"multisoe_{soe.lower()}"
         return "multisoe_cudss"
     if fam == "cuda":
-        if soe == "CuDSS_dFFI":
-            return "cuda_cudss_dFFI"
+        if _is_cudss_dffi_soe(soe):
+            return f"cuda_{soe.lower()}"
         return "cuda_cudss"
     if fam == "newmark_cudss":
-        if soe == "CuDSS_dFFI":
-            return "newmark_cudss_dFFI"
+        if _is_cudss_dffi_soe(soe):
+            return f"newmark_{soe.lower()}"
         if soe:
             return f"newmark_{soe.lower()}"
         return "newmark_cudss"

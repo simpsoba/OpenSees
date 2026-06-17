@@ -41,7 +41,27 @@ def _default_system(integrator_method: str) -> str:
     return "FullGeneral"
 
 
-def _set_transient_linear_system(integrator_method: str, system: Optional[str] = None) -> None:
+def _cudss_folder_system_label(cudss_precision: str | None, cudss_ir_n_steps: int = 0) -> str | None:
+    if cudss_precision != "dFFI":
+        return None
+    if cudss_ir_n_steps > 0:
+        return f"CuDSS_dFFI_ir{cudss_ir_n_steps}"
+    return "CuDSS_dFFI"
+
+
+def _set_transient_linear_system(
+    integrator_method: str,
+    system: Optional[str] = None,
+    cudss_precision: Optional[str] = None,
+    cudss_ir_n_steps: int = 0,
+) -> None:
+    effective = system if system is not None else _default_system(integrator_method)
+    if cudss_precision == "dFFI" and effective == "CuDSS":
+        args: list = ["CuDSS", "-precision", "dFFI"]
+        if cudss_ir_n_steps > 0:
+            args.extend(["-irNSteps", str(cudss_ir_n_steps)])
+        ops.system(*args)
+        return
     if system is not None:
         ops.system(system)
         return
@@ -52,6 +72,12 @@ def _result_folder(integrator: dict, ic_tag: str, dt_tag: str) -> str:
     method = integrator["method"]
     params = integrator["params"]
     system = integrator.get("system")
+    cudss_precision = integrator.get("cudss_precision")
+    cudss_ir_n_steps = int(integrator.get("cudss_ir_n_steps") or 0)
+    effective = system if system is not None else _default_system(method)
+    folder_label = _cudss_folder_system_label(cudss_precision, cudss_ir_n_steps)
+    if folder_label is not None and effective == "CuDSS":
+        return f"results/{ic_tag}/{dt_tag}/{method}_{folder_label}_params-{params!s}"
     if system is not None and not (method == "Newmark" and system == "CuDSS"):
         base = f"results/{ic_tag}/{dt_tag}/{method}_{system}_params-{params!s}"
     else:
@@ -189,7 +215,12 @@ def run_analysis(
         return 1
 
     ops.wipeAnalysis()
-    _set_transient_linear_system(integrator["method"], integrator.get("system"))
+    _set_transient_linear_system(
+        integrator["method"],
+        integrator.get("system"),
+        integrator.get("cudss_precision"),
+        int(integrator.get("cudss_ir_n_steps") or 0),
+    )
     ops.constraints("Plain")
     ops.numberer("Plain")
     p_flag = integrator.get("pFlag", _default_pflag(integrator))

@@ -21,7 +21,9 @@ Usage:
   python3 run_integrators.py --plots-only
   python3 run_integrators.py --no-incremental
   python3 run_integrators.py --cudss-dffi --append 1.0
-  python3 run_integrators.py --jobs auto
+  # dFFI matrix includes IR=0 (default), IR=2, and IR=5 variants
+  python3 run_integrators.py --jobs auto   # fast wall clock; CUDA timings inflated on 1 GPU
+  python3 run_integrators.py --jobs 1      # serial: accurate per-case wall_time_s in timing.txt
 
 Environment:
   OPENSEES   path to OpenSees executable (Tcl; default: ../../../build/Release/OpenSees)
@@ -41,11 +43,13 @@ from pathlib import Path
 from typing import List, Literal, Optional, Tuple, Union
 
 Engine = Literal["tcl", "python"]
-RunSpec = Tuple[str, str, List[Union[float, str]], Optional[str], Optional[str]]
+RunSpec = Tuple[str, str, List[Union[float, str]], Optional[str], Optional[str], int]
 
-DEFAULT_RHOS: List[float] = [1.0, 0.5]
+from plot_config import DEFAULT_RHOS
+
 DEFAULT_SCALE = 3.0
 DEFAULT_ENGINE: Engine = "tcl"
+CUDSS_DFFI_IR_STEPS: List[int] = [0, 2, 5]
 
 
 def _repo_root(here: Path) -> Path:
@@ -76,6 +80,7 @@ def _tcl_method_and_args(
     scale: float,
     system: Optional[str],
     cudss_precision: Optional[str] = None,
+    cudss_ir_n_steps: int = 0,
 ) -> List[str]:
     if ops_method == "Newmark" and system == "FullGeneral":
         return ["NewmarkCPU"]
@@ -85,6 +90,8 @@ def _tcl_method_and_args(
             args.extend(["-system", system])
         if cudss_precision is not None:
             args.extend(["-cudssPrecision", cudss_precision])
+        if cudss_ir_n_steps > 0:
+            args.extend(["-cudssIrNSteps", str(cudss_ir_n_steps)])
         return args
 
     if not params:
@@ -102,6 +109,8 @@ def _tcl_method_and_args(
         args.extend(["-system", system])
     if cudss_precision is not None:
         args.extend(["-cudssPrecision", cudss_precision])
+    if cudss_ir_n_steps > 0:
+        args.extend(["-cudssIrNSteps", str(cudss_ir_n_steps)])
     return args
 
 
@@ -113,12 +122,13 @@ def _run_tcl(
     scale: float,
     system: Optional[str],
     cudss_precision: Optional[str],
+    cudss_ir_n_steps: int,
 ) -> int:
     tcl_script = here / "two_story_MRF.tcl"
     cmd = [
         str(opensees),
         str(tcl_script),
-        *_tcl_method_and_args(method, params, scale, system, cudss_precision),
+        *_tcl_method_and_args(method, params, scale, system, cudss_precision, cudss_ir_n_steps),
     ]
     print(" ".join(cmd), flush=True)
     return subprocess.run(cmd, cwd=here).returncode
@@ -136,6 +146,7 @@ def _run_python(
     pflag: Optional[int],
     system: Optional[str],
     cudss_precision: Optional[str],
+    cudss_ir_n_steps: int,
 ) -> int:
     cmd = [
         py,
@@ -159,6 +170,8 @@ def _run_python(
         cmd += ["--system", system]
     if cudss_precision is not None:
         cmd += ["--cudss-precision", cudss_precision]
+    if cudss_ir_n_steps > 0:
+        cmd += ["--cudss-ir-n-steps", str(cudss_ir_n_steps)]
     print(" ".join(cmd), flush=True)
     return subprocess.run(cmd, cwd=here, env=_python_env(here)).returncode
 
@@ -172,6 +185,7 @@ RunTask = Tuple[
     float,  # scale
     Optional[str],  # system
     Optional[str],  # cudss_precision
+    int,  # cudss_ir_n_steps
     Path,  # gm_file
     float,  # dt_analysis
     Optional[Path],  # opensees (tcl)
@@ -189,6 +203,7 @@ def _run_task(task: RunTask) -> Tuple[str, int]:
         scale,
         system,
         cudss_precision,
+        cudss_ir_n_steps,
         gm_file,
         dt_analysis,
         opensees,
@@ -197,20 +212,31 @@ def _run_task(task: RunTask) -> Tuple[str, int]:
     max_iter = 25 if method == "Newmark" else 1
     pflag = 0 if method == "Newmark" else 5
     if engine == "tcl":
-        rc = _run_tcl(opensees, here, method, params, scale, system, cudss_precision)
+        rc = _run_tcl(opensees, here, method, params, scale, system, cudss_precision, cudss_ir_n_steps)
     else:
         rc = _run_python(
-            py, here, method, params, max_iter, dt_analysis, scale, gm_file, pflag, system, cudss_precision
+            py,
+            here,
+            method,
+            params,
+            max_iter,
+            dt_analysis,
+            scale,
+            gm_file,
+            pflag,
+            system,
+            cudss_precision,
+            cudss_ir_n_steps,
         )
     return label, rc
 
 
 def _kr_cpu_run(rho: float) -> RunSpec:
-    return (f"KR ρ={rho:g}", "KRAlphaExplicit", [rho], None, None)
+    return (f"KR ρ={rho:g}", "KRAlphaExplicit", [rho], None, None, 0)
 
 
 def _mkr_cpu_run(rho: float) -> RunSpec:
-    return (f"MKR ρ={rho:g}", "MKRAlphaExplicit", [rho], None, None)
+    return (f"MKR ρ={rho:g}", "MKRAlphaExplicit", [rho], None, None, 0)
 
 
 def _cuda_runs(
@@ -219,6 +245,7 @@ def _cuda_runs(
     incremental: bool = False,
     alpha_close_check: bool = False,
     cudss_precision: Optional[str] = None,
+    cudss_ir_n_steps: int = 0,
     label: Optional[str] = None,
 ) -> List[RunSpec]:
     sfx = ""
@@ -233,8 +260,8 @@ def _cuda_runs(
         sfx += f" ({label})"
     p: List[Union[float, str]] = [rho, *extra]
     return [
-        (f"CudaKR ρ={rho:g}{sfx}", "CudaKRAlpha", list(p), None, cudss_precision),
-        (f"CudaMKR ρ={rho:g}{sfx}", "CudaMKRAlpha", list(p), None, cudss_precision),
+        (f"CudaKR ρ={rho:g}{sfx}", "CudaKRAlpha", list(p), None, cudss_precision, cudss_ir_n_steps),
+        (f"CudaMKR ρ={rho:g}{sfx}", "CudaMKRAlpha", list(p), None, cudss_precision, cudss_ir_n_steps),
     ]
 
 
@@ -245,6 +272,7 @@ def _multisoe_runs(
     alpha_close_check: bool = False,
     system: Optional[str] = None,
     cudss_precision: Optional[str] = None,
+    cudss_ir_n_steps: int = 0,
     label: Optional[str] = None,
 ) -> List[RunSpec]:
     sfx = ""
@@ -259,16 +287,30 @@ def _multisoe_runs(
         sfx += f" ({label})"
     p: List[Union[float, str]] = [rho, *extra]
     return [
-        (f"MultiSOE KR ρ={rho:g}{sfx}", "KRAlphaExplicitMultiSOE", list(p), system, cudss_precision),
-        (f"MultiSOE MKR ρ={rho:g}{sfx}", "MKRAlphaExplicitMultiSOE", list(p), system, cudss_precision),
+        (
+            f"MultiSOE KR ρ={rho:g}{sfx}",
+            "KRAlphaExplicitMultiSOE",
+            list(p),
+            system,
+            cudss_precision,
+            cudss_ir_n_steps,
+        ),
+        (
+            f"MultiSOE MKR ρ={rho:g}{sfx}",
+            "MKRAlphaExplicitMultiSOE",
+            list(p),
+            system,
+            cudss_precision,
+            cudss_ir_n_steps,
+        ),
     ]
 
 
 def _build_soe_variant_runs(rhos: List[float], *, include_incremental: bool = True) -> List[RunSpec]:
     """UmfPack/SuperLU Newmark + MultiSOE only (append to existing CuDSS matrix)."""
     runs: List[RunSpec] = [
-        ("Newmark (UmfPack)", "Newmark", [0.5, 0.25], "UmfPack", None),
-        ("Newmark (SuperLU)", "Newmark", [0.5, 0.25], "SuperLU", None),
+        ("Newmark (UmfPack)", "Newmark", [0.5, 0.25], "UmfPack", None, 0),
+        ("Newmark (SuperLU)", "Newmark", [0.5, 0.25], "SuperLU", None, 0),
     ]
     for rho in rhos:
         runs.extend(_multisoe_runs(rho, incremental=False, system="UmfPack", label="UmfPack"))
@@ -305,57 +347,109 @@ def _build_soe_variant_runs(rhos: List[float], *, include_incremental: bool = Tr
     return runs
 
 
+def _cudss_sp_label(ir_n_steps: int) -> str:
+    if ir_n_steps <= 0:
+        return "CuDSS sp"
+    return f"CuDSS sp IR={ir_n_steps}"
+
+
 def _build_cudss_sp_runs(rhos: List[float], *, include_incremental: bool = True) -> List[RunSpec]:
     """CuDSS single-precision (dFFI) for all CuDSS code paths (append mode)."""
     sp = "dFFI"
-    runs: List[RunSpec] = [
-        ("Newmark (CuDSS sp)", "Newmark", [0.5, 0.25], None, sp),
-    ]
-    for rho in rhos:
-        runs.extend(_multisoe_runs(rho, incremental=False, cudss_precision=sp, label="CuDSS sp"))
-        runs.extend(_cuda_runs(rho, incremental=False, cudss_precision=sp, label="CuDSS sp"))
-        if include_incremental:
-            runs.extend(
-                _multisoe_runs(rho, incremental=True, cudss_precision=sp, label="CuDSS sp")
-            )
-            runs.extend(_cuda_runs(rho, incremental=True, cudss_precision=sp, label="CuDSS sp"))
-        if abs(rho - 1.0) < 1e-12:
+    runs: List[RunSpec] = []
+    for ir_n_steps in CUDSS_DFFI_IR_STEPS:
+        sp_label = _cudss_sp_label(ir_n_steps)
+        ir_suffix = "" if ir_n_steps <= 0 else f" IR={ir_n_steps}"
+        runs.append(
+            (f"Newmark (CuDSS sp{ir_suffix})", "Newmark", [0.5, 0.25], None, sp, ir_n_steps)
+        )
+        for rho in rhos:
             runs.extend(
                 _multisoe_runs(
-                    rho, alpha_close_check=True, cudss_precision=sp, label="CuDSS sp"
+                    rho,
+                    incremental=False,
+                    cudss_precision=sp,
+                    cudss_ir_n_steps=ir_n_steps,
+                    label=sp_label,
                 )
             )
             runs.extend(
-                _cuda_runs(rho, alpha_close_check=True, cudss_precision=sp, label="CuDSS sp")
+                _cuda_runs(
+                    rho,
+                    incremental=False,
+                    cudss_precision=sp,
+                    cudss_ir_n_steps=ir_n_steps,
+                    label=sp_label,
+                )
             )
             if include_incremental:
                 runs.extend(
                     _multisoe_runs(
                         rho,
                         incremental=True,
-                        alpha_close_check=True,
                         cudss_precision=sp,
-                        label="CuDSS sp",
+                        cudss_ir_n_steps=ir_n_steps,
+                        label=sp_label,
                     )
                 )
                 runs.extend(
                     _cuda_runs(
                         rho,
                         incremental=True,
-                        alpha_close_check=True,
                         cudss_precision=sp,
-                        label="CuDSS sp",
+                        cudss_ir_n_steps=ir_n_steps,
+                        label=sp_label,
                     )
                 )
+            if abs(rho - 1.0) < 1e-12:
+                runs.extend(
+                    _multisoe_runs(
+                        rho,
+                        alpha_close_check=True,
+                        cudss_precision=sp,
+                        cudss_ir_n_steps=ir_n_steps,
+                        label=sp_label,
+                    )
+                )
+                runs.extend(
+                    _cuda_runs(
+                        rho,
+                        alpha_close_check=True,
+                        cudss_precision=sp,
+                        cudss_ir_n_steps=ir_n_steps,
+                        label=sp_label,
+                    )
+                )
+                if include_incremental:
+                    runs.extend(
+                        _multisoe_runs(
+                            rho,
+                            incremental=True,
+                            alpha_close_check=True,
+                            cudss_precision=sp,
+                            cudss_ir_n_steps=ir_n_steps,
+                            label=sp_label,
+                        )
+                    )
+                    runs.extend(
+                        _cuda_runs(
+                            rho,
+                            incremental=True,
+                            alpha_close_check=True,
+                            cudss_precision=sp,
+                            cudss_ir_n_steps=ir_n_steps,
+                            label=sp_label,
+                        )
+                    )
     return runs
 
 
 def _build_runs(rhos: List[float], *, include_incremental: bool = True) -> List[RunSpec]:
     runs: List[RunSpec] = [
-        ("Newmark (CuDSS)", "Newmark", [0.5, 0.25], None, None),
-        ("Newmark (CPU)", "Newmark", [0.5, 0.25], "FullGeneral", None),
-        ("Newmark (UmfPack)", "Newmark", [0.5, 0.25], "UmfPack", None),
-        ("Newmark (SuperLU)", "Newmark", [0.5, 0.25], "SuperLU", None),
+        ("Newmark (CuDSS)", "Newmark", [0.5, 0.25], None, None, 0),
+        ("Newmark (CPU)", "Newmark", [0.5, 0.25], "FullGeneral", None, 0),
+        ("Newmark (UmfPack)", "Newmark", [0.5, 0.25], "UmfPack", None, 0),
+        ("Newmark (SuperLU)", "Newmark", [0.5, 0.25], "SuperLU", None, 0),
     ]
     for rho in rhos:
         runs.append(_kr_cpu_run(rho))
@@ -528,7 +622,7 @@ def main() -> None:
 
         print(f"Analysis engine: {engine}", flush=True)
         tasks: List[RunTask] = []
-        for label, ops_method, params, system, cudss_precision in runs:
+        for label, ops_method, params, system, cudss_precision, cudss_ir_n_steps in runs:
             tasks.append(
                 (
                     label,
@@ -539,6 +633,7 @@ def main() -> None:
                     DEFAULT_SCALE,
                     system,
                     cudss_precision,
+                    cudss_ir_n_steps,
                     gm_file,
                     float(DT_ANALYSIS),
                     opensees,

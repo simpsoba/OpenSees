@@ -471,13 +471,27 @@ def _default_system(integrator_method: str) -> str:
     return "FullGeneral"
 
 
+def _cudss_folder_system_label(cudss_precision: str | None, cudss_ir_n_steps: int = 0) -> str | None:
+    if cudss_precision != "dFFI":
+        return None
+    if cudss_ir_n_steps > 0:
+        return f"CuDSS_dFFI_ir{cudss_ir_n_steps}"
+    return "CuDSS_dFFI"
+
+
 def _set_transient_linear_system(
-    integrator_method: str, system: str | None = None, cudss_precision: str | None = None
+    integrator_method: str,
+    system: str | None = None,
+    cudss_precision: str | None = None,
+    cudss_ir_n_steps: int = 0,
 ) -> None:
     """CuDSS for Newmark, Cuda*, and *MultiSOE*; FullGeneral for dense KRAlpha."""
     effective = system if system is not None else _default_system(integrator_method)
     if cudss_precision == "dFFI" and effective == "CuDSS":
-        ops.system("CuDSS", "-precision", "dFFI")
+        args: list = ["CuDSS", "-precision", "dFFI"]
+        if cudss_ir_n_steps > 0:
+            args.extend(["-irNSteps", str(cudss_ir_n_steps)])
+        ops.system(*args)
         return
     if system is not None:
         ops.system(system)
@@ -490,9 +504,11 @@ def _result_folder(integrator: dict) -> str:
     params = integrator["params"]
     system = integrator.get("system")
     cudss_precision = integrator.get("cudss_precision")
+    cudss_ir_n_steps = int(integrator.get("cudss_ir_n_steps") or 0)
     effective = system if system is not None else _default_system(method)
-    if cudss_precision == "dFFI" and effective == "CuDSS":
-        return f"results/{method}_CuDSS_dFFI_params-{params!s}"
+    folder_label = _cudss_folder_system_label(cudss_precision, cudss_ir_n_steps)
+    if folder_label is not None and effective == "CuDSS":
+        return f"results/{method}_{folder_label}_params-{params!s}"
     if system is not None and not (method == "Newmark" and system == "CuDSS"):
         return f"results/{method}_{system}_params-{params!s}"
     return f"results/{method}_params-{params!s}"
@@ -546,6 +562,7 @@ def run_dynamic_analysis(
         integrator["method"],
         integrator.get("system"),
         integrator.get("cudss_precision"),
+        int(integrator.get("cudss_ir_n_steps") or 0),
     )
     ops.constraints('Transformation')
     ops.numberer('Plain')

@@ -30,7 +30,7 @@ _KNOWN_INTEGRATORS = (
     "Newmark",
 )
 
-_SOE_SUFFIXES = ("CuDSS_dFFI", "FullGeneral", "UmfPack", "SuperLU")
+_SOE_SUFFIXES = ("CuDSS_dFFI_ir5", "CuDSS_dFFI_ir2", "CuDSS_dFFI", "FullGeneral", "UmfPack", "SuperLU")
 
 _DEFAULT_SOLVER = {
     "Newmark": "CuDSS",
