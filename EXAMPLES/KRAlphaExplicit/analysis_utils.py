@@ -20,6 +20,34 @@ def permuted_node_tags(n_nodes: int, seed: int) -> List[int]:
     return tags.tolist()
 
 
+VALID_NUMBERERS = ("Plain", "RCM", "AMD")
+
+
+def result_folder_tag(
+    method: str,
+    params,
+    *,
+    system: str | None = None,
+    numberer: str = "RCM",
+    cudss_folder_label: str | None = None,
+    newmark_cpu: bool = False,
+) -> str:
+    """Result subfolder basename, e.g. KRAlphaExplicit_Plain_params-[1.0] (RCM omits suffix)."""
+    if numberer not in VALID_NUMBERERS:
+        raise ValueError(f"numberer must be one of {VALID_NUMBERERS}, got {numberer!r}")
+    parts = [method]
+    if numberer != "RCM":
+        parts.append(numberer)
+    if newmark_cpu:
+        parts.append("FullGeneral")
+    elif cudss_folder_label:
+        parts.append(cudss_folder_label)
+    elif system is not None and not (method == "Newmark" and system == "CuDSS"):
+        parts.append(system)
+    params_repr = list(params) if not isinstance(params, str) else params
+    return f"{'_'.join(parts)}_params-{params_repr}"
+
+
 def write_timing(output_folder: str, elapsed_s: float, *, label: str = "transient") -> None:
     """Write wall-clock seconds for an analysis leg to timing.txt."""
     os.makedirs(output_folder, exist_ok=True)

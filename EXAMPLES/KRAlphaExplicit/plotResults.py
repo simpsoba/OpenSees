@@ -290,7 +290,7 @@ def resp_fft_error_label(resp: str) -> str:
 
 
 def is_diagonal_mass_tag(tag: str) -> bool:
-    return "-diagonalMass" in tag or "-lumped" in tag
+    return "-diagonalMass" in tag
 
 
 def integrator_family(tag: str) -> str:
@@ -318,6 +318,15 @@ CUDA_LEGEND_FAMILIES = (
 
 # Linear SOE systems encoded as Method_{System}_params-... in result folder names.
 _TAG_SOE_SYSTEMS = ("CuDSS_dFFI_ir5", "CuDSS_dFFI_ir2", "CuDSS_dFFI", "UmfPack", "SuperLU")
+_TAG_NUMBERERS = ("Plain", "AMD")
+
+
+def tag_numberer(tag: str) -> str | None:
+    """Return Plain/AMD when encoded in a result tag; else None (RCM default)."""
+    for numberer in _TAG_NUMBERERS:
+        if f"_{numberer}_" in tag:
+            return numberer
+    return None
 
 
 def _is_cudss_dffi_soe(soe: str | None) -> bool:
@@ -352,7 +361,10 @@ def legend_label(tag: str) -> str:
     if fam == "newmark_cudss":
         return f"Newmark ({_soe_legend_name(soe)})" if soe else "Newmark (CuDSS)"
     if fam == "dense":
-        return "Dense"
+        num = tag_numberer(tag)
+        if num:
+            return f"Dense (FullGeneral, {num})"
+        return "Dense (FullGeneral)"
     if fam == "multisoe":
         return f"MultiSOE ({_soe_legend_name(soe)})" if soe else "MultiSOE (CuDSS)"
     if fam == "cuda":
@@ -406,7 +418,7 @@ def add_legend(fig, handles, labels, ncol: int = 2) -> None:
 
 
 def cuda_comparison_legend_label(tag: str, row_lab: str) -> str:
-    """Legend for KR/MKR pair plots: ``KR-$\\alpha$ Dense``, etc."""
+    """Legend for KR/MKR pair plots: ``KR-$\\alpha$ Dense (FullGeneral)``, etc."""
     prefix = rf"{row_lab}-$\alpha$"
     fam = integrator_family(tag)
     soe = tag_linear_soe(tag)
@@ -416,7 +428,10 @@ def cuda_comparison_legend_label(tag: str, row_lab: str) -> str:
         soe_name = _soe_legend_name(soe) if soe else "CuDSS"
         return f"{prefix} Newmark ({soe_name})"
     if fam == "dense":
-        return f"{prefix} Dense"
+        num = tag_numberer(tag)
+        if num:
+            return f"{prefix} Dense (FullGeneral, {num})"
+        return f"{prefix} Dense (FullGeneral)"
     if fam == "multisoe":
         soe_name = _soe_legend_name(soe) if soe else "CuDSS"
         return f"{prefix} MultiSOE ({soe_name})"
@@ -653,6 +668,17 @@ def _parse_plot_jobs(argv: List[str]) -> int:
     return 1
 
 
+def _parse_figure_names(argv: List[str]) -> set[str] | None:
+    """Optional whitelist of output PNG basenames (e.g. floor_disp_dense)."""
+    for i, arg in enumerate(argv):
+        if arg == "--figures" and i + 1 < len(argv):
+            name = argv[i + 1]
+            if not name.endswith(".png"):
+                name = f"{name}.png"
+            return {name}
+    return None
+
+
 def load_config(example_dir: Path):
     path = example_dir / "plot_config.py"
     spec = importlib.util.spec_from_file_location("plot_config", path)
@@ -679,13 +705,25 @@ def _rho_from_result_tag(name: str) -> float | None:
     return None
 
 
+# KR/CUDA integrators use params[0] as spectral radius ρ; Newmark uses [γ, β].
+_RHO_DISCOVERY_PREFIXES = (
+    "KRAlphaExplicit",
+    "MKRAlphaExplicit",
+    "CudaKRAlpha",
+    "CudaMKRAlpha",
+)
+
+
 def discover_cuda_rhos(results: Path) -> List[float]:
     rhos: set[float] = set()
     if results.is_dir():
         for path in results.iterdir():
             if not path.is_dir():
                 continue
-            rho = _rho_from_result_tag(path.name)
+            name = path.name
+            if not any(name.startswith(prefix) for prefix in _RHO_DISCOVERY_PREFIXES):
+                continue
+            rho = _rho_from_result_tag(name)
             if rho is not None:
                 rhos.add(rho)
     return sorted(rhos, reverse=True)
@@ -704,6 +742,7 @@ def cuda_panel_rows_with_flags(
     incremental: bool = False,
     alpha_close_check: bool = False,
     soe_system: str | None = None,
+    diagonal_mass_cuda: bool = False,
 ) -> List[Tuple[str, List[str]]]:
     if soe_system is not None:
         ref_soe = result_tag_with_system("Newmark", NEWMARK_PARAMS, soe_system)
@@ -711,8 +750,9 @@ def cuda_panel_rows_with_flags(
     else:
         refs = [ref] + ([ref_cpu] if ref_cpu else [])
     p_cpu = [rho]
-    p_cuda = integrator_params(rho, incremental=incremental, alpha_close_check=alpha_close_check)
-    multi = lambda m: result_tag_with_system(m, p_cuda, soe_system)
+    p_flags = integrator_params(rho, incremental=incremental, alpha_close_check=alpha_close_check)
+    p_cuda = [*p_flags, "-diagonalMass"] if diagonal_mass_cuda else p_flags
+    multi = lambda m: result_tag_with_system(m, p_flags, soe_system)
     cuda = (
         (lambda m: result_tag_with_system(m, p_cuda, soe_system))
         if _is_cudss_dffi_soe(soe_system)
@@ -766,18 +806,20 @@ CUDA_PANEL_VARIANTS_RHO_ONE_AC: List[Tuple[str, object]] = [
 ]
 
 
-def cuda_panel_variants_for_rho(rho: float, *, soe_system: str | None = None) -> List[Tuple[str, object]]:
+def cuda_panel_variants_for_rho(
+    rho: float, *, soe_system: str | None = None, diagonal_mass_cuda: bool = False
+) -> List[Tuple[str, object]]:
     variants: List[Tuple[str, object]] = [
         (
             FIG_SUBDIR_STANDARD,
-            lambda ref, rho, ref_cpu, soe=soe_system: cuda_panel_rows_with_flags(
-                ref, rho, ref_cpu=ref_cpu, soe_system=soe
+            lambda ref, rho, ref_cpu, soe=soe_system, dm=diagonal_mass_cuda: cuda_panel_rows_with_flags(
+                ref, rho, ref_cpu=ref_cpu, soe_system=soe, diagonal_mass_cuda=dm
             ),
         ),
         (
             FIG_SUBDIR_INCREMENTAL,
-            lambda ref, rho, ref_cpu, soe=soe_system: cuda_panel_rows_with_flags(
-                ref, rho, ref_cpu=ref_cpu, incremental=True, soe_system=soe
+            lambda ref, rho, ref_cpu, soe=soe_system, dm=diagonal_mass_cuda: cuda_panel_rows_with_flags(
+                ref, rho, ref_cpu=ref_cpu, incremental=True, soe_system=soe, diagonal_mass_cuda=dm
             ),
         ),
     ]
@@ -786,19 +828,20 @@ def cuda_panel_variants_for_rho(rho: float, *, soe_system: str | None = None) ->
             [
                 (
                     FIG_SUBDIR_STANDARD_AC,
-                    lambda ref, rho, ref_cpu, soe=soe_system: cuda_panel_rows_with_flags(
-                        ref, rho, ref_cpu=ref_cpu, alpha_close_check=True, soe_system=soe
+                    lambda ref, rho, ref_cpu, soe=soe_system, dm=diagonal_mass_cuda: cuda_panel_rows_with_flags(
+                        ref, rho, ref_cpu=ref_cpu, alpha_close_check=True, soe_system=soe, diagonal_mass_cuda=dm
                     ),
                 ),
                 (
                     FIG_SUBDIR_INCREMENTAL_AC,
-                    lambda ref, rho, ref_cpu, soe=soe_system: cuda_panel_rows_with_flags(
+                    lambda ref, rho, ref_cpu, soe=soe_system, dm=diagonal_mass_cuda: cuda_panel_rows_with_flags(
                         ref,
                         rho,
                         ref_cpu=ref_cpu,
                         incremental=True,
                         alpha_close_check=True,
                         soe_system=soe,
+                        diagonal_mass_cuda=dm,
                     ),
                 ),
             ]
@@ -815,12 +858,20 @@ CUDA_SOE_PLOT_VARIANTS: List[Tuple[str, str | None]] = [
     ("_cudss_dFFI_ir5", "CuDSS_dFFI_ir5"),
 ]
 
+NUMBERER_DENSE_VARIANTS: List[Tuple[str, str]] = [
+    ("plain", "Plain"),
+    ("amd", "AMD"),
+]
+
 
 def comparison_slug_for_tag(tag: str) -> str:
     """Filesystem slug for one-integrator-vs-FG comparison figures."""
     fam = integrator_family(tag)
     soe = tag_linear_soe(tag)
     if fam == "dense":
+        num = tag_numberer(tag)
+        if num:
+            return f"dense_{num.lower()}"
         return "dense"
     if fam == "multisoe":
         if _is_cudss_dffi_soe(soe):
@@ -862,6 +913,25 @@ def filter_comparison_specs_for_soe_variant(
     if soe_system is None:
         return [(slug, tag) for slug, tag in specs if tag_linear_soe(tag) is None]
     return [(slug, tag) for slug, tag in specs if tag_linear_soe(tag) == soe_system]
+
+
+def numberer_dense_comparison_specs(
+    results: Path,
+    row_lab: str,
+    rho: float,
+    *,
+    soe_system: str | None = None,
+) -> List[Tuple[str, str]]:
+    """Append Plain/AMD dense KR/MKR tags when present (RCM is the default dense slug)."""
+    from analysis_utils import result_folder_tag
+
+    method = "KRAlphaExplicit" if row_lab == "KR" else "MKRAlphaExplicit"
+    specs: List[Tuple[str, str]] = []
+    for slug_suffix, numberer in NUMBERER_DENSE_VARIANTS:
+        tag = result_folder_tag(method, [rho], system=soe_system, numberer=numberer)
+        if (results / tag / "disp.out").is_file():
+            specs.append((f"dense_{slug_suffix}", tag))
+    return specs
 
 
 def _is_cuda_example(results: Path) -> bool:
@@ -990,15 +1060,23 @@ def plot_cuda_convergence(
     return any_ok
 
 
-def run_cuda(example_dir: Path, *, jobs: int = 1) -> int:
+def run_cuda(
+    example_dir: Path,
+    *,
+    jobs: int = 1,
+    results_subdir: str = "results",
+    figures_subdir: str = "figures",
+    figure_names: set[str] | None = None,
+) -> int:
     """Plots for Newmark + KRAlphaExplicit + MultiSOE + CudaKRAlpha/CudaMKRAlpha."""
     cfg = load_config(example_dir)
     dt_analysis = float(getattr(cfg, "DT_ANALYSIS", 0.005))
     dt_plot = float(getattr(cfg, "DT_PLOT", dt_analysis))
     plot_stride = plot_stride_for(dt_analysis, dt_plot)
-    results = example_dir / "results"
-    figures_root = example_dir / "figures"
+    results = example_dir / results_subdir
+    figures_root = example_dir / figures_subdir
     figures_root.mkdir(parents=True, exist_ok=True)
+    diagonal_mass_cuda = results_subdir in ("results_1", "results_2")
     ref = resolve_newmark_tag(results)
     ref_cpu = resolve_newmark_cpu_tag(results)
     ref_msg = f"Newmark CuDSS={ref}"
@@ -1100,7 +1178,9 @@ def run_cuda(example_dir: Path, *, jobs: int = 1) -> int:
                 )
                 continue
 
-            for subdir, row_fn in cuda_panel_variants_for_rho(rho, soe_system=soe_system):
+            for subdir, row_fn in cuda_panel_variants_for_rho(
+                rho, soe_system=soe_system, diagonal_mass_cuda=diagonal_mass_cuda
+            ):
                 rows = row_fn(ref, rho, ref_cpu)
                 out_dir = figures_root / f"rho_{rho:g}" / subdir
                 out_dir.mkdir(parents=True, exist_ok=True)
@@ -1109,6 +1189,11 @@ def run_cuda(example_dir: Path, *, jobs: int = 1) -> int:
                     specs = filter_comparison_specs_for_soe_variant(
                         cuda_row_comparison_specs(row_tags, ref_cpu),
                         soe_system,
+                    )
+                    specs.extend(
+                        numberer_dense_comparison_specs(
+                            results, row_lab, rho, soe_system=soe_system
+                        )
                     )
                     if not specs or ref_cpu is None:
                         continue
@@ -1240,11 +1325,19 @@ def run_cuda(example_dir: Path, *, jobs: int = 1) -> int:
                                 )
                             fig.supxlabel("time (s)")
                             fig_err.supxlabel("time (s)")
-                            save_fig(fig, family_dir / f"{stem}_{slug}.png")
-                            save_fig(fig_err, family_dir / f"error_{stem}_{slug}.png")
+                            hist_name = f"{stem}_{slug}.png"
+                            if figure_names is not None and hist_name not in figure_names:
+                                plt.close(fig)
+                                plt.close(fig_err)
+                                continue
+                            save_fig(fig, family_dir / hist_name)
+                            if figure_names is None or f"error_{hist_name}" in figure_names:
+                                save_fig(fig_err, family_dir / f"error_{stem}_{slug}.png")
+                            else:
+                                plt.close(fig_err)
                             any_ok = True
 
-    if plot_cuda_convergence(
+    if figure_names is None and plot_cuda_convergence(
         results, figures_root, ref, ref_cpu, plot_stride=plot_stride, save_fig=save_fig
     ):
         any_ok = True
@@ -1255,16 +1348,28 @@ def run_cuda(example_dir: Path, *, jobs: int = 1) -> int:
     return 0
 
 
-def run(example_dir: Path, *, jobs: int = 1) -> int:
-    results = example_dir / "results"
+def run(
+    example_dir: Path,
+    *,
+    jobs: int = 1,
+    results_subdir: str = "results",
+    figures_subdir: str = "figures",
+    figure_names: set[str] | None = None,
+) -> int:
+    results = example_dir / results_subdir
     if _is_cuda_example(results):
-        return run_cuda(example_dir, jobs=jobs)
+        return run_cuda(
+            example_dir,
+            jobs=jobs,
+            results_subdir=results_subdir,
+            figures_subdir=figures_subdir,
+            figure_names=figure_names,
+        )
     cfg = load_config(example_dir)
     dt_analysis = float(getattr(cfg, "DT_ANALYSIS", 0.005))
     dt_plot = float(getattr(cfg, "DT_PLOT", dt_analysis))
     plot_stride = plot_stride_for(dt_analysis, dt_plot)
-    results = example_dir / "results"
-    figures_root = example_dir / "figures"
+    figures_root = example_dir / figures_subdir
     figures_root.mkdir(parents=True, exist_ok=True)
     ref = resolve_newmark_tag(results)
     print(f"Using Newmark reference: {ref}", flush=True)

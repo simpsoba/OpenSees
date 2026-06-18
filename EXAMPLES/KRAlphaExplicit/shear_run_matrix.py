@@ -8,7 +8,6 @@ import os
 import shutil
 import subprocess
 import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
@@ -151,9 +150,7 @@ def build_runs(rhos: List[float], *, include_incremental: bool = True) -> List[R
     return runs
 
 
-_SKIP_ARGS = frozenset(
-    ("--plots-only", "--append", "--jobs", "-j", "--no-incremental")
-)
+_SKIP_ARGS = frozenset(("--plots-only", "--append", "--no-incremental"))
 
 
 def _parse_rho_args(argv: List[str]) -> List[float]:
@@ -162,7 +159,7 @@ def _parse_rho_args(argv: List[str]) -> List[float]:
     while i < len(argv):
         arg = argv[i]
         if arg in _SKIP_ARGS:
-            i += 2 if arg in ("--jobs", "-j") else 1
+            i += 1
             continue
         try:
             rhos.append(float(arg))
@@ -172,45 +169,24 @@ def _parse_rho_args(argv: List[str]) -> List[float]:
     return rhos
 
 
-def _parse_jobs(argv: List[str]) -> int:
-    for i, arg in enumerate(argv):
-        if arg in ("--jobs", "-j") and i + 1 < len(argv):
-            val = argv[i + 1]
-            if val.lower() == "auto":
-                return max(1, os.cpu_count() or 1)
-            return max(1, int(val))
-    return 1
-
-
-def _run_all_tasks(tasks: List[RunTask], jobs: int) -> None:
-    if jobs <= 1 or len(tasks) <= 1:
-        for task in tasks:
-            label, rc = _run_task(task)
-            if rc != 0:
-                print(f"WARNING: {label} failed (exit code {rc})", flush=True)
-        return
-
-    print(f"Running {len(tasks)} shear analyses with {jobs} workers", flush=True)
-    with ProcessPoolExecutor(max_workers=jobs) as pool:
-        futures = {pool.submit(_run_task, task): task[0] for task in tasks}
-        for fut in as_completed(futures):
-            label = futures[fut]
-            try:
-                label, rc = fut.result()
-            except Exception as exc:
-                print(f"WARNING: {label} raised {exc!r}", flush=True)
-                continue
-            if rc != 0:
-                print(f"WARNING: {label} failed (exit code {rc})", flush=True)
+def _run_all_tasks(tasks: List[RunTask]) -> None:
+    print(f"Running {len(tasks)} shear analyses (serial)", flush=True)
+    for task in tasks:
+        label, rc = _run_task(task)
+        if rc != 0:
+            print(f"WARNING: {label} failed (exit code {rc})", flush=True)
 
 
 def main(here: Path) -> None:
     os.chdir(here)
     argv = sys.argv[1:]
 
+    if "--jobs" in argv or "-j" in argv:
+        print("ERROR: --jobs was removed; analyses always run serially", file=sys.stderr)
+        raise SystemExit(2)
+
     plots_only = "--plots-only" in argv
     append = "--append" in argv
-    jobs = _parse_jobs(argv)
     only_rhos = _parse_rho_args(argv)
     include_incremental = "--no-incremental" not in argv
     rhos = only_rhos if only_rhos else DEFAULT_RHOS
@@ -261,12 +237,12 @@ def main(here: Path) -> None:
                     system,
                 )
             )
-        _run_all_tasks(tasks, jobs)
+        _run_all_tasks(tasks)
 
     sys.path.insert(0, str(here.parent))
     from plotResults import run as plot_results
 
-    rc = plot_results(here, jobs=jobs)
+    rc = plot_results(here)
     if rc != 0:
         raise SystemExit(rc)
 

@@ -35,9 +35,9 @@ import numpy as np
 
 import ReadRecord
 
-from plot_config import DT_ANALYSIS, FREE_VIBRATION_SECONDS
+from plot_config import DT_ANALYSIS, FREE_VIBRATION_SECONDS, output_dirs
 
-from analysis_utils import write_timing
+from analysis_utils import write_timing, result_folder_tag
 
 # Optional plotting/post-processing dependencies (not required for running the analysis)
 try:
@@ -78,11 +78,82 @@ MONITOR_NODES = (17, 10, 2)
 MONITOR_DOFS = (1, 2, 3)
 
 
-def create_model(apply_gravity=True, plot_model=True):
-    
+def _element_cmass_opt(mass_mode: int) -> list:
+    """OpenSees default is lumped element mass; -cMass selects consistent mass."""
+    return [] if mass_mode != 0 else ["-cMass"]
+
+
+def _element_line_mass_opt(mass_mode: int, rho: float) -> list:
+    return [] if mass_mode == 2 else ["-mass", rho]
+
+
+def _node_length(n1: int, n2: int) -> float:
+    x1, y1 = ops.nodeCoord(n1)
+    x2, y2 = ops.nodeCoord(n2)
+    return float(np.hypot(x2 - x1, y2 - y1))
+
+
+def _accumulate_line_lumped_mass(mx: dict, my: dict, n1: int, n2: int, rho: float) -> None:
+    m_half = 0.5 * rho * _node_length(n1, n2)
+    for n in (n1, n2):
+        mx[n] = mx.get(n, 0.0) + m_half
+        my[n] = my.get(n, 0.0) + m_half
+
+
+def _assign_nodal_lumped_masses(
+    beam_rho: float,
+    col_rho: float,
+    lean_rho: float,
+    m_eps: float,
+    ir_eps: float,
+    floor_mass: float,
+) -> None:
+    mx: dict[int, float] = {}
+    my: dict[int, float] = {}
+    segments = [
+        *((n, n + 1, beam_rho) for n in range(1, 7)),
+        *((n, n + 1, beam_rho) for n in range(9, 15)),
+        (15, 17, col_rho), (16, 20, col_rho), (17, 21, col_rho), (18, 22, col_rho),
+        (19, 9, col_rho), (20, 23, col_rho), (21, 24, col_rho), (22, 25, col_rho),
+        (23, 26, col_rho), (24, 18, col_rho), (25, 27, col_rho), (26, 28, col_rho),
+        (27, 29, col_rho), (28, 15, col_rho), (29, 30, col_rho), (30, 31, col_rho),
+        (31, 32, col_rho), (32, 33, col_rho), (33, 7, col_rho),
+        (19, 16, lean_rho), (16, 8, lean_rho),
+    ]
+    for n1, n2, rho in segments:
+        _accumulate_line_lumped_mass(mx, my, n1, n2, rho)
+    for node in range(1, 34):
+        mx.setdefault(node, 0.0)
+        my.setdefault(node, 0.0)
+        ux = mx[node] + m_eps
+        uy = my[node] + m_eps
+        if node in (8, 16):
+            ux += floor_mass
+        ops.mass(node, ux, uy, ir_eps)
+
+
+def create_model(
+    apply_gravity=True,
+    plot_model=True,
+    *,
+    mass_mode: int = 0,
+    numberer: str = "RCM",
+):
+    """Build the MRF model.
+
+    mass_mode:
+      0 — consistent element mass (-cMass)
+      1 — element lumped mass (omit -cMass; keep element -mass)
+      2 — nodal lumped mass (pre-lump onto nodes; massless elements)
+    """
+    if mass_mode not in (0, 1, 2):
+        raise ValueError("mass_mode must be 0, 1, or 2")
+
     # OpenSees model
     ops.wipe()
     ops.model('basic', '-ndm', 2, '-ndf', 3)
+    cmass_opt = _element_cmass_opt(mass_mode)
+    line_mass = lambda rho: _element_line_mass_opt(mass_mode, rho)
     
     # Basic Geometry
     L = 6.0 * meter 
@@ -143,11 +214,13 @@ def create_model(apply_gravity=True, plot_model=True):
     ops.rigidDiaphragm(1, 8, 4) # Floor 2 constraint in DOF 1
     ops.rigidDiaphragm(1, 16, 12) # Floor 1 constraint in DOF 1
     
-    # Nodal Masses
-    ops.mass(8, 50.97e3 * kg, 1.0 * kg, 1.0 * kg * meter) # Floor 2
-    ops.mass(16, 50.97e3 * kg, 1.0 * kg, 1.0 * kg * meter) # Floor 1
-    
-    # Materials
+    # Nodal eps + floor mass (default); nodal-lumped adds element mass at nodes instead.
+    L_ref = 0.1 * meter
+    m_eps = 1.0 * kg
+    Ir_eps = m_eps * L_ref * L_ref
+    floor_mass = 50.97e3 * kg
+
+    # Materials (needed before nodal mass densities)
     Es = 200 * GPa # Elastic modulus
     Fy = 345 * MPa # Yield strength
     eta = 0.01 # Hardening ratio
@@ -177,7 +250,21 @@ def create_model(apply_gravity=True, plot_model=True):
     col_sec_tag = 2
     mat_tag = 1
     ops.section('WFSection2d', col_sec_tag, mat_tag, d, tw, bf, tf, Nfw, Nff)
-        
+
+    lean_mass = 1e-3 * kg / meter
+
+    if mass_mode == 2:
+        _assign_nodal_lumped_masses(
+            beam_linear_density, col_linear_density, lean_mass, m_eps, Ir_eps, floor_mass
+        )
+    else:
+        for node in range(1, 34):
+            if node in (8, 16):
+                continue
+            ops.mass(node, m_eps, m_eps, Ir_eps)
+        ops.mass(8, floor_mass, m_eps, Ir_eps)  # Floor 2
+        ops.mass(16, floor_mass, m_eps, Ir_eps)  # Floor 1
+    
     # Beams
     beam_geom_transf = 1
     ops.geomTransf('Linear', beam_geom_transf)
@@ -185,19 +272,19 @@ def create_model(apply_gravity=True, plot_model=True):
     NIPs = 2 # two Legendre integration points
     ops.beamIntegration('Legendre', beam_integ, beam_sec_tag, NIPs)
     # Floor 2 beams
-    ops.element('dispBeamColumn', 1, 1, 2, beam_geom_transf, beam_integ, '-cMass', '-mass', beam_linear_density)
-    ops.element('dispBeamColumn', 2, 2, 3, beam_geom_transf, beam_integ, '-cMass', '-mass', beam_linear_density)
-    ops.element('dispBeamColumn', 3, 3, 4, beam_geom_transf, beam_integ, '-cMass', '-mass', beam_linear_density)
-    ops.element('dispBeamColumn', 4, 4, 5, beam_geom_transf, beam_integ, '-cMass', '-mass', beam_linear_density)
-    ops.element('dispBeamColumn', 5, 5, 6, beam_geom_transf, beam_integ, '-cMass', '-mass', beam_linear_density)
-    ops.element('dispBeamColumn', 6, 6, 7, beam_geom_transf, beam_integ, '-cMass', '-mass', beam_linear_density)
+    ops.element('dispBeamColumn', 1, 1, 2, beam_geom_transf, beam_integ, *cmass_opt, *line_mass(beam_linear_density))
+    ops.element('dispBeamColumn', 2, 2, 3, beam_geom_transf, beam_integ, *cmass_opt, *line_mass(beam_linear_density))
+    ops.element('dispBeamColumn', 3, 3, 4, beam_geom_transf, beam_integ, *cmass_opt, *line_mass(beam_linear_density))
+    ops.element('dispBeamColumn', 4, 4, 5, beam_geom_transf, beam_integ, *cmass_opt, *line_mass(beam_linear_density))
+    ops.element('dispBeamColumn', 5, 5, 6, beam_geom_transf, beam_integ, *cmass_opt, *line_mass(beam_linear_density))
+    ops.element('dispBeamColumn', 6, 6, 7, beam_geom_transf, beam_integ, *cmass_opt, *line_mass(beam_linear_density))
     # Floor 1 beams
-    ops.element('dispBeamColumn', 9, 9, 10, beam_geom_transf, beam_integ, '-cMass', '-mass', beam_linear_density)
-    ops.element('dispBeamColumn', 10, 10, 11, beam_geom_transf, beam_integ, '-cMass', '-mass', beam_linear_density)
-    ops.element('dispBeamColumn', 11, 11, 12, beam_geom_transf, beam_integ, '-cMass', '-mass', beam_linear_density)
-    ops.element('dispBeamColumn', 12, 12, 13, beam_geom_transf, beam_integ, '-cMass', '-mass', beam_linear_density)
-    ops.element('dispBeamColumn', 13, 13, 14, beam_geom_transf, beam_integ, '-cMass', '-mass', beam_linear_density)
-    ops.element('dispBeamColumn', 14, 14, 15, beam_geom_transf, beam_integ, '-cMass', '-mass', beam_linear_density)
+    ops.element('dispBeamColumn', 9, 9, 10, beam_geom_transf, beam_integ, *cmass_opt, *line_mass(beam_linear_density))
+    ops.element('dispBeamColumn', 10, 10, 11, beam_geom_transf, beam_integ, *cmass_opt, *line_mass(beam_linear_density))
+    ops.element('dispBeamColumn', 11, 11, 12, beam_geom_transf, beam_integ, *cmass_opt, *line_mass(beam_linear_density))
+    ops.element('dispBeamColumn', 12, 12, 13, beam_geom_transf, beam_integ, *cmass_opt, *line_mass(beam_linear_density))
+    ops.element('dispBeamColumn', 13, 13, 14, beam_geom_transf, beam_integ, *cmass_opt, *line_mass(beam_linear_density))
+    ops.element('dispBeamColumn', 14, 14, 15, beam_geom_transf, beam_integ, *cmass_opt, *line_mass(beam_linear_density))
 
     # Columns
     col_geom_transf = 2
@@ -206,25 +293,25 @@ def create_model(apply_gravity=True, plot_model=True):
     NIPs = 2 # two Legendre integration points
     ops.beamIntegration('Legendre', col_integ, col_sec_tag, NIPs)
     # Left Column
-    ops.element('dispBeamColumn', 15, 17, 20, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
-    ops.element('dispBeamColumn', 16, 20, 21, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
-    ops.element('dispBeamColumn', 17, 21, 22, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
-    ops.element('dispBeamColumn', 18, 22, 9, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
-    ops.element('dispBeamColumn', 19, 9, 23, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
-    ops.element('dispBeamColumn', 20, 23, 24, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
-    ops.element('dispBeamColumn', 21, 24, 25, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
-    ops.element('dispBeamColumn', 22, 25, 26, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
-    ops.element('dispBeamColumn', 23, 26, 1, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
+    ops.element('dispBeamColumn', 15, 17, 20, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
+    ops.element('dispBeamColumn', 16, 20, 21, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
+    ops.element('dispBeamColumn', 17, 21, 22, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
+    ops.element('dispBeamColumn', 18, 22, 9, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
+    ops.element('dispBeamColumn', 19, 9, 23, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
+    ops.element('dispBeamColumn', 20, 23, 24, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
+    ops.element('dispBeamColumn', 21, 24, 25, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
+    ops.element('dispBeamColumn', 22, 25, 26, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
+    ops.element('dispBeamColumn', 23, 26, 1, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
     # Right Column
-    ops.element('dispBeamColumn', 24, 18, 27, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
-    ops.element('dispBeamColumn', 25, 27, 28, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
-    ops.element('dispBeamColumn', 26, 28, 29, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
-    ops.element('dispBeamColumn', 27, 29, 15, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
-    ops.element('dispBeamColumn', 28, 15, 30, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
-    ops.element('dispBeamColumn', 29, 30, 31, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
-    ops.element('dispBeamColumn', 30, 31, 32, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
-    ops.element('dispBeamColumn', 31, 32, 33, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
-    ops.element('dispBeamColumn', 32, 33, 7, col_geom_transf, col_integ, '-cMass', '-mass', col_linear_density)
+    ops.element('dispBeamColumn', 24, 18, 27, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
+    ops.element('dispBeamColumn', 25, 27, 28, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
+    ops.element('dispBeamColumn', 26, 28, 29, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
+    ops.element('dispBeamColumn', 27, 29, 15, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
+    ops.element('dispBeamColumn', 28, 15, 30, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
+    ops.element('dispBeamColumn', 29, 30, 31, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
+    ops.element('dispBeamColumn', 30, 31, 32, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
+    ops.element('dispBeamColumn', 31, 32, 33, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
+    ops.element('dispBeamColumn', 32, 33, 7, col_geom_transf, col_integ, *cmass_opt, *line_mass(col_linear_density))
     
     # Leaning Column
     leaning_geom_transf = 3
@@ -232,8 +319,8 @@ def create_model(apply_gravity=True, plot_model=True):
     A_leaning = 9.76e-2 * meter**2
     I_leaning = 7.125e-4 * meter**4
     E_leaning = Es
-    ops.element('elasticBeamColumn', 33, 19, 16, A_leaning, E_leaning, I_leaning, leaning_geom_transf, '-mass', 1e-3*kg/meter, '-cMass') # lumped mass at floor nodes
-    ops.element('elasticBeamColumn', 34, 16, 8, A_leaning, E_leaning, I_leaning, leaning_geom_transf, '-mass', 1e-3*kg/meter, '-cMass') # lumped mass at floor nodes
+    ops.element('elasticBeamColumn', 33, 19, 16, A_leaning, E_leaning, I_leaning, leaning_geom_transf, *cmass_opt, *line_mass(lean_mass))
+    ops.element('elasticBeamColumn', 34, 16, 8, A_leaning, E_leaning, I_leaning, leaning_geom_transf, *cmass_opt, *line_mass(lean_mass))
     
     # Plot model
     if plot_model and opsvis is not None and plt is not None:
@@ -252,7 +339,7 @@ def create_model(apply_gravity=True, plot_model=True):
         n_steps = 10
         ops.wipeAnalysis()
         ops.constraints('Transformation')
-        ops.numberer('Plain')
+        ops.numberer(numberer)
         ops.system('FullGeneral')
         ops.test('NormDispIncr', 1.0e-6, 10)
         ops.algorithm('KrylovNewton')
@@ -499,23 +586,37 @@ def _set_transient_linear_system(
     ops.system(_default_system(integrator_method))
 
 
+def _integrator_call_params(integrator: dict) -> list:
+    params = list(integrator["params"])
+    method = integrator["method"]
+    if integrator.get("mass_mode", 0) != 0 and method in (
+        "CudaKRAlpha",
+        "CudaMKRAlpha",
+    ):
+        if "-diagonalMass" not in params:
+            params.append("-diagonalMass")
+    return params
+
+
 def _result_folder(integrator: dict) -> str:
     method = integrator["method"]
-    params = integrator["params"]
+    params = _integrator_call_params(integrator)
     system = integrator.get("system")
     cudss_precision = integrator.get("cudss_precision")
     cudss_ir_n_steps = int(integrator.get("cudss_ir_n_steps") or 0)
+    numberer = integrator.get("numberer", "RCM")
+    root = output_dirs(int(integrator.get("mass_mode", 0)))[0]
     effective = system if system is not None else _default_system(method)
     folder_label = _cudss_folder_system_label(cudss_precision, cudss_ir_n_steps)
-    if folder_label is not None and effective == "CuDSS":
-        return f"results/{method}_{folder_label}_params-{params!s}"
-    if system is not None and not (method == "Newmark" and system == "CuDSS"):
-        return f"results/{method}_{system}_params-{params!s}"
-    return f"results/{method}_params-{params!s}"
-
-
-def _integrator_call_params(integrator: dict) -> list:
-    return list(integrator["params"])
+    newmark_cpu = method == "Newmark" and effective == "FullGeneral"
+    system_for_tag = None
+    if not newmark_cpu and not (folder_label and effective == "CuDSS"):
+        if system is not None and not (method == "Newmark" and system == "CuDSS"):
+            system_for_tag = system
+    return (
+        f"{root}/"
+        f"{result_folder_tag(method, params, system=system_for_tag, numberer=numberer, cudss_folder_label=folder_label if folder_label and effective == 'CuDSS' else None, newmark_cpu=newmark_cpu)}"
+    )
 
 
 def run_dynamic_analysis(
@@ -527,7 +628,7 @@ def run_dynamic_analysis(
     dt_gm=None,
 ):
     # Default integrator
-    if integrator == None:
+    if integrator is None:
         integrator = {'method': 'Newmark', 
                       'params': [0.5, 0.25], 
                       'maxIter': 10}
@@ -565,7 +666,7 @@ def run_dynamic_analysis(
         int(integrator.get("cudss_ir_n_steps") or 0),
     )
     ops.constraints('Transformation')
-    ops.numberer('Plain')
+    ops.numberer(integrator.get("numberer", "RCM"))
     # OpenSees 'test' print flag: 0 for Newmark; verbose (5) for 1-iter explicit runs
     pFlag = integrator.get("pFlag", _default_pflag(integrator))
     test_args = _integrator_ops_test_args(integrator, pFlag)

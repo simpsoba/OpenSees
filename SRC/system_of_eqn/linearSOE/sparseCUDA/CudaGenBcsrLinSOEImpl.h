@@ -49,13 +49,6 @@
 
 using thrust::raw_pointer_cast;
 
-namespace CudaGenBcsrLinSOEDetail {
-int addScalarDiagonalToA(int numEqn, int blockSize, const int *rowPtr, const int *colIdx, void *values,
-                           CudaPrecision prec, const void *deviceScalarDiag, double scale, cudaStream_t stream);
-int addBlockDiagonalToA(int numBlockRows, int blockSize, const int *rowPtr, const int *colIdx, void *values,
-                        CudaPrecision prec, const double *deviceBlockDiag, double scale, cudaStream_t stream);
-}
-
 // C++ includes
 #include <type_traits>
 
@@ -233,52 +226,6 @@ public:
     int* getDeviceColIndices(void) override {
         return m_deviceCsrIndices.empty() ? nullptr
             : m_deviceCsrIndices.data().get() + this->getNumRowBlocks() + 1;
-    }
-
-    int addScalarDiagonalToA(const void *deviceScalarDiag, double scale, void *stream) override
-    {
-        const int n = this->getNumEqn();
-        if (scale == 0.0 || n <= 0 || deviceScalarDiag == nullptr) {
-            return 0;
-        }
-        const int *rowPtr = getDeviceRowPtrs();
-        const int *colIdx = getDeviceColIndices();
-        void *values = getDeviceAValues();
-        if (rowPtr == nullptr || colIdx == nullptr || values == nullptr) {
-            return -1;
-        }
-        const int rc = CudaGenBcsrLinSOEDetail::addScalarDiagonalToA(
-            n, this->getBlockSize(), rowPtr, colIdx, values, this->getPrecision(), deviceScalarDiag, scale,
-            stream != nullptr ? static_cast<cudaStream_t>(stream) : cudaStream_t{0});
-        if (rc == 0 && this->m_matrixStatus == MatrixStatus::UNCHANGED) {
-            this->m_matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;
-        }
-        return rc;
-    }
-
-    int addBlockDiagonalToA(const double *deviceBlockDiag, double scale, void *stream) override
-    {
-        const int bs = this->getBlockSize();
-        if (bs <= 1) {
-            return -1;
-        }
-        const int numBlockRows = this->getNumRowBlocks();
-        if (scale == 0.0 || numBlockRows <= 0 || bs <= 0 || deviceBlockDiag == nullptr) {
-            return 0;
-        }
-        const int *rowPtr = getDeviceRowPtrs();
-        const int *colIdx = getDeviceColIndices();
-        void *values = getDeviceAValues();
-        if (rowPtr == nullptr || colIdx == nullptr || values == nullptr) {
-            return -1;
-        }
-        const int rc = CudaGenBcsrLinSOEDetail::addBlockDiagonalToA(
-            numBlockRows, bs, rowPtr, colIdx, values, this->getPrecision(), deviceBlockDiag, scale,
-            stream != nullptr ? static_cast<cudaStream_t>(stream) : cudaStream_t{0});
-        if (rc == 0 && this->m_matrixStatus == MatrixStatus::UNCHANGED) {
-            this->m_matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;
-        }
-        return rc;
     }
 
     void ensureSpmvScratchSizes(void) override {

@@ -94,9 +94,14 @@ def _read_timing(timing_path: Path) -> Tuple[Optional[float], str]:
     return wall, label
 
 
-def collect_rows(example_dir: Path, *, example_name: Optional[str] = None) -> List[dict]:
+def collect_rows(
+    example_dir: Path,
+    *,
+    example_name: Optional[str] = None,
+    results_subdir: str = "results",
+) -> List[dict]:
     example = example_name or example_dir.name
-    results_root = example_dir / "results"
+    results_root = example_dir / results_subdir
     if not results_root.is_dir():
         return []
 
@@ -129,10 +134,11 @@ def write_timing_summary(
     *,
     output_path: Optional[Path] = None,
     example_name: Optional[str] = None,
+    results_subdir: str = "results",
 ) -> Path:
     example_dir = example_dir.resolve()
     out = output_path or (example_dir / "timing_summary.csv")
-    rows = collect_rows(example_dir, example_name=example_name)
+    rows = collect_rows(example_dir, example_name=example_name, results_subdir=results_subdir)
     fieldnames = [
         "example",
         "result_folder",

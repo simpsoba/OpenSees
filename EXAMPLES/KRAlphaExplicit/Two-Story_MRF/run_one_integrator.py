@@ -48,6 +48,19 @@ def main() -> int:
         default=None,
         help='Optional JSON convergence test, e.g. {"type":"NormUnbalance","tol":1e-4}',
     )
+    ap.add_argument(
+        "--mass-mode",
+        type=int,
+        default=0,
+        choices=(0, 1, 2),
+        help="0=consistent (-cMass), 1=element lumped, 2=nodal lumped (Cuda adds -diagonalMass)",
+    )
+    ap.add_argument(
+        "--numberer",
+        default="RCM",
+        choices=("Plain", "RCM", "AMD"),
+        help="DOF numberer for gravity and transient analysis (default RCM)",
+    )
     args = ap.parse_args()
 
     try:
@@ -67,6 +80,8 @@ def main() -> int:
         integrator["cudss_precision"] = args.cudss_precision
     if args.cudss_ir_n_steps > 0:
         integrator["cudss_ir_n_steps"] = args.cudss_ir_n_steps
+    integrator["mass_mode"] = args.mass_mode
+    integrator["numberer"] = args.numberer
     if args.test:
         try:
             integrator["test"] = json.loads(args.test)
@@ -75,7 +90,12 @@ def main() -> int:
             return 2
 
     # Create model and damping
-    mrf.create_model(apply_gravity=True, plot_model=False)
+    mrf.create_model(
+        apply_gravity=True,
+        plot_model=False,
+        mass_mode=args.mass_mode,
+        numberer=args.numberer,
+    )
     eigenvalues = mrf.ops.eigen(2)
     omegas = [v**0.5 for v in eigenvalues]
     mrf.setup_rayleigh_damping(omegas[0], omegas[1], 0.02, 0.02, use_NPD=True, plot_rayleigh=False)

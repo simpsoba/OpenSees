@@ -5,17 +5,22 @@ Run the SDOF integrator matrix (same layout as Two-Story_MRF on ops-cuda), then 
 Each case uses initial conditions from ``plot_config.IC_CASES`` and writes under
 ``results/<ic>/<dt_tag>/<integrator>_params-.../`` for each ``DT_CASES`` entry.
 
+Run matrix (same layout at every ρ passed via ``--rho``):
+  Default — full double-precision matrix.
+  ``--cudss-dffi-only`` — CuDSS dFFI subset only (IR=0,2,5).
+  ``--alpha-close-check-only`` — ``-alphaCloseCheck`` subset only.
+
 By default, ``results/`` and ``figures/`` are removed before each run (use ``--append`` to keep).
 
 Usage:
-  python3 run_integrators.py
-  python3 run_integrators.py 0.75 1.0
-  python3 run_integrators.py --append 0.5
+  python3 run_integrators.py --rho 0.5 0.9 1.0
+  python3 run_integrators.py --append --rho 0.5
+  python3 run_integrators.py --alpha-close-check-only --append --rho 1.0
+  python3 run_integrators.py --cudss-dffi-only --append --rho 0.5 0.9 1.0
   python3 run_integrators.py --plots-only
-  python3 run_integrators.py --jobs auto
   python3 run_integrators.py --no-incremental
-  python3 run_integrators.py --cudss-dffi --append
-  # dFFI matrix includes IR=0 (default), IR=2, and IR=5 variants
+
+Analyses always run serially (one subprocess at a time).
 """
 
 from __future__ import annotations
@@ -25,7 +30,6 @@ import os
 import shutil
 import subprocess
 import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
@@ -232,16 +236,69 @@ def _build_runs(rhos: List[float], *, include_incremental: bool = True) -> List[
         if include_incremental:
             runs.extend(_multisoe_runs(rho, incremental=True))
             runs.extend(_cuda_runs(rho, incremental=True))
-        if abs(rho - 1.0) < 1e-12:
-            runs.extend(_multisoe_runs(rho, alpha_close_check=True))
-            runs.extend(_cuda_runs(rho, alpha_close_check=True))
-            if include_incremental:
+    return runs
+
+
+def _build_alpha_close_check_runs(
+    rhos: List[float],
+    *,
+    include_incremental: bool = True,
+    cudss_dffi: bool = False,
+) -> List[RunSpec]:
+    """-alphaCloseCheck variants only (append after main matrix; any ρ in ``rhos``)."""
+    runs: List[RunSpec] = []
+    if cudss_dffi:
+        sp = "dFFI"
+        for ir_n_steps in CUDSS_DFFI_IR_STEPS:
+            sp_label = _cudss_sp_label(ir_n_steps)
+            for rho in rhos:
                 runs.extend(
-                    _multisoe_runs(rho, incremental=True, alpha_close_check=True)
+                    _multisoe_runs(
+                        rho,
+                        alpha_close_check=True,
+                        cudss_precision=sp,
+                        cudss_ir_n_steps=ir_n_steps,
+                        label=sp_label,
+                    )
                 )
                 runs.extend(
-                    _cuda_runs(rho, incremental=True, alpha_close_check=True)
+                    _cuda_runs(
+                        rho,
+                        alpha_close_check=True,
+                        cudss_precision=sp,
+                        cudss_ir_n_steps=ir_n_steps,
+                        label=sp_label,
+                    )
                 )
+                if include_incremental:
+                    runs.extend(
+                        _multisoe_runs(
+                            rho,
+                            incremental=True,
+                            alpha_close_check=True,
+                            cudss_precision=sp,
+                            cudss_ir_n_steps=ir_n_steps,
+                            label=sp_label,
+                        )
+                    )
+                    runs.extend(
+                        _cuda_runs(
+                            rho,
+                            incremental=True,
+                            alpha_close_check=True,
+                            cudss_precision=sp,
+                            cudss_ir_n_steps=ir_n_steps,
+                            label=sp_label,
+                        )
+                    )
+        return runs
+
+    for rho in rhos:
+        runs.extend(_multisoe_runs(rho, alpha_close_check=True))
+        runs.extend(_cuda_runs(rho, alpha_close_check=True))
+        if include_incremental:
+            runs.extend(_multisoe_runs(rho, incremental=True, alpha_close_check=True))
+            runs.extend(_cuda_runs(rho, incremental=True, alpha_close_check=True))
     return runs
 
 
@@ -299,108 +356,59 @@ def _build_cudss_sp_runs(rhos: List[float], *, include_incremental: bool = True)
                         label=sp_label,
                     )
                 )
-            if abs(rho - 1.0) < 1e-12:
-                runs.extend(
-                    _multisoe_runs(
-                        rho,
-                        alpha_close_check=True,
-                        cudss_precision=sp,
-                        cudss_ir_n_steps=ir_n_steps,
-                        label=sp_label,
-                    )
-                )
-                runs.extend(
-                    _cuda_runs(
-                        rho,
-                        alpha_close_check=True,
-                        cudss_precision=sp,
-                        cudss_ir_n_steps=ir_n_steps,
-                        label=sp_label,
-                    )
-                )
-                if include_incremental:
-                    runs.extend(
-                        _multisoe_runs(
-                            rho,
-                            incremental=True,
-                            alpha_close_check=True,
-                            cudss_precision=sp,
-                            cudss_ir_n_steps=ir_n_steps,
-                            label=sp_label,
-                        )
-                    )
-                    runs.extend(
-                        _cuda_runs(
-                            rho,
-                            incremental=True,
-                            alpha_close_check=True,
-                            cudss_precision=sp,
-                            cudss_ir_n_steps=ir_n_steps,
-                            label=sp_label,
-                        )
-                    )
     return runs
 
 
-_SKIP_ARGS = frozenset(
-    (
-        "--plots-only",
-        "--append",
-        "--jobs",
-        "-j",
-        "--no-incremental",
-        "--cudss-sp",
-        "--cudss-dffi",
-    )
-)
+def _resolve_rhos(explicit_rhos: List[float]) -> List[float]:
+    return list(explicit_rhos) if explicit_rhos else list(DEFAULT_RHOS)
+
+
+def _build_run_list(
+    rhos: List[float],
+    *,
+    cudss_dffi_only: bool,
+    alpha_close_check_only: bool,
+    include_incremental: bool,
+) -> List[RunSpec]:
+    """Pick run matrix; every ρ in ``rhos`` gets the same case layout."""
+    if cudss_dffi_only and alpha_close_check_only:
+        return _build_alpha_close_check_runs(
+            rhos, include_incremental=include_incremental, cudss_dffi=True
+        )
+    if alpha_close_check_only:
+        return _build_alpha_close_check_runs(rhos, include_incremental=include_incremental)
+    if cudss_dffi_only:
+        return _build_cudss_sp_runs(rhos, include_incremental=include_incremental)
+    return _build_runs(rhos, include_incremental=include_incremental)
 
 
 def _parse_rho_args(argv: List[str]) -> List[float]:
     rhos: List[float] = []
     i = 0
     while i < len(argv):
-        arg = argv[i]
-        if arg in _SKIP_ARGS:
-            i += 2 if arg in ("--jobs", "-j") else 1
+        if argv[i] != "--rho":
+            i += 1
             continue
-        try:
-            rhos.append(float(arg))
-        except ValueError:
-            pass
         i += 1
+        if i >= len(argv) or argv[i].startswith("-"):
+            print("ERROR: --rho requires at least one value", file=sys.stderr)
+            raise SystemExit(2)
+        while i < len(argv) and not argv[i].startswith("-"):
+            try:
+                rhos.append(float(argv[i]))
+            except ValueError:
+                print(f"ERROR: invalid --rho value {argv[i]!r}", file=sys.stderr)
+                raise SystemExit(2)
+            i += 1
     return rhos
 
 
-def _parse_jobs(argv: List[str]) -> int:
-    for i, arg in enumerate(argv):
-        if arg in ("--jobs", "-j") and i + 1 < len(argv):
-            val = argv[i + 1]
-            if val.lower() == "auto":
-                return max(1, os.cpu_count() or 1)
-            return max(1, int(val))
-    return 1
-
-
-def _run_all_tasks(tasks: List[RunTask], jobs: int) -> None:
-    if jobs <= 1 or len(tasks) <= 1:
-        for task in tasks:
-            label, rc = _run_task(task)
-            if rc != 0:
-                print(f"WARNING: {label} failed (exit code {rc})", flush=True)
-        return
-
-    print(f"Running {len(tasks)} SDOF analyses with {jobs} workers", flush=True)
-    with ProcessPoolExecutor(max_workers=jobs) as pool:
-        futures = {pool.submit(_run_task, task): task[0] for task in tasks}
-        for fut in as_completed(futures):
-            label = futures[fut]
-            try:
-                label, rc = fut.result()
-            except Exception as exc:
-                print(f"WARNING: {label} raised {exc!r}", flush=True)
-                continue
-            if rc != 0:
-                print(f"WARNING: {label} failed (exit code {rc})", flush=True)
+def _run_all_tasks(tasks: List[RunTask]) -> None:
+    print(f"Running {len(tasks)} SDOF analyses (serial)", flush=True)
+    for task in tasks:
+        label, rc = _run_task(task)
+        if rc != 0:
+            print(f"WARNING: {label} failed (exit code {rc})", flush=True)
 
 
 def main() -> None:
@@ -408,17 +416,22 @@ def main() -> None:
     os.chdir(here)
     argv = sys.argv[1:]
 
+    if "--jobs" in argv or "-j" in argv:
+        print("ERROR: --jobs was removed; analyses always run serially", file=sys.stderr)
+        raise SystemExit(2)
+
     plots_only = "--plots-only" in argv
     append = "--append" in argv
-    cudss_sp_only = "--cudss-sp" in argv or "--cudss-dffi" in argv
-    jobs = _parse_jobs(argv)
-    only_rhos = _parse_rho_args(argv)
+    cudss_dffi_only = "--cudss-dffi-only" in argv
+    alpha_close_check_only = "--alpha-close-check-only" in argv
     include_incremental = "--no-incremental" not in argv
-    rhos = only_rhos if only_rhos else DEFAULT_RHOS
-    if cudss_sp_only:
-        runs = _build_cudss_sp_runs(rhos, include_incremental=include_incremental)
-    else:
-        runs = _build_runs(rhos, include_incremental=include_incremental)
+    rhos = _resolve_rhos(_parse_rho_args(argv))
+    runs = _build_run_list(
+        rhos,
+        cudss_dffi_only=cudss_dffi_only,
+        alpha_close_check_only=alpha_close_check_only,
+        include_incremental=include_incremental,
+    )
 
     if not plots_only:
         from plot_config import DT_CASES, IC_CASES
@@ -458,11 +471,11 @@ def main() -> None:
                             cudss_ir_n_steps,
                         )
                     )
-        _run_all_tasks(tasks, jobs)
+        _run_all_tasks(tasks)
 
     from plotResults import run as plot_results
 
-    rc = plot_results(here, jobs=jobs)
+    rc = plot_results(here)
     if rc != 0:
         raise SystemExit(rc)
 

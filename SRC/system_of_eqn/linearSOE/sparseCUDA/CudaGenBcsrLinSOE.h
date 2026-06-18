@@ -235,15 +235,6 @@ public:
     virtual const int* getDeviceColIndices(void) const = 0;
     virtual int* getDeviceColIndices(void) = 0;
 
-    // Add scale * deviceScalarDiag[i] to the (i,i) entry of device A.
-    // deviceScalarDiag element type matches matrix precision (float or double).
-    virtual int addScalarDiagonalToA(const void *deviceScalarDiag, double scale, void *stream = nullptr) = 0;
-
-    // Add scale * deviceBlockDiag blocks to the diagonal blocks of device A (blockSize > 1 only).
-    // deviceBlockDiag length is getNumRowBlocks() * blockSize^2, row-major within each block.
-    // For blockSize == 1, use addScalarDiagonalToA instead.
-    virtual int addBlockDiagonalToA(const double *deviceBlockDiag, double scale, void *stream = nullptr) = 0;
-
 protected:    
     // Track the status of the matrix
     MatrixStatus m_matrixStatus;

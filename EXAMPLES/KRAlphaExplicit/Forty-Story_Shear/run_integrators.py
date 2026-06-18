@@ -5,7 +5,6 @@ Forty-story shear frame — same integrator matrix as Two-Story_MRF (ops-cuda).
 Usage:
   python3 run_integrators.py
   python3 run_integrators.py 0.75 1.0
-  python3 run_integrators.py --jobs auto 0.0 0.25 0.5 0.75 0.9 0.99 0.999 1.0
   python3 run_integrators.py --plots-only
 """
 

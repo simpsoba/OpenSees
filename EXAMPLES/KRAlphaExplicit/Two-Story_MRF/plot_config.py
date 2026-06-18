@@ -15,3 +15,10 @@ PROFILE_YLABEL = "floor"
 
 PLOT_FLOOR_NODES = (10, 2)
 FLOOR_LABELS = ("floor 1", "roof (node 2)")
+
+
+def output_dirs(mass_mode: int = 0) -> tuple[str, str]:
+    """Return (results_subdir, figures_subdir) for massMode 0/1/2."""
+    if mass_mode == 0:
+        return "results", "figures"
+    return f"results_{mass_mode}", f"figures_{mass_mode}"
