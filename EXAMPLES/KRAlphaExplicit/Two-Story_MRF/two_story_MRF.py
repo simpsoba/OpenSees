@@ -587,15 +587,7 @@ def _set_transient_linear_system(
 
 
 def _integrator_call_params(integrator: dict) -> list:
-    params = list(integrator["params"])
-    method = integrator["method"]
-    if integrator.get("mass_mode", 0) != 0 and method in (
-        "CudaKRAlpha",
-        "CudaMKRAlpha",
-    ):
-        if "-diagonalMass" not in params:
-            params.append("-diagonalMass")
-    return params
+    return list(integrator["params"])
 
 
 def _result_folder(integrator: dict) -> str:

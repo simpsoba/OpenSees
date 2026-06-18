@@ -140,13 +140,6 @@ proc appendIntegratorFlags {paramsList} {
     return $paramsList
 }
 
-proc appendCudaIntegratorFlags {paramsList} {
-    global massMode
-    set paramsList [appendIntegratorFlags $paramsList]
-    if {$massMode != 0} { lappend paramsList -diagonalMass }
-    return $paramsList
-}
-
 if {$checkMassOnly} {
     set integratorParams [list]
     set maxIter 1
@@ -190,7 +183,7 @@ switch -exact $integratorMethod {
         set newmarkCpu 0
     }
     CudaKRAlpha {
-        set integratorParams [appendCudaIntegratorFlags [list $rho]]
+        set integratorParams [appendIntegratorFlags [list $rho]]
         set maxIter 1
         set pFlag 5
         set algo Linear
@@ -198,7 +191,7 @@ switch -exact $integratorMethod {
         set newmarkCpu 0
     }
     CudaMKRAlpha {
-        set integratorParams [appendCudaIntegratorFlags [list $rho]]
+        set integratorParams [appendIntegratorFlags [list $rho]]
         set maxIter 1
         set pFlag 5
         set algo Linear

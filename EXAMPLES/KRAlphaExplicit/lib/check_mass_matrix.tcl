@@ -83,9 +83,11 @@ proc massMatrixDiagonalReport {denseFile N {tol 1.0e-12}} {
 }
 
 proc runMassMatrixCheck {label outReportFile {tol 1.0e-12}} {
-    set denseFile [file join [file dirname $outReportFile] "_mass_dense_tmp.txt"]
-    set sparseFile [file join [file dirname $outReportFile] "_mass_sparse_tmp.mtx"]
-    set N [assembleMassMatrixFile $denseFile $sparseFile]
+    set dir [file dirname $outReportFile]
+    set denseFile [file join $dir "_mass_dense_tmp.txt"]
+    set sparseFG [file join $dir "_mass_sparse_tmp.mtx"]
+
+    set N [assembleMassMatrixFile $denseFile $sparseFG]
 
     lassign [massMatrixDiagonalReport $denseFile $N $tol] isDiag offCount offMax offSum diagSum nnz
 
@@ -104,8 +106,8 @@ proc runMassMatrixCheck {label outReportFile {tol 1.0e-12}} {
         puts $fd "  RESULT: NOT DIAGONAL"
     }
     puts $fd ""
-    puts $fd "Dense M written to: $denseFile"
-    puts $fd "Sparse M written to: $sparseFile"
+    puts $fd "Dense M (FullGeneral): $denseFile"
+    puts $fd "Sparse M (FullGeneral): $sparseFG"
     close $fd
 
     puts "Mass matrix check: $label"

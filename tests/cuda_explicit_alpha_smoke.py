@@ -14,7 +14,7 @@ ops.system("CuDSS")
 ops.numberer("RCM")
 ops.constraints("Plain")
 ops.algorithm("Linear")
-ops.integrator("CudaExplicitAlpha", 0.5, 0.5, 0.5, 0.25, "-diagonalMass")
+ops.integrator("CudaExplicitAlpha", 0.5, 0.5, 0.5, 0.25)
 ops.analysis("Transient")
 
 dt = 0.01

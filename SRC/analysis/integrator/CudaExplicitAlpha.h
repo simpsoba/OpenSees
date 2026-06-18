@@ -40,7 +40,6 @@ public:
         bool updElemDisp = false;
         bool incrementalAccel = false;
         bool useAlphaCloseCheck = false;
-        bool diagonalMass = false;
     };
 
     CudaExplicitAlpha();
@@ -77,7 +76,6 @@ protected:
     bool updElemDisp;
     bool incrementalAccel;
     bool useAlphaCloseCheck;
-    bool diagonalMass;
 
     int updateCount;
     double c1, c2, c3;

@@ -60,76 +60,6 @@ namespace {
 // --- Templated device kernels ---
 
 template<typename T>
-__global__ void kernelHadamardMult(int n, const T *a, const T *b, T *y)
-{
-    const int stride = blockDim.x * gridDim.x;
-    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += stride) {
-        y[i] = a[i] * b[i];
-    }
-}
-
-template<typename T>
-__device__ T deviceAbs(T x)
-{
-    return x >= static_cast<T>(0.0) ? x : -x;
-}
-
-template<typename T>
-__global__ void kernelCheckOffDiagonalCsr(int n, const int *rowPtr, const int *colIdx, const T *vals, T absTol,
-                                          T relTol, int *hasOffDiagonal)
-{
-    const int stride = blockDim.x * gridDim.x;
-    for (int row = blockIdx.x * blockDim.x + threadIdx.x; row < n; row += stride) {
-        const int start = rowPtr[row];
-        const int end = rowPtr[row + 1];
-        T rowScale = static_cast<T>(0.0);
-        for (int k = start; k < end; ++k) {
-            rowScale = fmax(rowScale, deviceAbs(vals[k]));
-        }
-        const T threshold = absTol + relTol * rowScale;
-        for (int k = start; k < end; ++k) {
-            if (colIdx[k] != row && deviceAbs(vals[k]) > threshold) {
-                atomicExch(hasOffDiagonal, 1);
-                return;
-            }
-        }
-    }
-}
-
-template<typename T>
-__global__ void kernelExtractCsrDiagonal(int n, const int *rowPtr, const int *colIdx, const T *values, T *diag)
-{
-    const int stride = blockDim.x * gridDim.x;
-    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += stride) {
-        T d = static_cast<T>(0.0);
-        const int rowStart = rowPtr[i];
-        const int rowEnd = rowPtr[i + 1];
-        for (int k = rowStart; k < rowEnd; ++k) {
-            if (colIdx[k] == i) {
-                d = values[k];
-                break;
-            }
-        }
-        diag[i] = d;
-    }
-}
-
-template<typename T>
-__global__ void kernelDiagonalReciprocal(int n, const T *diag, T *diagInv, T minAbs)
-{
-    const int stride = blockDim.x * gridDim.x;
-    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += stride) {
-        const T m = diag[i];
-        // Match DiagonalDirectSolver: negative diagonals are OK; |m| must exceed minAbs to invert.
-        if (m == static_cast<T>(0.0) || (m > static_cast<T>(0.0) ? m : -m) <= minAbs) {
-            diagInv[i] = static_cast<T>(0.0);
-        } else {
-            diagInv[i] = static_cast<T>(1.0) / m;
-        }
-    }
-}
-
-template<typename T>
 __global__ void kernelAxpy(int n, T alpha, const T *x, T *y)
 {
     const int stride = blockDim.x * gridDim.x;
@@ -175,23 +105,6 @@ static int gridBlocks(int n, int blockSize = 256)
 
 static constexpr int kMotionFields = 3;
 
-template<typename T>
-struct MassDiagCheckTol;
-
-template<>
-struct MassDiagCheckTol<double> {
-    static constexpr double absTol = 1.0e-15;
-    static constexpr double relTol = 1.0e-12;
-    static constexpr double minDiagAbs = 1.0e-18;
-};
-
-template<>
-struct MassDiagCheckTol<float> {
-    static constexpr float absTol = 1.0e-7f;
-    static constexpr float relTol = 1.0e-5f;
-    static constexpr float minDiagAbs = 1.0e-8f;
-};
-
 struct CudaExplicitAlpha::ImplBase {
     struct HostMotionPtrs {
         double *U;
@@ -225,20 +138,12 @@ template<typename T>
 struct ImplT : CudaExplicitAlpha::ImplBase {
     int size = 0;
     int alphaNumRhs = 2;
-    bool diagonalM = false;
-
-    enum class MassPath { Auto, Diagonal, General };
-    MassPath massPath = MassPath::Auto;
-    bool loggedMassDiagCheck = false;
 
     thrust::device_vector<T> d_state_cur;    // [U | Udot | Uddot]
     thrust::device_vector<T> d_state_alpha;  // [Ualpha | Ualphadot | Ualphadotdot]
     thrust::device_vector<T> d_w2;
     thrust::device_vector<T> d_alphaRhs;
     thrust::device_vector<T> d_alphaSol;
-    thrust::device_vector<T> d_Mdiag;
-    thrust::device_vector<T> d_MdiagInv;
-    thrust::device_vector<int> d_massDiagCheckFlag;
     pinned_host_vector<double> h_state_cur;    // [U | Udot | Uddot]
     pinned_host_vector<double> h_state_prev;   // [Ut | Utdot | Utdotdot] step-start backup
     pinned_host_vector<double> h_state_alpha;  // [Ualpha | Ualphadot | Ualphadotdot]
@@ -277,11 +182,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         d_w2.assign(n, zero);
         d_alphaRhs.assign(alphaNumRhs * n, zero);
         d_alphaSol.assign(alphaNumRhs * n, zero);
-        d_Mdiag.clear();
-        d_MdiagInv.clear();
-        d_massDiagCheckFlag.clear();
-        massPath = MassPath::Auto;
-        loggedMassDiagCheck = false;
     }
 
     HostMotionPtrs ensureHostMotionBuffers(int n) override
@@ -319,69 +219,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         const T zero = static_cast<T>(0.0);
         d_alphaRhs.assign(alphaNumRhs * size, zero);
         d_alphaSol.assign(alphaNumRhs * size, zero);
-    }
-
-    void ensureDiagonalMassBuffers(int n)
-    {
-        if (static_cast<int>(d_Mdiag.size()) != n) {
-            const T zero = static_cast<T>(0.0);
-            d_Mdiag.assign(n, zero);
-            d_MdiagInv.assign(n, zero);
-        }
-    }
-
-    // Returns 0 if assembled CSR M is diagonal within tolerance, 1 if off-diagonals exceed tolerance, -1 on error.
-    int checkAssembledMassDiagonalOnDevice(CudaGenBcsrLinSOE *cudaSOE)
-    {
-        if (cudaSOE == nullptr) {
-            return -1;
-        }
-        const int *rowPtr = cudaSOE->getDeviceRowPtrs();
-        const int *colIdx = cudaSOE->getDeviceColIndices();
-        const T *values = static_cast<const T *>(cudaSOE->getDeviceAValues());
-        if (rowPtr == nullptr || colIdx == nullptr || values == nullptr) {
-            return -1;
-        }
-        if (d_massDiagCheckFlag.empty()) {
-            d_massDiagCheckFlag.assign(1, 0);
-        } else {
-            const int zero = 0;
-            cudaCheckError(cudaMemcpyAsync(thrust::raw_pointer_cast(d_massDiagCheckFlag.data()), &zero, sizeof(int),
-                                           cudaMemcpyHostToDevice, stream),
-                           "reset mass diagonal check flag");
-        }
-        int *flag = thrust::raw_pointer_cast(d_massDiagCheckFlag.data());
-        const T absTol = MassDiagCheckTol<T>::absTol;
-        const T relTol = MassDiagCheckTol<T>::relTol;
-        kernelCheckOffDiagonalCsr<<<gridBlocks(size), 256, 0, stream>>>(size, rowPtr, colIdx, values, absTol, relTol,
-                                                                        flag);
-        cudaCheckError(cudaGetLastError(), "check assembled mass diagonal on device");
-        cudaCheckError(cudaStreamSynchronize(stream), "sync mass diagonal check");
-        int hostFlag = 0;
-        cudaCheckError(cudaMemcpy(&hostFlag, flag, sizeof(int), cudaMemcpyDeviceToHost), "read mass diagonal check flag");
-        return hostFlag ? 1 : 0;
-    }
-
-    int extractDiagonalMassFromDevice(CudaGenBcsrLinSOE *cudaSOE)
-    {
-        if (cudaSOE == nullptr) {
-            return -1;
-        }
-        ensureDiagonalMassBuffers(size);
-        const int *rowPtr = cudaSOE->getDeviceRowPtrs();
-        const int *colIdx = cudaSOE->getDeviceColIndices();
-        const T *values = static_cast<const T *>(cudaSOE->getDeviceAValues());
-        if (rowPtr == nullptr || colIdx == nullptr || values == nullptr) {
-            return -1;
-        }
-        T *diag = thrust::raw_pointer_cast(d_Mdiag.data());
-        T *diagInv = thrust::raw_pointer_cast(d_MdiagInv.data());
-        kernelExtractCsrDiagonal<<<gridBlocks(size), 256, 0, stream>>>(size, rowPtr, colIdx, values, diag);
-        kernelDiagonalReciprocal<<<gridBlocks(size), 256, 0, stream>>>(
-            size, diag, diagInv, MassDiagCheckTol<T>::minDiagAbs);
-        cudaCheckError(cudaGetLastError(), "extract mass diagonal on device");
-        diagonalM = true;
-        return 0;
     }
 
     void destroySolvers() override
@@ -522,15 +359,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         return 0;
     }
 
-    int applyM(const T *x, T *y)
-    {
-        if (diagonalM) {
-            kernelHadamardMult<<<gridBlocks(size), 256, 0, stream>>>(
-                size, thrust::raw_pointer_cast(d_Mdiag.data()), x, y);
-            return 0;
-        }
-        return matM->spmv(x, y);
-    }
+    int applyM(const T *x, T *y) { return matM->spmv(x, y); }
 
     int formOperators(CudaExplicitAlpha *integrator, CudaGenBcsrLinSOE *cudaSOE) override
     {
@@ -556,46 +385,13 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         void *rhsAlpha = rhsM;
         void *solAlpha1 = thrust::raw_pointer_cast(d_alphaSol.data());
 
-        const bool useDiagonalMass = integrator->diagonalMass;
-
         // --- Mass operator M (applyM / M^{-1} in predictor and formUnbalance) ---
-        diagonalM = false;
         cudaSOE->zeroA();
         if (integrator->formTangentIntoSOE(INITIAL_TANGENT, 0.0, 0.0, 1.0) != 0) {
             return -1;
         }
         cudaSOE->syncAValuesToDevice();
-        bool useDiagonalMassPath = false;
-        if (useDiagonalMass) {
-            if (massPath == MassPath::Auto) {
-                const int diagCheck = checkAssembledMassDiagonalOnDevice(cudaSOE);
-                if (diagCheck == 0) {
-                    massPath = MassPath::Diagonal;
-                    if (!loggedMassDiagCheck) {
-                        loggedMassDiagCheck = true;
-                        opserr << "CudaExplicitAlpha::formOperators() - -diagonalMass: assembled M is diagonal "
-                                  "within tolerance; using diagonal fast path for M/M^{-1}\n";
-                    }
-                } else if (diagCheck == 1) {
-                    massPath = MassPath::General;
-                    if (!loggedMassDiagCheck) {
-                        loggedMassDiagCheck = true;
-                        opserr << "CudaExplicitAlpha::formOperators() - -diagonalMass: assembled M has "
-                                  "off-diagonal terms above tolerance; using general assembled M for M/M^{-1}\n";
-                    }
-                } else {
-                    return -2;
-                }
-            }
-            if (massPath == MassPath::Diagonal) {
-                if (extractDiagonalMassFromDevice(cudaSOE) != 0) {
-                    return -2;
-                }
-                useDiagonalMassPath = true;
-            } else if (matM->copyValues(cudaSOE->getDeviceAValues()) != 0) {
-                return -2;
-            }
-        } else if (matM->copyValues(cudaSOE->getDeviceAValues()) != 0) {
+        if (matM->copyValues(cudaSOE->getDeviceAValues()) != 0) {
             return -2;
         }
 
@@ -617,15 +413,12 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         } else if (matAlpha->refactorize(rhsAlpha, solAlpha1, numRhs) != 0) {
             return -4;
         }
-        if (!useDiagonalMassPath) {
-            // General M: reuse matAlpha CuDSS symbolic analysis for matM factorization.
-            if (!matM->isFactored()) {
-                if (matM->factorize(rhsM, solM, 1, matAlpha) != 0) {
-                    return -2;
-                }
-            } else if (matM->refactorize(rhsM, solM) != 0) {
+        if (!matM->isFactored()) {
+            if (matM->factorize(rhsM, solM, 1, matAlpha) != 0) {
                 return -2;
             }
+        } else if (matM->refactorize(rhsM, solM) != 0) {
+            return -2;
         }
 
         // --- A for generalized-alpha effective tangent (SpMV in predictor / formUnbalance) ---
@@ -696,12 +489,10 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         cudaSOE->syncBToDevice();
         void *b = cudaSOE->getDeviceB();
         T *w2 = thrust::raw_pointer_cast(d_w2.data());
-        if (diagonalM) {
-            kernelHadamardMult<<<gridBlocks(size), 256, 0, stream>>>(
-                size, thrust::raw_pointer_cast(d_MdiagInv.data()), static_cast<const T *>(b), w2);
-        } else if (matM != nullptr && matM->isFactored()) {
-            matM->solve(b, w2);
-        } else {
+        if (matM == nullptr || !matM->isFactored()) {
+            return -3;
+        }
+        if (matM->solve(b, w2) != 0) {
             return -3;
         }
         matAlpha->spmv(w2, b);
@@ -781,7 +572,7 @@ bool parseCudaExplicitAlphaOptions(CudaExplicitAlpha::Options &opts)
             break;
         }
         if (strcmp(tok, "-diagonalMass") == 0) {
-            opts.diagonalMass = true;
+            opserr << "WARNING CudaExplicitAlpha family - -diagonalMass is no longer supported (ignored)\n";
         } else if (strcmp(tok, "-updateElemDisp") == 0) {
             opts.updElemDisp = true;
         } else if (strcmp(tok, "-incrementalAccel") == 0) {
@@ -790,7 +581,7 @@ bool parseCudaExplicitAlphaOptions(CudaExplicitAlpha::Options &opts)
             opts.useAlphaCloseCheck = true;
         } else {
             opserr << "WARNING CudaExplicitAlpha family - unknown flag " << tok
-                   << "; want <-diagonalMass> <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck>\n";
+                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck>\n";
             return false;
         }
     }
@@ -803,8 +594,7 @@ void *OPS_CudaExplicitAlpha(void)
 {
     if (OPS_GetNumRemainingInputArgs() < 4) {
         opserr << "WARNING integrator CudaExplicitAlpha alphaF alphaM gamma beta "
-                  "<-diagonalMass> <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck>\n";
-        opserr << "  -diagonalMass: use diag(assembled M) for M/M^{-1} when CSR check passes; else general assembled M\n";
+                  "<-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck>\n";
         return nullptr;
     }
     double alphaF = 0.0;
@@ -828,7 +618,7 @@ void *OPS_CudaKRAlpha(void)
 {
     if (OPS_GetNumRemainingInputArgs() < 1) {
         opserr << "WARNING integrator CudaKRAlpha rhoInf "
-                  "<-diagonalMass> <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck>\n";
+                  "<-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck>\n";
         return nullptr;
     }
     double rhoInf = 0.0;
@@ -853,7 +643,7 @@ void *OPS_CudaMKRAlpha(void)
 {
     if (OPS_GetNumRemainingInputArgs() < 1) {
         opserr << "WARNING integrator CudaMKRAlpha rhoInfEquivalent "
-                  "<-diagonalMass> <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck>\n";
+                  "<-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck>\n";
         return nullptr;
     }
     double rhoInfEquivalent = 0.0;
@@ -903,7 +693,6 @@ CudaExplicitAlpha::CudaExplicitAlpha(int classTag, double _alphaF, double _alpha
       updElemDisp(opts.updElemDisp),
       incrementalAccel(opts.incrementalAccel),
       useAlphaCloseCheck(opts.useAlphaCloseCheck),
-      diagonalMass(opts.diagonalMass),
       updateCount(0),
       c1(0.0),
       c2(0.0),
@@ -1191,7 +980,7 @@ int CudaExplicitAlpha::sendSelf(int cTag, Channel &theChannel)
     data(4) = updElemDisp ? 1.0 : 0.0;
     data(5) = incrementalAccel ? 1.0 : 0.0;
     data(6) = useAlphaCloseCheck ? 1.0 : 0.0;
-    data(7) = diagonalMass ? 1.0 : 0.0;
+    data(7) = 0.0;
     return theChannel.sendVector(this->getDbTag(), cTag, data);
 }
 
@@ -1208,7 +997,6 @@ int CudaExplicitAlpha::recvSelf(int cTag, Channel &theChannel, FEM_ObjectBroker 
     updElemDisp = data(4) > 0.5;
     incrementalAccel = data(5) > 0.5;
     useAlphaCloseCheck = data(6) > 0.5;
-    diagonalMass = data(7) > 0.5;
     operatorsBuilt = false;
     return 0;
 }
@@ -1217,9 +1005,6 @@ void CudaExplicitAlpha::Print(OPS_Stream &s, int flag)
 {
     (void)flag;
     s << "CudaExplicitAlpha alphaF=" << alphaF << " alphaM=" << alphaM;
-    if (diagonalMass) {
-        s << " diagonalMass=1";
-    }
     s << endln;
 }
 

@@ -53,7 +53,7 @@ def main() -> int:
         type=int,
         default=0,
         choices=(0, 1, 2),
-        help="0=consistent (-cMass), 1=element lumped, 2=nodal lumped (Cuda adds -diagonalMass)",
+        help="0=consistent (-cMass), 1=element lumped, 2=nodal lumped",
     )
     ap.add_argument(
         "--numberer",

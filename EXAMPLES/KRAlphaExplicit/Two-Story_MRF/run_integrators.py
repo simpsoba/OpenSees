@@ -720,7 +720,7 @@ def _run_mass_mode_matrix(
         print(f"Analysis engine: {engine}", flush=True)
         print(f"Output: {results_subdir}/ , {figures_subdir}/", flush=True)
         if mass_mode != 0:
-            print(f"Model: massMode={mass_mode} (Cuda adds -diagonalMass)", flush=True)
+            print(f"Model: massMode={mass_mode}", flush=True)
         if numberer != "RCM":
             print(f"DOF numberer: {numberer}", flush=True)
         tasks: List[RunTask] = []

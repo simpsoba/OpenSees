@@ -289,10 +289,6 @@ def resp_fft_error_label(resp: str) -> str:
     return rf"$|\mathrm{{FFT}}({sym})|$ error vs. Newmark"
 
 
-def is_diagonal_mass_tag(tag: str) -> bool:
-    return "-diagonalMass" in tag
-
-
 def integrator_family(tag: str) -> str:
     """Legend/plot family: dense, multisoe, cuda, or Newmark SOE variant."""
     if tag.startswith("Newmark_FullGeneral"):
@@ -368,10 +364,10 @@ def legend_label(tag: str) -> str:
     if fam == "multisoe":
         return f"MultiSOE ({_soe_legend_name(soe)})" if soe else "MultiSOE (CuDSS)"
     if fam == "cuda":
-        base = "CudaExplicit" + (" diag. mass" if is_diagonal_mass_tag(tag) else "")
+        base = "CudaExplicit"
         if _is_cudss_dffi_soe(soe):
             return f"{base} ({_soe_legend_name(soe)})"
-        return "Cuda" + (" diag. mass" if is_diagonal_mass_tag(tag) else "")
+        return "Cuda"
     return tag
 
 
@@ -436,10 +432,9 @@ def cuda_comparison_legend_label(tag: str, row_lab: str) -> str:
         soe_name = _soe_legend_name(soe) if soe else "CuDSS"
         return f"{prefix} MultiSOE ({soe_name})"
     if fam == "cuda":
-        dm = " diag. mass" if is_diagonal_mass_tag(tag) else ""
         if _is_cudss_dffi_soe(soe):
-            return f"{prefix} CudaExplicit{dm} ({_soe_legend_name(soe)})"
-        return f"{prefix} CudaExplicit{dm} (CuDSS)"
+            return f"{prefix} CudaExplicit ({_soe_legend_name(soe)})"
+        return f"{prefix} CudaExplicit (CuDSS)"
     return legend_label(tag)
 
 
@@ -742,7 +737,6 @@ def cuda_panel_rows_with_flags(
     incremental: bool = False,
     alpha_close_check: bool = False,
     soe_system: str | None = None,
-    diagonal_mass_cuda: bool = False,
 ) -> List[Tuple[str, List[str]]]:
     if soe_system is not None:
         ref_soe = result_tag_with_system("Newmark", NEWMARK_PARAMS, soe_system)
@@ -751,12 +745,11 @@ def cuda_panel_rows_with_flags(
         refs = [ref] + ([ref_cpu] if ref_cpu else [])
     p_cpu = [rho]
     p_flags = integrator_params(rho, incremental=incremental, alpha_close_check=alpha_close_check)
-    p_cuda = [*p_flags, "-diagonalMass"] if diagonal_mass_cuda else p_flags
     multi = lambda m: result_tag_with_system(m, p_flags, soe_system)
     cuda = (
-        (lambda m: result_tag_with_system(m, p_cuda, soe_system))
+        (lambda m: result_tag_with_system(m, p_flags, soe_system))
         if _is_cudss_dffi_soe(soe_system)
-        else (lambda m: result_tag(m, p_cuda))
+        else (lambda m: result_tag(m, p_flags))
     )
     return [
         (
@@ -807,19 +800,19 @@ CUDA_PANEL_VARIANTS_RHO_ONE_AC: List[Tuple[str, object]] = [
 
 
 def cuda_panel_variants_for_rho(
-    rho: float, *, soe_system: str | None = None, diagonal_mass_cuda: bool = False
+    rho: float, *, soe_system: str | None = None
 ) -> List[Tuple[str, object]]:
     variants: List[Tuple[str, object]] = [
         (
             FIG_SUBDIR_STANDARD,
-            lambda ref, rho, ref_cpu, soe=soe_system, dm=diagonal_mass_cuda: cuda_panel_rows_with_flags(
-                ref, rho, ref_cpu=ref_cpu, soe_system=soe, diagonal_mass_cuda=dm
+            lambda ref, rho, ref_cpu, soe=soe_system: cuda_panel_rows_with_flags(
+                ref, rho, ref_cpu=ref_cpu, soe_system=soe
             ),
         ),
         (
             FIG_SUBDIR_INCREMENTAL,
-            lambda ref, rho, ref_cpu, soe=soe_system, dm=diagonal_mass_cuda: cuda_panel_rows_with_flags(
-                ref, rho, ref_cpu=ref_cpu, incremental=True, soe_system=soe, diagonal_mass_cuda=dm
+            lambda ref, rho, ref_cpu, soe=soe_system: cuda_panel_rows_with_flags(
+                ref, rho, ref_cpu=ref_cpu, incremental=True, soe_system=soe
             ),
         ),
     ]
@@ -828,20 +821,19 @@ def cuda_panel_variants_for_rho(
             [
                 (
                     FIG_SUBDIR_STANDARD_AC,
-                    lambda ref, rho, ref_cpu, soe=soe_system, dm=diagonal_mass_cuda: cuda_panel_rows_with_flags(
-                        ref, rho, ref_cpu=ref_cpu, alpha_close_check=True, soe_system=soe, diagonal_mass_cuda=dm
+                    lambda ref, rho, ref_cpu, soe=soe_system: cuda_panel_rows_with_flags(
+                        ref, rho, ref_cpu=ref_cpu, alpha_close_check=True, soe_system=soe
                     ),
                 ),
                 (
                     FIG_SUBDIR_INCREMENTAL_AC,
-                    lambda ref, rho, ref_cpu, soe=soe_system, dm=diagonal_mass_cuda: cuda_panel_rows_with_flags(
+                    lambda ref, rho, ref_cpu, soe=soe_system: cuda_panel_rows_with_flags(
                         ref,
                         rho,
                         ref_cpu=ref_cpu,
                         incremental=True,
                         alpha_close_check=True,
                         soe_system=soe,
-                        diagonal_mass_cuda=dm,
                     ),
                 ),
             ]
@@ -1076,7 +1068,6 @@ def run_cuda(
     results = example_dir / results_subdir
     figures_root = example_dir / figures_subdir
     figures_root.mkdir(parents=True, exist_ok=True)
-    diagonal_mass_cuda = results_subdir in ("results_1", "results_2")
     ref = resolve_newmark_tag(results)
     ref_cpu = resolve_newmark_cpu_tag(results)
     ref_msg = f"Newmark CuDSS={ref}"
@@ -1179,7 +1170,7 @@ def run_cuda(
                 continue
 
             for subdir, row_fn in cuda_panel_variants_for_rho(
-                rho, soe_system=soe_system, diagonal_mass_cuda=diagonal_mass_cuda
+                rho, soe_system=soe_system
             ):
                 rows = row_fn(ref, rho, ref_cpu)
                 out_dir = figures_root / f"rho_{rho:g}" / subdir
