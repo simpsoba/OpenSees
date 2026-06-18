@@ -59,9 +59,6 @@ CUDA:
   ./run_single.sh CudaMKRAlpha 1.0 3.0 -incrementalAccel
   ./run_single.sh CudaKRAlpha 1.0 3.0 -cudssPrecision dFFI -cudssIrNSteps 2
 
-# Check assembled mass matrix (GimmeMCK; see check_mass_matrix.sh):
-#   ./check_mass_matrix.sh 1
-
 OPENSEES=${OPENSEES}
 EOF
   exit 0

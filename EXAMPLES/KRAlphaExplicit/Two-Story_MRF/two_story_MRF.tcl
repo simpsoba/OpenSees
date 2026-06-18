@@ -9,7 +9,6 @@
 #   /path/to/OpenSees two_story_MRF.tcl CudaKRAlpha 0.5 3.0 -massMode 2  # nodal lumped M
 #   /path/to/OpenSees two_story_MRF.tcl Newmark
 #   /path/to/OpenSees two_story_MRF.tcl NewmarkCPU
-#   /path/to/OpenSees two_story_MRF.tcl CHECK_MASS -massMode 1   # mass-matrix diagonal check
 #
 # Recorder order matches KRAlphaSparse / two_story_MRF.py:
 #   analysis Transient -> mkdir -> results.txt + logFile -> recorders -> analyze -> remove recorders
@@ -25,10 +24,7 @@ set dtAnalysis 0.005
 set freeVibrationSeconds 5.0
 set gmFile [file join $scriptDir ground_motions RSN960_NORTHR_LOS270.AT2]
 
-set checkMassOnly 0
-if {$argc >= 1 && [string equal -nocase [lindex $argv 0] CHECK_MASS]} {
-    set checkMassOnly 1
-} elseif {$argc >= 1} {
+if {$argc >= 1} {
     set integratorMethod [lindex $argv 0]
 }
 
@@ -37,7 +33,7 @@ proc _argvIsNumeric {s} {
 }
 
 set flagStart 1
-if {!$checkMassOnly && $argc >= 2 && [_argvIsNumeric [lindex $argv 1]]} {
+if {$argc >= 2 && [_argvIsNumeric [lindex $argv 1]]} {
     set rho [lindex $argv 1]
     set flagStart 2
     if {$argc >= 3 && [_argvIsNumeric [lindex $argv 2]]} {
@@ -140,14 +136,6 @@ proc appendIntegratorFlags {paramsList} {
     return $paramsList
 }
 
-if {$checkMassOnly} {
-    set integratorParams [list]
-    set maxIter 1
-    set pFlag 5
-    set algo Linear
-    set linearSOE FullGeneral
-    set newmarkCpu 0
-} else {
 switch -exact $integratorMethod {
     Newmark {
         set integratorParams [list 0.5 0.25]
@@ -220,9 +208,8 @@ switch -exact $integratorMethod {
         exit 1
     }
 }
-}
 
-if {!$checkMassOnly && $systemOverride ne ""} {
+if {$systemOverride ne ""} {
     if {$integratorMethod in {Newmark KRAlphaExplicitMultiSOE MKRAlphaExplicitMultiSOE CudaKRAlpha CudaMKRAlpha}} {
         set linearSOE $systemOverride
     } else {
@@ -235,7 +222,6 @@ if {$integratorMethod in {KRAlphaExplicit MKRAlphaExplicit} && ($useIncrementalA
 }
 
 # Output tree follows massMode: results / results_1 / results_2 (figures_* from run_integrators).
-if {!$checkMassOnly} {
 if {$massMode == 0} {
     set resultsSubdir results
 } else {
@@ -252,7 +238,6 @@ if {$linearSOE eq "CuDSS" && $cudssPrecision eq "dFFI"} {
 } elseif {$systemOverride ne "" && $systemOverride ne "CuDSS"} {
     set folderSystemLabel $systemOverride
 }
-}
 
 proc buildOutputFolderName {integratorMethod integratorParams folderSystemLabel newmarkCpu numbererType} {
     set parts [list $integratorMethod]
@@ -268,9 +253,7 @@ proc buildOutputFolderName {integratorMethod integratorParams folderSystemLabel 
     return [format "%s_params-%s" [join $parts _] $paramsLabel]
 }
 
-if {!$checkMassOnly} {
-    set outputFolder [file join $scriptDir $resultsSubdir [buildOutputFolderName $integratorMethod $integratorParams $folderSystemLabel $newmarkCpu $numbererType]]
-}
+set outputFolder [file join $scriptDir $resultsSubdir [buildOutputFolderName $integratorMethod $integratorParams $folderSystemLabel $newmarkCpu $numbererType]]
 
 # --- units (match two_story_MRF.py) ---
 set kN 1.0
@@ -651,14 +634,6 @@ proc runDynamicAnalysis {} {
     close $resultsFd
 
     remove recorders
-}
-
-if {$checkMassOnly} {
-    source [file join $scriptDir .. lib check_mass_matrix.tcl]
-    buildModel
-    set reportFile [file join $scriptDir "mass_matrix_report_mode${massMode}.txt"]
-    runMassMatrixCheck "Two-Story MRF massMode=$massMode" $reportFile
-    exit 0
 }
 
 buildModel
