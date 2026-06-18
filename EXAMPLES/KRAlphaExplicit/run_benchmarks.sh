@@ -7,6 +7,11 @@ export MKL_LIB=/opt/intel/oneapi/mkl/2025.2/lib
 export LD_LIBRARY_PATH="$MKL_LIB:${LD_LIBRARY_PATH:-}"
 export OPENSEES=/home/garaujor/OpenSees-CUDA/build/Release/OpenSees
 
+# Single manual run — see Two-Story_MRF/run_single.sh (examples) or:
+#   cd "${KRAlphaExplicit}/Two-Story_MRF"
+#   ./run_single.sh KRAlphaExplicit 1.0 3.0 -massMode 1 -numberer Plain
+#   ./run_single.sh Newmark -system UmfPack -massMode 1
+
 # --- Two-Story MRF sweep controls (edit here) ---
 # Space-separated ρ values after --rho (e.g. "0.5 0.9 1.0" or "1.0").
 RHOS="1.0"
