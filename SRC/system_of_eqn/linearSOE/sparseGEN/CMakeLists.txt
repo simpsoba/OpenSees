@@ -85,6 +85,24 @@ target_sources(OpenSeesSP
         PFEMCompressibleSolver_Mumps.h
 )
 
+if(TARGET OpenSeesSPFresco)
+  target_sources(OpenSeesSPFresco
+      PRIVATE
+          DistributedSuperLU.cpp
+          DistributedSparseGenColLinSOE.cpp
+          DistributedSparseGenRowLinSOE.cpp
+          PFEMSolver_Mumps.cpp
+          PFEMSolver_LumpM.cpp
+          PFEMCompressibleSolver_Mumps.cpp
+      PUBLIC
+          DistributedSuperLU.h
+          DistributedSparseGenColLinSOE.h
+          DistributedSparseGenRowLinSOE.h
+          PFEMSolver_Mumps.h
+          PFEMCompressibleSolver_Mumps.h
+  )
+endif()
+
 endif()
 
 

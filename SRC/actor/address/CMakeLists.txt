@@ -27,6 +27,15 @@ target_sources(OpenSeesSP
     MPI_ChannelAddress.h
 )
 
+if(TARGET OpenSeesSPFresco)
+  target_sources(OpenSeesSPFresco
+    PRIVATE
+      MPI_ChannelAddress.cpp
+    PUBLIC
+      MPI_ChannelAddress.h
+  )
+endif()
+
 endif()
 
 target_include_directories(OPS_Actor PUBLIC ${CMAKE_CURRENT_LIST_DIR})

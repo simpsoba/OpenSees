@@ -126,7 +126,7 @@ endif()
 
 # define user-selectable options for end target
 set_property(CACHE OPS_FINAL_TARGET PROPERTY STRINGS
-    G3 OpenSees OpenSeesFresco OpenSeesMP OpenSeesSP OpenSeesPy)
+    G3 OpenSees OpenSeesFresco OpenSeesMP OpenSeesSP OpenSeesSPFresco OpenSeesPy)
 
 #
 # OS Configuration:
@@ -382,7 +382,11 @@ if(MKL_FOUND)
      set (SCALAPACK_LIBRARIES ${MKL_LIBRARIES})
   endif()
   if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    set (MKL_LPATH ${MKL_ROOT}/lib/intel64)
+    if(EXISTS "${MKL_ROOT}/lib/intel64/mkl_scalapack_lp64.lib")
+      set(MKL_LPATH ${MKL_ROOT}/lib/intel64)
+    else()
+      set(MKL_LPATH ${MKL_ROOT}/lib)
+    endif()
     set (SCALAPACK_LIBRARIES "${MKL_LPATH}/mkl_scalapack_lp64.lib;${MKL_LPATH}/mkl_intel_lp64.lib;${MKL_LPATH}/mkl_sequential.lib;${MKL_LPATH}/mkl_core.lib;${MKL_LPATH}/mkl_blacs_intelmpi_lp64.lib")
   endif()
 
@@ -422,6 +426,11 @@ set(TCL_LIBRARIES ${TCL_LIBRARY})
 #
 # OpenSees OBJECT LIBRARIES
 #
+
+if(PARALLEL)
+  message(STATUS "PARALLEL FOR SP TURNED ON ...")
+  add_compile_definitions(_PARALLEL_PROCESSING)
+endif()
 
 add_library(OPS_Matrix             OBJECT)
 add_library(OPS_Actor              OBJECT)
@@ -643,10 +652,9 @@ endif()
 # OpenSeesSP Tcl Parallel Interpreter
 #
 
-
 if(MPI_FOUND)
 
-    add_executable(OpenSeesSP EXCLUDE_FROM_ALL
+    set(_OPS_TCL_SP_SOURCES
       ${OPS_SRC_DIR}/tcl/mpiMain.cpp
       ${OPS_SRC_DIR}/tcl/tclMain.cpp
       ${OPS_SRC_DIR}/tcl/commands.cpp
@@ -667,6 +675,8 @@ if(MPI_FOUND)
       ${OPS_SRC_DIR}/domain/subdomain/ActorSubdomain.cpp
       ${OPS_SRC_DIR}/domain/subdomain/ShadowSubdomain.cpp
     )
+
+    add_executable(OpenSeesSP EXCLUDE_FROM_ALL ${_OPS_TCL_SP_SOURCES})
 
 
     target_include_directories(OpenSeesSP PRIVATE ${MUMPS_DIR}/_deps/mumps-src/include ${MPI_CXX_INCLUDE_DIRS})
@@ -698,6 +708,57 @@ if(MPI_FOUND)
        ${MPI_Fortran_LIBRARIES}
        ${MPI_CXX_LINK_FLAGS}
     )
+
+    #
+    # OpenSeesSPFresco -- MPI parallel Tcl interpreter for OpenFresco loadPackage (Windows)
+    # Links dynamic tcl86t.dll instead of Conan static Tcl.
+    #
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND DEFINED OPS_FRESCO_TCL_LIBRARY)
+      add_executable(OpenSeesSPFresco EXCLUDE_FROM_ALL ${_OPS_TCL_SP_SOURCES})
+
+      set_target_properties(OpenSeesSPFresco PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin-fresco
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/bin-fresco
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/bin-fresco
+        RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL ${CMAKE_BINARY_DIR}/bin-fresco
+        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_BINARY_DIR}/bin-fresco
+      )
+
+      target_include_directories(OpenSeesSPFresco
+        PRIVATE ${MUMPS_DIR}/_deps/mumps-src/include ${MPI_CXX_INCLUDE_DIRS}
+        PUBLIC ${OPS_FRESCO_TCL_INCLUDE})
+      target_compile_options(OpenSeesSPFresco PRIVATE ${MPI_CXX_COMPILE_FLAGS})
+
+      if(DEFINED OPENMPI)
+        target_compile_definitions(OpenSeesSPFresco
+          PUBLIC _PARALLEL_PROCESSING ${MUMPS_FLAG} _OPENMPI)
+      else()
+        target_compile_definitions(OpenSeesSPFresco
+          PUBLIC _PARALLEL_PROCESSING ${MUMPS_FLAG})
+      endif()
+
+      ops_add_fresco_tcl_runtime(OpenSeesSPFresco)
+
+      target_link_libraries(OpenSeesSPFresco
+        OPS_InterpTcl
+        OpenSeesLIB
+        OPS_Reliability
+        OPS_ReliabilityTcl
+        OPS_Recorder
+        METIS
+        SUPERLU_DIST
+        OPS_Numerics
+        ${MUMPS_LIBRARIES}
+        ${CMAKE_DL_LIBS}
+        ${HDF5_LIBRARIES}
+        ${OPS_FRESCO_LINK_LIBS}
+        ${MPI_CXX_LIBRARIES}
+        ${SCALAPACK_LIBRARIES}
+        ${MPI_Fortran_LIBRARIES}
+        ${MPI_CXX_LINK_FLAGS}
+      )
+    endif()
 
 endif()
 

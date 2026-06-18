@@ -34,6 +34,15 @@ target_sources(OpenSeesSP
       MPI_Channel.h
 )
 
+if(TARGET OpenSeesSPFresco)
+  target_sources(OpenSeesSPFresco
+      PRIVATE
+        MPI_Channel.cpp
+      PUBLIC
+        MPI_Channel.h
+  )
+endif()
+
 endif()
 
 

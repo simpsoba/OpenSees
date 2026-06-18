@@ -26,6 +26,9 @@ option(OPS_Use_Dev_Directories
 option(FMK
   "Special FMK Code"                                       OFF)
 
+option(PARALLEL
+  "Compile with _PARALLEL_PROCESSING for OpenSeesSP/OpenSeesSPFresco" OFF)
+
 set(OPS_Use_Graphics_Option
   None
   # Base
