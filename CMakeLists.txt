@@ -71,6 +71,9 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
  set(CMAKE_FIND_LIBRARY_SUFFIXES ".lib")
  set(BUILD_SHARED_LIBS OFF)
  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
+ # Intel Fortran runtime (libmmt) duplicates UCRT math symbols with /MT (see Win64 sln)
+ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /FORCE:MULTIPLE")
+ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /FORCE:MULTIPLE")
 else()
   MESSAGE("COMPILER: UKNOWN COMPILER ${CMAKE_CXX_COMPILER_ID}")
 endif()
@@ -123,7 +126,7 @@ endif()
 
 # define user-selectable options for end target
 set_property(CACHE OPS_FINAL_TARGET PROPERTY STRINGS
-    G3 OpenSees OpenSeesMP OpenSeesSP OpenSeesPy)
+    G3 OpenSees OpenSeesFresco OpenSeesMP OpenSeesSP OpenSeesPy)
 
 #
 # OS Configuration:
@@ -380,7 +383,7 @@ if(MKL_FOUND)
   endif()
   if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     set (MKL_LPATH ${MKL_ROOT}/lib/intel64)
-    set (SCALAPACK_LIBRARIES "${MKL_LPATH}/mkl_scalapack_ilp64.lib;${MKL_LPATH}/mkl_intel_ilp64.lib;${MKL_LPATH}/mkl_sequential.lib;${MKL_LPATH}/mkl_core.lib;${MKL_LPATH}/mkl_blacs_intelmpi_ilp64.lib")
+    set (SCALAPACK_LIBRARIES "${MKL_LPATH}/mkl_scalapack_lp64.lib;${MKL_LPATH}/mkl_intel_lp64.lib;${MKL_LPATH}/mkl_sequential.lib;${MKL_LPATH}/mkl_core.lib;${MKL_LPATH}/mkl_blacs_intelmpi_lp64.lib")
   endif()
 
 else()
@@ -549,14 +552,14 @@ target_link_libraries(OpenSeesLIB
 # OpenSees Tcl Interpreter
 #
 
-
-
-add_executable(OpenSees EXCLUDE_FROM_ALL
+set(_OPS_TCL_INTERP_SOURCES
   ${OPS_SRC_DIR}/tcl/tclAppInit.cpp
   ${OPS_SRC_DIR}/tcl/tclMain.cpp
   ${OPS_SRC_DIR}/tcl/commands.cpp
   ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerAllClasses.cpp
 )
+
+add_executable(OpenSees EXCLUDE_FROM_ALL ${_OPS_TCL_INTERP_SOURCES})
 
 if(NOT EXISTS "${CMAKE_BINARY_DIR}/conanbuildinfo.cmake")
   target_include_directories(OpenSees PUBLIC ${TCL_INCLUDE_PATH})
@@ -569,13 +572,12 @@ else ()
      FILE(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib/tcl8.6)
      add_custom_command(
        TARGET OpenSees POST_BUILD
-       COMMENT("Copying init.tcl to ${CMAKE_CURRENT_BINARY_DIR}")
+       COMMENT "Copying init.tcl to ${CMAKE_CURRENT_BINARY_DIR}"
        COMMAND ${CMAKE_COMMAND} -E copy
        ${CONAN_LIB_DIRS_TCL}/tcl8.6/init.tcl
        ${CMAKE_CURRENT_BINARY_DIR}/lib/tcl8.6
      )
 endif()
-
 
 target_link_libraries(OpenSees
   OPS_InterpTcl
@@ -589,6 +591,52 @@ target_link_libraries(OpenSees
   ${HDF5_LIBRARIES}
   ${CONAN_LIBS}
 )
+
+#
+# OpenSeesFresco -- Tcl interpreter for OpenFresco loadPackage (Windows)
+# Links dynamic tcl86t.dll instead of Conan static Tcl.
+#
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  include(OpenSeesWindowsDynamicTcl)
+  ops_configure_windows_dynamic_tcl()
+
+  if(DEFINED OPS_FRESCO_TCL_LIBRARY)
+    if(USING_CONAN)
+      ops_fresco_conan_libs(OPS_FRESCO_LINK_LIBS)
+    else()
+      set(OPS_FRESCO_LINK_LIBS
+        ${TCL_LIBRARY}
+        ws2_32 netapi32 userenv)
+    endif()
+
+    add_executable(OpenSeesFresco EXCLUDE_FROM_ALL ${_OPS_TCL_INTERP_SOURCES})
+
+    set_target_properties(OpenSeesFresco PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin-fresco
+      RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/bin-fresco
+      RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/bin-fresco
+      RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL ${CMAKE_BINARY_DIR}/bin-fresco
+      RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_BINARY_DIR}/bin-fresco
+    )
+
+    target_include_directories(OpenSeesFresco PUBLIC ${OPS_FRESCO_TCL_INCLUDE})
+    ops_add_fresco_tcl_runtime(OpenSeesFresco)
+
+    target_link_libraries(OpenSeesFresco
+      OPS_InterpTcl
+      coordTransformation
+      OpenSeesLIB
+      OPS_Reliability
+      OPS_ReliabilityTcl
+      OPS_Numerics
+      OPS_Recorder
+      ${CMAKE_DL_LIBS}
+      ${HDF5_LIBRARIES}
+      ${OPS_FRESCO_LINK_LIBS}
+    )
+  endif()
+endif()
 
 
 #
