@@ -585,6 +585,9 @@ void* OPS_MKRAlphaExplicitMultiSOE_TP();
 void* OPS_CudaExplicitAlpha();
 void* OPS_CudaKRAlpha();
 void* OPS_CudaMKRAlpha();
+void* OPS_CudaExplicitAlpha_TP();
+void* OPS_CudaKRAlpha_TP();
+void* OPS_CudaMKRAlpha_TP();
 #endif
 void* OPS_AlphaOS();
 void* OPS_AlphaOS_TP();

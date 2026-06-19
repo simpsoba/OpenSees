@@ -50,6 +50,7 @@
 
 #include "CudaGenBcsrLinSOEImpl.h"
 #include "CuSparseBackend.h"
+#include "CudaUtils.h"
 
 // CUDA includes
 #include <cuda_runtime.h>
@@ -58,6 +59,7 @@
 #include <thrust/memory.h>
 
 using thrust::raw_pointer_cast;
+using namespace CudaUtils;
 
 namespace {
 
@@ -183,6 +185,11 @@ bool CudaGenBcsrLinSOE::isSymmetricStorage(void) const
 
 CudaGenBcsrLinSOE::~CudaGenBcsrLinSOE() 
 {
+    if (m_cudaStream != nullptr) {
+        cudaStreamSynchronize(m_cudaStream);
+        cudaStreamDestroy(m_cudaStream);
+        m_cudaStream = nullptr;
+    }
     cudaDeviceSynchronize();
     delete m_spmvBackend;
     m_spmvBackend = nullptr;
@@ -696,6 +703,127 @@ int CudaGenBcsrLinSOE::setB(const Vector &v, double fact)
     return 0;
 }
 
+int CudaGenBcsrLinSOE::copyDeviceAsync(void *dst, const void *src, std::size_t numBytes, const char *label)
+{
+    if (dst == nullptr || src == nullptr) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::" << label << " - null pointer\n";
+        return -1;
+    }
+    if (numBytes == 0) {
+        return 0;
+    }
+    cudaStream_t stream = static_cast<cudaStream_t>(getCudaStream());
+    if (stream == nullptr) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::" << label << " - CUDA stream unavailable\n";
+        return -1;
+    }
+    cudaCheckError(cudaMemcpyAsync(dst, src, numBytes, cudaMemcpyDeviceToDevice, stream), label);
+    return 0;
+}
+
+int CudaGenBcsrLinSOE::setDeviceB(const void *deviceSrc, int numEqn)
+{
+    if (numEqn <= 0 || numEqn > getNumEqn()) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceB() - invalid numEqn (" << numEqn << ")\n";
+        return -1;
+    }
+    if (!isUniformPrecision(getPrecision())) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceB() - mixed precision not supported\n";
+        return -1;
+    }
+    ensureDeviceVectorSizes();
+    const std::size_t valueBytes =
+        (getPrecision() == CudaPrecision::dFFI) ? sizeof(float) : sizeof(double);
+    if (copyDeviceAsync(getDeviceB(), deviceSrc, static_cast<std::size_t>(numEqn) * valueBytes,
+                        "setDeviceB") != 0) {
+        return -1;
+    }
+    setBPrimaryLocation(DataLocation::Device);
+    return 0;
+}
+
+int CudaGenBcsrLinSOE::setDeviceX(const void *deviceSrc, int numEqn)
+{
+    if (numEqn <= 0 || numEqn > getNumEqn()) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceX() - invalid numEqn (" << numEqn << ")\n";
+        return -1;
+    }
+    if (!isUniformPrecision(getPrecision())) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceX() - mixed precision not supported\n";
+        return -1;
+    }
+    ensureDeviceVectorSizes();
+    const std::size_t valueBytes =
+        (getPrecision() == CudaPrecision::dFFI) ? sizeof(float) : sizeof(double);
+    if (copyDeviceAsync(getDeviceX(), deviceSrc, static_cast<std::size_t>(numEqn) * valueBytes,
+                        "setDeviceX") != 0) {
+        return -1;
+    }
+    setXPrimaryLocation(DataLocation::Device);
+    return 0;
+}
+
+int CudaGenBcsrLinSOE::setDeviceAValues(const void *deviceSrc, int numNnz)
+{
+    if (numNnz <= 0 || numNnz > getNumNonZeroValues()) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceAValues() - invalid numNnz (" << numNnz << ")\n";
+        return -1;
+    }
+    ensureDeviceVectorSizes();
+    const std::size_t matrixBytes =
+        (getPrecision() == CudaPrecision::dFFI || getPrecision() == CudaPrecision::dDFI) ? sizeof(float)
+                                                                                         : sizeof(double);
+    if (copyDeviceAsync(getDeviceAValues(), deviceSrc, static_cast<std::size_t>(numNnz) * matrixBytes,
+                        "setDeviceAValues") != 0) {
+        return -1;
+    }
+    if (m_matrixStatus == MatrixStatus::UNCHANGED) {
+        m_matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;
+    }
+    setAValuesPrimaryLocation(DataLocation::Device);
+    return 0;
+}
+
+int CudaGenBcsrLinSOE::setDeviceRowPtrs(const int *deviceSrc)
+{
+    if (deviceSrc == nullptr) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceRowPtrs() - null deviceSrc\n";
+        return -1;
+    }
+    const int numRowPtrs = getNumRowBlocks() + 1;
+    if (numRowPtrs <= 1) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceRowPtrs() - matrix structure empty\n";
+        return -1;
+    }
+    ensureDeviceVectorSizes();
+    if (copyDeviceAsync(getDeviceRowPtrs(), deviceSrc, static_cast<std::size_t>(numRowPtrs) * sizeof(int),
+                        "setDeviceRowPtrs") != 0) {
+        return -1;
+    }
+    setAIndicesPrimaryLocation(DataLocation::Device);
+    return 0;
+}
+
+int CudaGenBcsrLinSOE::setDeviceColIndices(const int *deviceSrc)
+{
+    if (deviceSrc == nullptr) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceColIndices() - null deviceSrc\n";
+        return -1;
+    }
+    const int numColIdx = getNumNonZeroBlocks();
+    if (numColIdx <= 0) {
+        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceColIndices() - matrix structure empty\n";
+        return -1;
+    }
+    ensureDeviceVectorSizes();
+    if (copyDeviceAsync(getDeviceColIndices(), deviceSrc, static_cast<std::size_t>(numColIdx) * sizeof(int),
+                        "setDeviceColIndices") != 0) {
+        return -1;
+    }
+    setAIndicesPrimaryLocation(DataLocation::Device);
+    return 0;
+}
+
 void CudaGenBcsrLinSOE::zeroA(void)
 {
     for (size_t i = 0; i < m_hostAValues.size(); i++) {
@@ -1018,14 +1146,12 @@ CudaGenBcsrLinSOE::MatrixStatus CudaGenBcsrLinSOE::getMatrixStatus(void) const
     return m_matrixStatus;
 }
 
-void *CudaGenBcsrLinSOE::getSolverStream(void) const
+void *CudaGenBcsrLinSOE::getCudaStream(void)
 {
-    const LinearSOESolver *baseSolver = this->LinearSOE::getSolver();
-    const CudaGenBcsrLinSolver *cudaSolver = dynamic_cast<const CudaGenBcsrLinSolver *>(baseSolver);
-    if (cudaSolver == nullptr) {
-        return nullptr;
+    if (m_cudaStream == nullptr) {
+        cudaCheckError(cudaStreamCreate(&m_cudaStream), "create SOE CUDA stream");
     }
-    return cudaSolver->getSolverStream();
+    return static_cast<void *>(m_cudaStream);
 }
 
 // set*PrimaryLocation: declare authority after an in-place write.

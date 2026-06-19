@@ -90,7 +90,12 @@ CudaDirectSparseSolver::CudaDirectSparseSolver(CudaPrecision precision, bool ver
     init(precision);
 }
 
-void CudaDirectSparseSolver::init(CudaPrecision precision)
+void CudaDirectSparseSolver::init(CudaPrecision /*precision*/)
+{
+    return;
+}
+
+CudaCsrMatrix::SolverConfig CudaDirectSparseSolver::makeSolverConfig(CudaPrecision precision) const
 {
     CudaCsrMatrix::SolverConfig solver;
     solver.precision = precision;
@@ -106,24 +111,36 @@ void CudaDirectSparseSolver::init(CudaPrecision precision)
     solver.deviceIndices = m_deviceIndices;
     solver.irNSteps = m_irNSteps;
     solver.irTol = m_irTol;
-    if (m_solverStream == nullptr) {
-        cudaCheckError(cudaStreamCreate(&m_solverStream), "create cuDSS solver stream");
+    return solver;
+}
+
+int CudaDirectSparseSolver::ensureMatrix(CudaGenBcsrLinSOE *theSOE)
+{
+    if (theSOE == nullptr) {
+        return -1;
+    }
+    cudaStream_t cudaStream = static_cast<cudaStream_t>(theSOE->getCudaStream());
+    if (cudaStream == nullptr) {
+        opserr << "ERROR: CudaDirectSparseSolver::ensureMatrix() - SOE CUDA stream unavailable\n";
+        return -1;
+    }
+    if (m_matrix != nullptr) {
+        if (m_matrix->getStream() != cudaStream) {
+            opserr << "ERROR: CudaDirectSparseSolver::ensureMatrix() - SOE CUDA stream changed\n";
+            return -1;
+        }
+        return 0;
     }
     CudaCsrMatrix::ExecutionContext exec;
-    exec.stream = m_solverStream;
-    m_matrix = new CudaCsrMatrix(solver, CudaCsrMatrix::SpmvConfig{}, exec);
-    return;
+    exec.stream = cudaStream;
+    m_matrix = new CudaCsrMatrix(makeSolverConfig(getPrecision()), CudaCsrMatrix::SpmvConfig{}, exec);
+    return 0;
 }
 
 CudaDirectSparseSolver::~CudaDirectSparseSolver()
 {
     delete m_matrix;
     m_matrix = nullptr;
-    if (m_solverStream != nullptr) {
-        cudaStreamSynchronize(m_solverStream);
-        cudaStreamDestroy(m_solverStream);
-        m_solverStream = nullptr;
-    }
     return;
 }
 
@@ -148,13 +165,13 @@ int CudaDirectSparseSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE) {
 }
 
 int CudaDirectSparseSolver::solve(void) {
-    if (m_matrix == nullptr) {
-        opserr << "ERROR: CudaDirectSparseSolver::solve() - direct solver not initialized\n";
-        return -1;
-    }
     CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
     if (theSOE == nullptr) {
         opserr << "WARNING: CudaDirectSparseSolver::solve() - LinearSOE not set" << endln;
+        return -1;
+    }
+    if (ensureMatrix(theSOE) != 0) {
+        opserr << "ERROR: CudaDirectSparseSolver::solve() - ensureMatrix() failed" << endln;
         return -1;
     }
 
@@ -225,19 +242,17 @@ CudaDirectSparseSolver::getCopy(void) const
         m_irTol);
 }
 
-void *CudaDirectSparseSolver::getSolverStream(void) const
-{
-    return static_cast<void *>(m_solverStream);
-}
-
 int CudaDirectSparseSolver::setupMatrices() {
-    if (m_matrix == nullptr) {
-        opserr << "ERROR: CudaDirectSparseSolver::setupMatrices() - direct solver not initialized\n";
-        return -1;
-    }
     CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
     if (theSOE == nullptr) {
         opserr << "WARNING: CudaDirectSparseSolver::setupMatrices() - LinearSOE not set" << endln;
+        return -1;
+    }
+    if (ensureMatrix(theSOE) != 0) {
+        return -1;
+    }
+    if (m_matrix == nullptr) {
+        opserr << "ERROR: CudaDirectSparseSolver::setupMatrices() - direct solver not initialized\n";
         return -1;
     }
 

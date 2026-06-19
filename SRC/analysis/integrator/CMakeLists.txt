@@ -138,6 +138,7 @@ target_sources(OPS_Analysis
        ExplicitBathe.h
        ExplicitDifferenceStatic.h
        CudaExplicitAlpha.h
+       CudaExplicitAlpha_TP.h
 )
 
 target_sources(OPS_PFEM

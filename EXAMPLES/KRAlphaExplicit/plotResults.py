@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Shared plots for KRAlphaExplicit Two-Story MRF (woodbury / modalDampingW layout).
 
-CUDA examples: per-integrator figures under ``figures/rho_*/<panel>/KR|MKR/`` compare
-one run vs. Newmark (FullGeneral) with one row per floor — e.g.
-``standard/KR/floor_disp_cuda_cudss.png``, ``error_floor_disp_multisoe_cudss.png``.
+CUDA examples: per-integrator figures under ``figures/rho_*/<panel>/KR|MKR|KR_TP|MKR_TP/``
+compare one run vs. Newmark (FullGeneral) with one row per floor — e.g.
+``standard/KR/floor_disp_cuda_cudss.png``, ``standard/KR_TP/floor_disp_cuda_tp_cudss.png``.
 
 Reference for errors: Newmark (FullGeneral). Under each ``figures/rho_*`` folder,
 ``standard/`` holds total-form runs and ``incrementalAccel/`` holds ``-incrementalAccel``
@@ -413,11 +413,22 @@ def add_legend(fig, handles, labels, ncol: int = 2) -> None:
     )
 
 
+def _cuda_row_legend_prefix(row_lab: str) -> str:
+    """``KR_TP`` → ``KR TP-$\\alpha$`` for legend text."""
+    return rf"{row_lab.replace('_', ' ')}-$\alpha$"
+
+
+def _is_tp_integrator_tag(tag: str) -> bool:
+    head = tag.split("_params-", 1)[0]
+    return head.endswith("_TP") or "MultiSOE_TP" in head
+
+
 def cuda_comparison_legend_label(tag: str, row_lab: str) -> str:
-    """Legend for KR/MKR pair plots: ``KR-$\\alpha$ Dense (FullGeneral)``, etc."""
-    prefix = rf"{row_lab}-$\alpha$"
+    """Legend for KR/MKR/KR TP/MKR TP pair plots."""
+    prefix = _cuda_row_legend_prefix(row_lab)
     fam = integrator_family(tag)
     soe = tag_linear_soe(tag)
+    tp = _is_tp_integrator_tag(tag)
     if fam == "newmark_fg":
         return "Newmark (FullGeneral)"
     if fam == "newmark_cudss":
@@ -425,16 +436,19 @@ def cuda_comparison_legend_label(tag: str, row_lab: str) -> str:
         return f"{prefix} Newmark ({soe_name})"
     if fam == "dense":
         num = tag_numberer(tag)
+        tp_lab = " TP" if tp else ""
         if num:
-            return f"{prefix} Dense (FullGeneral, {num})"
-        return f"{prefix} Dense (FullGeneral)"
+            return f"{prefix} Dense{tp_lab} (FullGeneral, {num})"
+        return f"{prefix} Dense{tp_lab} (FullGeneral)"
     if fam == "multisoe":
         soe_name = _soe_legend_name(soe) if soe else "CuDSS"
-        return f"{prefix} MultiSOE ({soe_name})"
+        tp_lab = " TP" if tp else ""
+        return f"{prefix} MultiSOE{tp_lab} ({soe_name})"
     if fam == "cuda":
+        tp_lab = " TP" if tp else ""
         if _is_cudss_dffi_soe(soe):
-            return f"{prefix} CudaExplicit ({_soe_legend_name(soe)})"
-        return f"{prefix} CudaExplicit (CuDSS)"
+            return f"{prefix} CudaExplicit{tp_lab} ({_soe_legend_name(soe)})"
+        return f"{prefix} CudaExplicit{tp_lab} (CuDSS)"
     return legend_label(tag)
 
 
@@ -751,7 +765,7 @@ def cuda_panel_rows_with_flags(
         if _is_cudss_dffi_soe(soe_system)
         else (lambda m: result_tag(m, p_flags))
     )
-    return [
+    midpoint_rows: List[Tuple[str, List[str]]] = [
         (
             "KR",
             [
@@ -771,6 +785,27 @@ def cuda_panel_rows_with_flags(
             ],
         ),
     ]
+    tp_rows: List[Tuple[str, List[str]]] = [
+        (
+            "KR_TP",
+            [
+                *refs,
+                result_tag("KRAlphaExplicit_TP", p_flags),
+                multi("KRAlphaExplicitMultiSOE_TP"),
+                cuda("CudaKRAlpha_TP"),
+            ],
+        ),
+        (
+            "MKR_TP",
+            [
+                *refs,
+                result_tag("MKRAlphaExplicit_TP", p_flags),
+                multi("MKRAlphaExplicitMultiSOE_TP"),
+                cuda("CudaMKRAlpha_TP"),
+            ],
+        ),
+    ]
+    return midpoint_rows + tp_rows
 
 
 CUDA_PANEL_VARIANTS: List[Tuple[str, object]] = [
@@ -862,19 +897,30 @@ def comparison_slug_for_tag(tag: str) -> str:
     soe = tag_linear_soe(tag)
     if fam == "dense":
         num = tag_numberer(tag)
+        tp = _is_tp_integrator_tag(tag)
+        if tp:
+            if num:
+                return f"dense_tp_{num.lower()}"
+            return "dense_tp"
         if num:
             return f"dense_{num.lower()}"
         return "dense"
     if fam == "multisoe":
+        tp = _is_tp_integrator_tag(tag)
         if _is_cudss_dffi_soe(soe):
-            return f"multisoe_{soe.lower()}"
-        if soe:
-            return f"multisoe_{soe.lower()}"
-        return "multisoe_cudss"
+            slug = f"multisoe_{soe.lower()}"
+        elif soe:
+            slug = f"multisoe_{soe.lower()}"
+        else:
+            slug = "multisoe_cudss"
+        return f"multisoe_tp_{slug[len('multisoe_'):]}" if tp else slug
     if fam == "cuda":
+        tp = _is_tp_integrator_tag(tag)
         if _is_cudss_dffi_soe(soe):
-            return f"cuda_{soe.lower()}"
-        return "cuda_cudss"
+            slug = f"cuda_{soe.lower()}"
+        else:
+            slug = "cuda_cudss"
+        return f"cuda_tp_{slug[len('cuda_'):]}" if tp else slug
     if fam == "newmark_cudss":
         if _is_cudss_dffi_soe(soe):
             return f"newmark_{soe.lower()}"
@@ -917,6 +963,8 @@ def numberer_dense_comparison_specs(
     """Append Plain/AMD dense KR/MKR tags when present (RCM is the default dense slug)."""
     from analysis_utils import result_folder_tag
 
+    if row_lab not in ("KR", "MKR"):
+        return []
     method = "KRAlphaExplicit" if row_lab == "KR" else "MKRAlphaExplicit"
     specs: List[Tuple[str, str]] = []
     for slug_suffix, numberer in NUMBERER_DENSE_VARIANTS:

@@ -143,6 +143,12 @@ public:
     int addA(const Matrix &) override;
     int addB(const Vector &, const ID &, double fact = 1.0) override;
     int setB(const Vector &, double fact = 1.0) override;
+    /** Device-side setters (D2D on getCudaStream(); mirror getDevice* accessors). */
+    int setDeviceB(const void *deviceSrc, int numEqn);
+    int setDeviceX(const void *deviceSrc, int numEqn);
+    int setDeviceAValues(const void *deviceSrc, int numNnz);
+    int setDeviceRowPtrs(const int *deviceSrc);
+    int setDeviceColIndices(const int *deviceSrc);
     void zeroA(void) override;
     void zeroB(void) override;
     const Vector &getX(void) override;
@@ -175,8 +181,8 @@ public:
         STRUCTURE_CHANGED // Both the size and coefficients of the matrix have changed
     };
     MatrixStatus getMatrixStatus(void) const;
-    /** CUDA stream used by the attached solver, or nullptr if unavailable. */
-    void *getSolverStream(void) const;
+    /** Shared CUDA stream for SOE device work, solver, and integrators (lazy-created). */
+    void *getCudaStream(void);
 
     // Host/device authority tracking for lazy synchronization
     enum class DataLocation {
@@ -275,6 +281,10 @@ protected:
     // When false, getX() skips device-to-host sync; host m_X may be stale.
     bool m_xSyncMode = true;
 
+    // Single CUDA stream for async GPU work (solver, integrator kernels, cuSPARSE).
+    // Thrust host/device sync helpers block the CPU and do not use this stream.
+    cudaStream_t m_cudaStream = nullptr;
+
     // Set size helper methods
     int buildStandardCSR(Graph &theGraph);
     int buildBlockCSR(Graph &theGraph);
@@ -295,6 +305,8 @@ protected:
     bool isMatrixEmpty(void) const;
 
     int ensureSpMVOperator(void);
+
+    int copyDeviceAsync(void *dst, const void *src, std::size_t numBytes, const char *label);
 
     // formAp device scratch (does not use SOE B/X, so solve state is preserved)
     virtual void ensureSpmvScratchSizes(void) = 0;

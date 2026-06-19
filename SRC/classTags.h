@@ -1116,6 +1116,7 @@
 #define INTEGRATOR_TAGS_ExplicitAlpha                   65
 #define INTEGRATOR_TAGS_ExplicitAlpha_TP                66
 #define INTEGRATOR_TAGS_ExplicitAlphaMultiSOE_TP        67
+#define INTEGRATOR_TAGS_CudaExplicitAlpha_TP            68
 
 
 #define LinSOE_TAGS_FullGenLinSOE		1

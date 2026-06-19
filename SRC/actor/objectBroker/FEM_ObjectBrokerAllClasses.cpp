@@ -690,6 +690,7 @@
 #include "ExplicitAlphaMultiSOE_TP.h"
 #ifdef _CUDSS
 #include "CudaExplicitAlpha.h"
+#include "CudaExplicitAlpha_TP.h"
 #endif
 #include "Newmark.h"
 #include "StagedNewmark.h"
@@ -3125,6 +3126,9 @@ FEM_ObjectBrokerAllClasses::getNewTransientIntegrator(int classTag)
 #ifdef _CUDSS
     case INTEGRATOR_TAGS_CudaExplicitAlpha:
          return new CudaExplicitAlpha();
+
+    case INTEGRATOR_TAGS_CudaExplicitAlpha_TP:
+         return new CudaExplicitAlpha_TP();
 #endif
 
     case INTEGRATOR_TAGS_Newmark:  

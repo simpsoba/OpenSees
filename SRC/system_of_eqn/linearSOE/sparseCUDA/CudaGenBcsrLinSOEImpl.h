@@ -208,6 +208,7 @@ public:
         m_deviceB.resize(bSize);
         m_deviceX.resize(xSize);
         m_deviceAValues.resize(aSize);
+        m_deviceCsrIndices.resize(this->CudaGenBcsrLinSOE::m_hostCsrIndices.size());
     }
 
     const int* getDeviceRowPtrs(void) const override {

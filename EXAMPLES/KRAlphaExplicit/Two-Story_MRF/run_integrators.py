@@ -324,6 +324,32 @@ def _mkr_cpu_run(rho: float) -> RunSpec:
     return (f"MKR ρ={rho:g}", "MKRAlphaExplicit", [rho], None, None, 0)
 
 
+def _cuda_tp_runs(
+    rho: float,
+    *,
+    incremental: bool = False,
+    alpha_close_check: bool = False,
+    cudss_precision: Optional[str] = None,
+    cudss_ir_n_steps: int = 0,
+    label: Optional[str] = None,
+) -> List[RunSpec]:
+    sfx = ""
+    extra: List[Union[float, str]] = []
+    if incremental:
+        sfx += " (incr)"
+        extra.append("-incrementalAccel")
+    if alpha_close_check:
+        sfx += " (α close)"
+        extra.append("-alphaCloseCheck")
+    if label:
+        sfx += f" ({label})"
+    p: List[Union[float, str]] = [rho, *extra]
+    return [
+        (f"CudaKR TP ρ={rho:g}{sfx}", "CudaKRAlpha_TP", list(p), None, cudss_precision, cudss_ir_n_steps),
+        (f"CudaMKR TP ρ={rho:g}{sfx}", "CudaMKRAlpha_TP", list(p), None, cudss_precision, cudss_ir_n_steps),
+    ]
+
+
 def _cuda_runs(
     rho: float,
     *,
@@ -347,6 +373,47 @@ def _cuda_runs(
     return [
         (f"CudaKR ρ={rho:g}{sfx}", "CudaKRAlpha", list(p), None, cudss_precision, cudss_ir_n_steps),
         (f"CudaMKR ρ={rho:g}{sfx}", "CudaMKRAlpha", list(p), None, cudss_precision, cudss_ir_n_steps),
+    ]
+
+
+def _multisoe_tp_runs(
+    rho: float,
+    *,
+    incremental: bool = False,
+    alpha_close_check: bool = False,
+    system: Optional[str] = None,
+    cudss_precision: Optional[str] = None,
+    cudss_ir_n_steps: int = 0,
+    label: Optional[str] = None,
+) -> List[RunSpec]:
+    sfx = ""
+    extra: List[Union[float, str]] = []
+    if incremental:
+        sfx += " (incr)"
+        extra.append("-incrementalAccel")
+    if alpha_close_check:
+        sfx += " (α close)"
+        extra.append("-alphaCloseCheck")
+    if label:
+        sfx += f" ({label})"
+    p: List[Union[float, str]] = [rho, *extra]
+    return [
+        (
+            f"MultiSOE KR TP ρ={rho:g}{sfx}",
+            "KRAlphaExplicitMultiSOE_TP",
+            list(p),
+            system,
+            cudss_precision,
+            cudss_ir_n_steps,
+        ),
+        (
+            f"MultiSOE MKR TP ρ={rho:g}{sfx}",
+            "MKRAlphaExplicitMultiSOE_TP",
+            list(p),
+            system,
+            cudss_precision,
+            cudss_ir_n_steps,
+        ),
     ]
 
 
@@ -449,6 +516,24 @@ def _build_cudss_dffi_runs(
                     label=dffi_label,
                 )
             )
+            runs.extend(
+                _cuda_tp_runs(
+                    rho,
+                    incremental=False,
+                    cudss_precision=precision,
+                    cudss_ir_n_steps=ir_n_steps,
+                    label=dffi_label,
+                )
+            )
+            runs.extend(
+                _multisoe_tp_runs(
+                    rho,
+                    incremental=False,
+                    cudss_precision=precision,
+                    cudss_ir_n_steps=ir_n_steps,
+                    label=dffi_label,
+                )
+            )
             if include_incremental:
                 runs.extend(
                     _multisoe_runs(
@@ -461,6 +546,24 @@ def _build_cudss_dffi_runs(
                 )
                 runs.extend(
                     _cuda_runs(
+                        rho,
+                        incremental=True,
+                        cudss_precision=precision,
+                        cudss_ir_n_steps=ir_n_steps,
+                        label=dffi_label,
+                    )
+                )
+                runs.extend(
+                    _cuda_tp_runs(
+                        rho,
+                        incremental=True,
+                        cudss_precision=precision,
+                        cudss_ir_n_steps=ir_n_steps,
+                        label=dffi_label,
+                    )
+                )
+                runs.extend(
+                    _multisoe_tp_runs(
                         rho,
                         incremental=True,
                         cudss_precision=precision,
@@ -491,6 +594,24 @@ def _append_alpha_close_check_runs(
     )
     runs.extend(
         _cuda_runs(
+            rho,
+            alpha_close_check=True,
+            cudss_precision=cudss_precision,
+            cudss_ir_n_steps=cudss_ir_n_steps,
+            label=dffi_label,
+        )
+    )
+    runs.extend(
+        _cuda_tp_runs(
+            rho,
+            alpha_close_check=True,
+            cudss_precision=cudss_precision,
+            cudss_ir_n_steps=cudss_ir_n_steps,
+            label=dffi_label,
+        )
+    )
+    runs.extend(
+        _multisoe_tp_runs(
             rho,
             alpha_close_check=True,
             cudss_precision=cudss_precision,
@@ -531,6 +652,26 @@ def _append_alpha_close_check_runs(
         )
         runs.extend(
             _cuda_runs(
+                rho,
+                incremental=True,
+                alpha_close_check=True,
+                cudss_precision=cudss_precision,
+                cudss_ir_n_steps=cudss_ir_n_steps,
+                label=dffi_label,
+            )
+        )
+        runs.extend(
+            _cuda_tp_runs(
+                rho,
+                incremental=True,
+                alpha_close_check=True,
+                cudss_precision=cudss_precision,
+                cudss_ir_n_steps=cudss_ir_n_steps,
+                label=dffi_label,
+            )
+        )
+        runs.extend(
+            _multisoe_tp_runs(
                 rho,
                 incremental=True,
                 alpha_close_check=True,
@@ -607,11 +748,15 @@ def _build_runs(
         runs.append(_mkr_cpu_run(rho))
         runs.extend(_multisoe_runs(rho, incremental=False))
         runs.extend(_cuda_runs(rho, incremental=False))
+        runs.extend(_cuda_tp_runs(rho, incremental=False))
+        runs.extend(_multisoe_tp_runs(rho, incremental=False))
         runs.extend(_multisoe_runs(rho, incremental=False, system="UmfPack", label="UmfPack"))
         runs.extend(_multisoe_runs(rho, incremental=False, system="SuperLU", label="SuperLU"))
         if include_incremental:
             runs.extend(_multisoe_runs(rho, incremental=True))
             runs.extend(_cuda_runs(rho, incremental=True))
+            runs.extend(_cuda_tp_runs(rho, incremental=True))
+            runs.extend(_multisoe_tp_runs(rho, incremental=True))
             runs.extend(_multisoe_runs(rho, incremental=True, system="UmfPack", label="UmfPack"))
             runs.extend(_multisoe_runs(rho, incremental=True, system="SuperLU", label="SuperLU"))
     return runs

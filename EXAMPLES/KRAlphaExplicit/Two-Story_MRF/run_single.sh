@@ -28,7 +28,7 @@ Two-Story MRF — single transient run via Tcl
 
 Integrators:
   Newmark | NewmarkCPU | KRAlphaExplicit | MKRAlphaExplicit
-  KRAlphaExplicitMultiSOE | MKRAlphaExplicitMultiSOE | CudaKRAlpha | CudaMKRAlpha
+  KRAlphaExplicitMultiSOE | MKRAlphaExplicitMultiSOE | KRAlphaExplicitMultiSOE_TP | MKRAlphaExplicitMultiSOE_TP | CudaKRAlpha | CudaMKRAlpha | CudaKRAlpha_TP | CudaMKRAlpha_TP
 
 Flags (after optional rho / scale):
   -massMode 0|1|2          0=consistent, 1=element lumped, 2=nodal lumped

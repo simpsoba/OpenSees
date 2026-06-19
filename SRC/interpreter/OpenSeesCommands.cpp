@@ -1893,6 +1893,15 @@ int OPS_Integrator()
 
     } else if (strcmp(type,"CudaMKRAlpha") == 0) {
 	ti = (TransientIntegrator*)OPS_CudaMKRAlpha();
+
+    } else if (strcmp(type,"CudaExplicitAlpha_TP") == 0) {
+	ti = (TransientIntegrator*)OPS_CudaExplicitAlpha_TP();
+
+    } else if (strcmp(type,"CudaKRAlpha_TP") == 0) {
+	ti = (TransientIntegrator*)OPS_CudaKRAlpha_TP();
+
+    } else if (strcmp(type,"CudaMKRAlpha_TP") == 0) {
+	ti = (TransientIntegrator*)OPS_CudaMKRAlpha_TP();
 #endif
 
     } else if (strcmp(type,"AlphaOS") == 0) {

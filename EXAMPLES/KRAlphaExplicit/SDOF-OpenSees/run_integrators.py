@@ -157,6 +157,32 @@ def _mkr_cpu_run(rho: float) -> RunSpec:
     return (f"MKR ρ={rho:g}", "MKRAlphaExplicit", [rho], None, None, 0)
 
 
+def _cuda_tp_runs(
+    rho: float,
+    *,
+    incremental: bool = False,
+    alpha_close_check: bool = False,
+    cudss_precision: Optional[str] = None,
+    cudss_ir_n_steps: int = 0,
+    label: Optional[str] = None,
+) -> List[RunSpec]:
+    sfx = ""
+    extra: List[Union[float, str]] = []
+    if incremental:
+        sfx += " (incr)"
+        extra.append("-incrementalAccel")
+    if alpha_close_check:
+        sfx += " (α close)"
+        extra.append("-alphaCloseCheck")
+    if label:
+        sfx += f" ({label})"
+    p: List[Union[float, str]] = [rho, *extra]
+    return [
+        (f"CudaKR TP ρ={rho:g}{sfx}", "CudaKRAlpha_TP", list(p), None, cudss_precision, cudss_ir_n_steps),
+        (f"CudaMKR TP ρ={rho:g}{sfx}", "CudaMKRAlpha_TP", list(p), None, cudss_precision, cudss_ir_n_steps),
+    ]
+
+
 def _cuda_runs(
     rho: float,
     *,
@@ -233,9 +259,11 @@ def _build_runs(rhos: List[float], *, include_incremental: bool = True) -> List[
         runs.append(_mkr_cpu_run(rho))
         runs.extend(_multisoe_runs(rho, incremental=False))
         runs.extend(_cuda_runs(rho, incremental=False))
+        runs.extend(_cuda_tp_runs(rho, incremental=False))
         if include_incremental:
             runs.extend(_multisoe_runs(rho, incremental=True))
             runs.extend(_cuda_runs(rho, incremental=True))
+            runs.extend(_cuda_tp_runs(rho, incremental=True))
     return runs
 
 

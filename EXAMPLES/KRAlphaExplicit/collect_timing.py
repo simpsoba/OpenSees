@@ -21,12 +21,18 @@ _PARAMS_RE = re.compile(r"^(.+)_params-\[(.+)\]$")
 
 # Longest-first so MultiSOE names match before shorter prefixes.
 _KNOWN_INTEGRATORS = (
+    "MKRAlphaExplicitMultiSOE_TP",
+    "KRAlphaExplicitMultiSOE_TP",
     "MKRAlphaExplicitMultiSOE",
     "KRAlphaExplicitMultiSOE",
+    "MKRAlphaExplicit_TP",
+    "KRAlphaExplicit_TP",
     "MKRAlphaExplicit",
     "KRAlphaExplicit",
     "CudaMKRAlpha",
     "CudaKRAlpha",
+    "CudaMKRAlpha_TP",
+    "CudaKRAlpha_TP",
     "Newmark",
 )
 
@@ -36,10 +42,16 @@ _DEFAULT_SOLVER = {
     "Newmark": "CuDSS",
     "KRAlphaExplicit": "FullGeneral",
     "MKRAlphaExplicit": "FullGeneral",
+    "KRAlphaExplicit_TP": "FullGeneral",
+    "MKRAlphaExplicit_TP": "FullGeneral",
     "KRAlphaExplicitMultiSOE": "CuDSS",
     "MKRAlphaExplicitMultiSOE": "CuDSS",
+    "KRAlphaExplicitMultiSOE_TP": "CuDSS",
+    "MKRAlphaExplicitMultiSOE_TP": "CuDSS",
     "CudaKRAlpha": "CuDSS",
     "CudaMKRAlpha": "CuDSS",
+    "CudaKRAlpha_TP": "CuDSS",
+    "CudaMKRAlpha_TP": "CuDSS",
 }
 
 

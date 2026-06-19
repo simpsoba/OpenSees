@@ -933,6 +933,7 @@ if(HAVE_CUDA)
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaDirectSparseSolver.cu
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/ParameterUtils.cpp
       ${OPS_SRC_DIR}/analysis/integrator/CudaExplicitAlpha.cu
+      ${OPS_SRC_DIR}/analysis/integrator/CudaExplicitAlpha_TP.cu
     )
     configure_cuda_for_target(OPS_Cuda_CuDSS)
   endif()

@@ -79,7 +79,6 @@ public:
     int setSize(void) override;
     int setLinearSOE(CudaGenBcsrLinSOE &theSOE) override;
     LinearSOESolver *getCopy(void) const override;
-    void *getSolverStream(void) const override;
 
 protected:
 
@@ -107,13 +106,15 @@ private:
     int m_irNSteps;
     double m_irTol;
 
-    // cuDSS initializer (to be used by constructors only)
-    void init(CudaPrecision precision);
-    
     // Helper function to initialize cuDSS matrices when structure changes
     int setupMatrices();
 
+    // cuDSS initializer (to be used by constructors only)
+    void init(CudaPrecision precision);
+
+    CudaCsrMatrix::SolverConfig makeSolverConfig(CudaPrecision precision) const;
+    int ensureMatrix(CudaGenBcsrLinSOE *theSOE);
+
     CudaCsrMatrix *m_matrix = nullptr;
-    cudaStream_t m_solverStream = nullptr;
 };
 #endif

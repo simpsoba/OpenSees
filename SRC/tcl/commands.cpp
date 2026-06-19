@@ -256,6 +256,9 @@ extern void *OPS_MKRAlphaExplicitMultiSOE_TP(void);
 extern void *OPS_CudaExplicitAlpha(void);
 extern void *OPS_CudaKRAlpha(void);
 extern void *OPS_CudaMKRAlpha(void);
+extern void *OPS_CudaExplicitAlpha_TP(void);
+extern void *OPS_CudaKRAlpha_TP(void);
+extern void *OPS_CudaMKRAlpha_TP(void);
 #endif
 extern void *OPS_NewmarkExplicit(void);
 extern void *OPS_NewmarkHSFixedNumIter(void);
@@ -5176,6 +5179,24 @@ specifyIntegrator(ClientData clientData, Tcl_Interp *interp, int argc,
   }
   else if (strcmp(argv[1],"CudaMKRAlpha") == 0) {
     theTransientIntegrator = (TransientIntegrator *)OPS_CudaMKRAlpha();
+    
+    if (theTransientAnalysis != 0)
+      theTransientAnalysis->setIntegrator(*theTransientIntegrator);
+  }
+  else if (strcmp(argv[1],"CudaExplicitAlpha_TP") == 0) {
+    theTransientIntegrator = (TransientIntegrator *)OPS_CudaExplicitAlpha_TP();
+    
+    if (theTransientAnalysis != 0)
+      theTransientAnalysis->setIntegrator(*theTransientIntegrator);
+  }
+  else if (strcmp(argv[1],"CudaKRAlpha_TP") == 0) {
+    theTransientIntegrator = (TransientIntegrator *)OPS_CudaKRAlpha_TP();
+    
+    if (theTransientAnalysis != 0)
+      theTransientAnalysis->setIntegrator(*theTransientIntegrator);
+  }
+  else if (strcmp(argv[1],"CudaMKRAlpha_TP") == 0) {
+    theTransientIntegrator = (TransientIntegrator *)OPS_CudaMKRAlpha_TP();
     
     if (theTransientAnalysis != 0)
       theTransientAnalysis->setIntegrator(*theTransientIntegrator);

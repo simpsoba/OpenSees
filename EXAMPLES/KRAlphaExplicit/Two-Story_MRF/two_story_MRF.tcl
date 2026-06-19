@@ -170,6 +170,22 @@ switch -exact $integratorMethod {
         set linearSOE FullGeneral
         set newmarkCpu 0
     }
+    KRAlphaExplicit_TP {
+        set integratorParams [appendIntegratorFlags [list $rho]]
+        set maxIter 1
+        set pFlag 5
+        set algo Linear
+        set linearSOE FullGeneral
+        set newmarkCpu 0
+    }
+    MKRAlphaExplicit_TP {
+        set integratorParams [appendIntegratorFlags [list $rho]]
+        set maxIter 1
+        set pFlag 5
+        set algo Linear
+        set linearSOE FullGeneral
+        set newmarkCpu 0
+    }
     CudaKRAlpha {
         set integratorParams [appendIntegratorFlags [list $rho]]
         set maxIter 1
@@ -179,6 +195,22 @@ switch -exact $integratorMethod {
         set newmarkCpu 0
     }
     CudaMKRAlpha {
+        set integratorParams [appendIntegratorFlags [list $rho]]
+        set maxIter 1
+        set pFlag 5
+        set algo Linear
+        set linearSOE CuDSS
+        set newmarkCpu 0
+    }
+    CudaKRAlpha_TP {
+        set integratorParams [appendIntegratorFlags [list $rho]]
+        set maxIter 1
+        set pFlag 5
+        set algo Linear
+        set linearSOE CuDSS
+        set newmarkCpu 0
+    }
+    CudaMKRAlpha_TP {
         set integratorParams [appendIntegratorFlags [list $rho]]
         set maxIter 1
         set pFlag 5
@@ -202,15 +234,31 @@ switch -exact $integratorMethod {
         set linearSOE CuDSS
         set newmarkCpu 0
     }
+    KRAlphaExplicitMultiSOE_TP {
+        set integratorParams [appendIntegratorFlags [list $rho]]
+        set maxIter 1
+        set pFlag 5
+        set algo Linear
+        set linearSOE CuDSS
+        set newmarkCpu 0
+    }
+    MKRAlphaExplicitMultiSOE_TP {
+        set integratorParams [appendIntegratorFlags [list $rho]]
+        set maxIter 1
+        set pFlag 5
+        set algo Linear
+        set linearSOE CuDSS
+        set newmarkCpu 0
+    }
     default {
         puts stderr "Unknown integrator: $integratorMethod"
-        puts stderr "Use: Newmark | NewmarkCPU | KRAlphaExplicit | MKRAlphaExplicit | KRAlphaExplicitMultiSOE | MKRAlphaExplicitMultiSOE | CudaKRAlpha | CudaMKRAlpha"
+        puts stderr "Use: Newmark | NewmarkCPU | KRAlphaExplicit | MKRAlphaExplicit | KRAlphaExplicit_TP | MKRAlphaExplicit_TP | KRAlphaExplicitMultiSOE | MKRAlphaExplicitMultiSOE | KRAlphaExplicitMultiSOE_TP | MKRAlphaExplicitMultiSOE_TP | CudaKRAlpha | CudaMKRAlpha | CudaKRAlpha_TP | CudaMKRAlpha_TP"
         exit 1
     }
 }
 
 if {$systemOverride ne ""} {
-    if {$integratorMethod in {Newmark KRAlphaExplicitMultiSOE MKRAlphaExplicitMultiSOE CudaKRAlpha CudaMKRAlpha}} {
+    if {$integratorMethod in {Newmark KRAlphaExplicitMultiSOE MKRAlphaExplicitMultiSOE KRAlphaExplicitMultiSOE_TP MKRAlphaExplicitMultiSOE_TP CudaKRAlpha CudaMKRAlpha CudaKRAlpha_TP CudaMKRAlpha_TP}} {
         set linearSOE $systemOverride
     } else {
         puts stderr "WARNING two_story_MRF.tcl: -system $systemOverride ignored for $integratorMethod"
