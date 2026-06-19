@@ -571,9 +571,7 @@ bool parseCudaExplicitAlphaOptions(CudaExplicitAlpha::Options &opts)
         if (tok == nullptr) {
             break;
         }
-        if (strcmp(tok, "-diagonalMass") == 0) {
-            opserr << "WARNING CudaExplicitAlpha family - -diagonalMass is no longer supported (ignored)\n";
-        } else if (strcmp(tok, "-updateElemDisp") == 0) {
+        if (strcmp(tok, "-updateElemDisp") == 0) {
             opts.updElemDisp = true;
         } else if (strcmp(tok, "-incrementalAccel") == 0) {
             opts.incrementalAccel = true;
