@@ -10,6 +10,8 @@ It is intended as a **reproducible sandbox** for exercising:
 - `MKRAlphaExplicit_TP`
 - `KRAlphaExplicitMultiSOE` / `MKRAlphaExplicitMultiSOE`
 - `KRAlphaExplicitMultiSOE_TP` / `MKRAlphaExplicitMultiSOE_TP`
+- `CudaKRAlpha` / `CudaMKRAlpha` (GPU midpoint; requires CuDSS build)
+- `CudaKRAlpha_TP` / `CudaMKRAlpha_TP` (GPU trapezoidal rule; requires CuDSS build)
 
 ### Contents
 - `SDOF-OpenSees/`: single-DOF **plain transient** example (Python + `sdof.py`).

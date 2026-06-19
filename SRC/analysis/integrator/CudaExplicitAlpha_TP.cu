@@ -65,15 +65,6 @@ namespace {
 // --- Templated device kernels ---
 
 template<typename T>
-__global__ void kernelAxpy(int n, T alpha, const T *x, T *y)
-{
-    const int stride = blockDim.x * gridDim.x;
-    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += stride) {
-        y[i] += alpha * x[i];
-    }
-}
-
-template<typename T>
 __global__ void kernelAxpby(int n, T alpha, const T *x, T beta, T *y)
 {
     const int stride = blockDim.x * gridDim.x;
@@ -276,13 +267,21 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
             return -1;
         }
         stream = static_cast<cudaStream_t>(cudaSOE->getCudaStream());
-        return stream == nullptr ? -1 : 0;
+        if (stream == nullptr) {
+            return -1;
+        }
+        if (cusparseHandle != nullptr) {
+            cuSparseCheckError(cusparseSetStream(cusparseHandle, stream), "cusparseSetStream");
+        }
+        return 0;
     }
 
     void initCusparse()
     {
         if (cusparseHandle == nullptr) {
             cuSparseCheckError(cusparseCreate(&cusparseHandle), "cusparseCreate");
+        }
+        if (stream != nullptr) {
             cuSparseCheckError(cusparseSetStream(cusparseHandle, stream), "cusparseSetStream");
         }
     }
@@ -491,6 +490,9 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
 
     void blendPutFromHostB(CudaGenBcsrLinSOE *cudaSOE, double oneMinusAlphaF, double alphaF) override
     {
+        if (bindStream(cudaSOE) != 0) {
+            return;
+        }
         cudaSOE->syncBToDevice();
         const T *dB = static_cast<const T *>(cudaSOE->getDeviceB());
         T *dPut = thrust::raw_pointer_cast(d_put.data());
@@ -504,6 +506,9 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
     // CudaExplicitAlpha_TP::formUnbalance() (from Linear::solveCurrentStep): B <- Put or B <- alpha * M^{-1} * Put.
     int formUnbalanceFromPut(CudaGenBcsrLinSOE *cudaSOE, bool alphaClose) override
     {
+        if (bindStream(cudaSOE) != 0) {
+            return -1;
+        }
         if (alphaClose) {
             // Proportional shortcut: primary SOE holds A = alphaM*M, so B = Put directly.
             return cudaSOE->setDeviceB(thrust::raw_pointer_cast(d_put.data()), size);
@@ -526,6 +531,9 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
     // TP update only refreshes acceleration; U and Udot were set in newStep().
     int updateState(CudaGenBcsrLinSOE *cudaSOE, bool incrementalAccel, double alphaF) override
     {
+        if (bindStream(cudaSOE) != 0) {
+            return -1;
+        }
         T *dUddot = devUddot();
         const T *dX = static_cast<const T *>(cudaSOE->getDeviceX());
         if (dX == nullptr) {
@@ -593,6 +601,28 @@ int CudaExplicitAlpha_TP::formOperators(CudaGenBcsrLinSOE *cudaSOE)
 
 namespace {
 
+bool validateCudaExplicitAlphaTPParams(double alphaF, double alphaM, double gamma, double beta)
+{
+    if (alphaF < 0.5 || alphaF > 1.0) {
+        opserr << "WARNING - invalid alphaF for CudaExplicitAlpha_TP, want 0.5 <= alphaF <= 1.0\n";
+        return false;
+    }
+    if (gamma <= 0.0 || beta <= 0.0) {
+        opserr << "WARNING - invalid gamma/beta for CudaExplicitAlpha_TP, want gamma > 0 and beta > 0\n";
+        return false;
+    }
+    if (alphaM < 0.5 || alphaM > 2.0) {
+        opserr << "WARNING - recommended for unconditional stability (linear): 0.5 <= alphaM <= 2.0\n";
+    }
+    if (gamma < 0.5) {
+        opserr << "WARNING - recommended for unconditional stability (linear): gamma >= 0.5\n";
+    }
+    if (beta < 0.5 * gamma) {
+        opserr << "WARNING - recommended for unconditional stability (linear): beta >= gamma/2\n";
+    }
+    return true;
+}
+
 bool parseCudaExplicitAlphaTPOptions(CudaExplicitAlpha_TP::Options &opts)
 {
     opts = CudaExplicitAlpha_TP::Options{};
@@ -631,6 +661,9 @@ void *OPS_CudaExplicitAlpha_TP(void)
     if (OPS_GetDoubleInput(&numData, &alphaF) != 0 || OPS_GetDoubleInput(&numData, &alphaM) != 0 ||
         OPS_GetDoubleInput(&numData, &gamma) != 0 || OPS_GetDoubleInput(&numData, &beta) != 0) {
         opserr << "WARNING CudaExplicitAlpha_TP - invalid alphaF/alphaM/gamma/beta\n";
+        return nullptr;
+    }
+    if (!validateCudaExplicitAlphaTPParams(alphaF, alphaM, gamma, beta)) {
         return nullptr;
     }
     CudaExplicitAlpha_TP::Options opts;
@@ -1035,20 +1068,19 @@ const Vector &CudaExplicitAlpha_TP::getVel() { return *Udot; }  // end-of-step v
 
 int CudaExplicitAlpha_TP::sendSelf(int cTag, Channel &theChannel)
 {
-    Vector data(7);
+    Vector data(6);
     data(0) = alphaM;
     data(1) = alphaF;
     data(2) = beta;
     data(3) = gamma;
     data(4) = incrementalAccel ? 1.0 : 0.0;
     data(5) = useAlphaCloseCheck ? 1.0 : 0.0;
-    data(6) = 0.0;
     return theChannel.sendVector(this->getDbTag(), cTag, data);
 }
 
 int CudaExplicitAlpha_TP::recvSelf(int cTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
-    Vector data(7);
+    Vector data(6);
     if (theChannel.recvVector(this->getDbTag(), cTag, data) < 0) {
         return -1;
     }

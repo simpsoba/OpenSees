@@ -16,7 +16,8 @@ Run matrix (same layout at every ρ passed via ``--rho``):
   ``--soe-variants`` — UmfPack/SuperLU Newmark + MultiSOE append pass.
 
 ``-incrementalAccel`` and ``-alphaCloseCheck`` apply to **CudaKRAlpha / CudaMKRAlpha /
-KRAlphaExplicitMultiSOE / MKRAlphaExplicitMultiSOE** only; dense CPU KR/MKR are always
+CudaKRAlpha_TP / CudaMKRAlpha_TP / KRAlphaExplicitMultiSOE / MKRAlphaExplicitMultiSOE /
+KRAlphaExplicitMultiSOE_TP / MKRAlphaExplicitMultiSOE_TP**; dense CPU KR/MKR are always
 the standard (total-form) case. Use ``--append`` on modifier passes to accumulate results.
 
 Usage:

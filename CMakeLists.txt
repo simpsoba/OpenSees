@@ -655,7 +655,7 @@ message(STATUS "SCALAPACK_LIBRARIES=${SCALAPACK_LIBRARIES}")
 # CUDA object-library layout:
 #   OPS_Cuda          - CudaGenBcsrLinSOE / CudaGenBcsrLinSolver (shared GPU SOE framework)
 #   OPS_Cuda_AmgX     - AmgXLinSolver (optional, when AMGX_NO_MPI_DIR is set)
-#   OPS_Cuda_CuDSS    - cuDSS direct solver + CudaExplicitAlpha (optional, when cuDSS is found)
+#   OPS_Cuda_CuDSS    - cuDSS direct solver + CudaExplicitAlpha / CudaExplicitAlpha_TP (optional, when cuDSS is found)
 #   OPS_Cuda_Parallel - parallel assembly CUDA SOEs for OpenSeesSP / OpenSeesMP (future)
 #
 # Executables link OPS_Cuda plus whichever backends were built. OpenSeesSP/MP also link
