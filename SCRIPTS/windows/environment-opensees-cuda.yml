@@ -1,0 +1,16 @@
+# Conda env for OpenSees-CUDA on Windows (build + GPU example scripts).
+# Create: SCRIPTS\windows\setup-opensees-cuda-env.bat
+# Build still uses Intel oneAPI (ifx/MKL) and MSVC via makeWIN_CUDA.bat — not from conda.
+
+name: opensees-cuda
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - numpy
+  - matplotlib
+  - pip
+  - pip:
+      - "conan>=2.0"
+      - pytest

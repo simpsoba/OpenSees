@@ -203,8 +203,8 @@ else()
     set(GIT_VERSION "unknown")
 endif()
 
-# Pass this to your code as a preprocessor definition
-add_definitions(-DOPENSEES_VERSION="${GIT_VERSION}")
+# Pass git hash to C/C++ only; nvcc rsp quoting breaks on -DOPENSEES_VERSION="..."
+add_compile_definitions($<$<NOT:$<COMPILE_LANGUAGE:CUDA>>:OPENSEES_VERSION="${GIT_VERSION}">)
 
 
 #
@@ -506,6 +506,10 @@ include(CheckLanguage)
 check_language(CUDA)
 if(CMAKE_CUDA_COMPILER)
   message(STATUS "CUDA compiler found: ${CMAKE_CUDA_COMPILER}")
+  if(MSVC AND CMAKE_GENERATOR MATCHES "Visual Studio")
+    # CMake 3.31 CUDA try_compile via MSBuild fails (MSB4023 in CUDA 12.9.targets); nvcc is fine.
+    set(CMAKE_CUDA_COMPILER_WORKS TRUE)
+  endif()
   enable_language(CUDA)
   # IMPORTED targets CUDA::cusparse, etc. — must run after enable_language(CUDA).
   # A prior find_package(CUDAToolkit) before enable_language can skip this pass and
@@ -566,83 +570,101 @@ if(HAVE_CUDA)
       message(STATUS "Adding include directory ${AMGX_INCLUDE_DIR} and compile definition ${AMGX_FLAG}")
   endif()
   
-  # CuDSS configuration using CMake config (Linux/Unix only)
-  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    # Common cuDSS install locations on Linux (match CUDA toolkit major version)
-    set(CUDSS_HINTS
+  # CuDSS configuration using CMake config package
+  set(CUDSS_HINTS)
+  if(DEFINED CUDSS_ROOT)
+    list(APPEND CUDSS_HINTS
+      "${CUDSS_ROOT}/lib/${CUDAToolkit_VERSION_MAJOR}/cmake/cudss"
+      "${CUDSS_ROOT}/cmake/cudss"
+    )
+  endif()
+  if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    list(APPEND CUDSS_HINTS
+      "C:/Program Files/NVIDIA cuDSS/v0.8/lib/${CUDAToolkit_VERSION_MAJOR}/cmake/cudss"
+    )
+  else()
+    list(APPEND CUDSS_HINTS
       /usr/lib/x86_64-linux-gnu/libcudss/${CUDAToolkit_VERSION_MAJOR}/cmake
       /usr/lib/aarch64-linux-gnu/libcudss/${CUDAToolkit_VERSION_MAJOR}/cmake
     )
-    
-    find_package(cudss QUIET HINTS ${CUDSS_HINTS})
-    if(cudss_FOUND)
-        message(STATUS "cuDSS found via CMake config")
-        set(CUDSS_FLAG -D_CUDSS)
-        set(HAVE_CUDSS TRUE)
-        message(STATUS "cuDSS support enabled.")
-        
-        # Check for OpenMP for cuDSS multi-threading support
-        message(STATUS "Checking for OpenMP support...")
-        find_package(OpenMP)
-        
-        # Try standard CMake detection first
-        if(OpenMP_CXX_FOUND OR OpenMP_C_FOUND)
-            set(CUDSS_OPENMP_FLAG -DCUDSS_USE_OPENMP)
-            set(HAVE_CUDSS_OPENMP TRUE)
-            message(STATUS "  OpenMP found - cuDSS multi-threading support enabled")
-            if(OpenMP_CXX_VERSION)
-                message(STATUS "  OpenMP version: ${OpenMP_CXX_VERSION}")
-            endif()
-        else()
-            # CMake's FindOpenMP failed (often due to pthread detection issues)
-            # Try manual test compilation for GCC
-            if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-                message(STATUS "  CMake OpenMP detection failed, trying manual test for GCC...")
-                include(CheckCXXSourceCompiles)
-                set(CMAKE_REQUIRED_FLAGS "-fopenmp")
-                set(CMAKE_REQUIRED_LINK_OPTIONS "-fopenmp")
-                check_cxx_source_compiles("
-                    #include <omp.h>
-                    int main() { 
-                        int n = omp_get_max_threads();
-                        return 0;
-                    }
-                " OPENMP_MANUAL_TEST_WORKS)
-                
-                if(OPENMP_MANUAL_TEST_WORKS)
-                    set(CUDSS_OPENMP_FLAG -DCUDSS_USE_OPENMP)
-                    set(HAVE_CUDSS_OPENMP TRUE)
-                    set(OpenMP_CXX_FLAGS "-fopenmp")
-                    set(OpenMP_CXX_FOUND TRUE)
-                    message(STATUS "  OpenMP manually verified - cuDSS multi-threading support enabled")
-                else()
-                    set(CUDSS_OPENMP_FLAG "")
-                    set(HAVE_CUDSS_OPENMP FALSE)
-                    message(WARNING "OpenMP not found - cuDSS will run without multi-threading support")
-                    message(STATUS "  To enable OpenMP, install: sudo apt-get install libgomp1")
-                endif()
-            else()
-                set(CUDSS_OPENMP_FLAG "")
-                set(HAVE_CUDSS_OPENMP FALSE)
-                message(WARNING "OpenMP not found - cuDSS will run without multi-threading support")
-            endif()
-        endif()
-    else()
-        message(STATUS "cuDSS not found. To enable cuDSS:")
-        message(STATUS "  - Ensure libcudss-dev is installed, or")
-        message(STATUS "  - Set CMAKE_PREFIX_PATH to cuDSS CMake config directory")
-        set(CUDSS_FLAG -D_NOCUDSS)
-        set(HAVE_CUDSS FALSE)
-        set(CUDSS_OPENMP_FLAG "")
-        set(HAVE_CUDSS_OPENMP FALSE)
-    endif()
+  endif()
+
+  unset(cudss_DIR CACHE)
+  unset(cudss_INCLUDE_DIR CACHE)
+  unset(cudss_LIBRARY_DIR CACHE)
+  unset(cudss_BINARY_DIR CACHE)
+  find_package(cudss QUIET HINTS ${CUDSS_HINTS})
+  if(cudss_FOUND AND cudss_VERSION VERSION_LESS "0.8.0")
+    message(STATUS "cuDSS ${cudss_VERSION} is too old; OpenSees-CUDA requires >= 0.8.0")
+    set(cudss_FOUND FALSE)
+  endif()
+
+  if(cudss_FOUND)
+      message(STATUS "cuDSS found via CMake config")
+      set(CUDSS_FLAG -D_CUDSS)
+      set(HAVE_CUDSS TRUE)
+      message(STATUS "cuDSS support enabled.")
+
+      # Check for OpenMP for cuDSS multi-threading support
+      message(STATUS "Checking for OpenMP support...")
+      find_package(OpenMP)
+
+      # Try standard CMake detection first
+      if(OpenMP_CXX_FOUND OR OpenMP_C_FOUND)
+          set(CUDSS_OPENMP_FLAG -DCUDSS_USE_OPENMP)
+          set(HAVE_CUDSS_OPENMP TRUE)
+          message(STATUS "  OpenMP found - cuDSS multi-threading support enabled")
+          if(OpenMP_CXX_VERSION)
+              message(STATUS "  OpenMP version: ${OpenMP_CXX_VERSION}")
+          endif()
+      else()
+          # CMake's FindOpenMP failed (often due to pthread detection issues)
+          # Try manual test compilation for GCC
+          if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+              message(STATUS "  CMake OpenMP detection failed, trying manual test for GCC...")
+              include(CheckCXXSourceCompiles)
+              set(CMAKE_REQUIRED_FLAGS "-fopenmp")
+              set(CMAKE_REQUIRED_LINK_OPTIONS "-fopenmp")
+              check_cxx_source_compiles("
+                  #include <omp.h>
+                  int main() { 
+                      int n = omp_get_max_threads();
+                      return 0;
+                  }
+              " OPENMP_MANUAL_TEST_WORKS)
+
+              if(OPENMP_MANUAL_TEST_WORKS)
+                  set(CUDSS_OPENMP_FLAG -DCUDSS_USE_OPENMP)
+                  set(HAVE_CUDSS_OPENMP TRUE)
+                  set(OpenMP_CXX_FLAGS "-fopenmp")
+                  set(OpenMP_CXX_FOUND TRUE)
+                  message(STATUS "  OpenMP manually verified - cuDSS multi-threading support enabled")
+              else()
+                  set(CUDSS_OPENMP_FLAG "")
+                  set(HAVE_CUDSS_OPENMP FALSE)
+                  message(WARNING "OpenMP not found - cuDSS will run without multi-threading support")
+                  message(STATUS "  To enable OpenMP on Linux, install: sudo apt-get install libgomp1")
+              endif()
+          else()
+              set(CUDSS_OPENMP_FLAG "")
+              set(HAVE_CUDSS_OPENMP FALSE)
+              message(WARNING "OpenMP not found - cuDSS will run without multi-threading support")
+          endif()
+      endif()
   else()
-    # Windows: cuDSS support not configured
-    message(STATUS "cuDSS support not configured for Windows platform")
-    set(CUDSS_FLAG -D_NOCUDSS)
-    set(HAVE_CUDSS FALSE)
-    set(CUDSS_OPENMP_FLAG "")
-    set(HAVE_CUDSS_OPENMP FALSE)
+      message(STATUS "cuDSS not found (CUDA major ${CUDAToolkit_VERSION_MAJOR}). To enable cuDSS:")
+      if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+          message(STATUS "  - Install NVIDIA cuDSS for Windows, or")
+          message(STATUS "  - Set CUDSS_ROOT / CUDSS_DIR / OPENSEES_CUDSS_DIR, or")
+          message(STATUS "  - Set CMAKE_PREFIX_PATH to .../lib/${CUDAToolkit_VERSION_MAJOR}/cmake/cudss")
+      else()
+          message(STATUS "  - Ensure libcudss-dev is installed, or")
+          message(STATUS "  - Set CMAKE_PREFIX_PATH to cuDSS CMake config directory")
+      endif()
+      set(CUDSS_FLAG -D_NOCUDSS)
+      set(HAVE_CUDSS FALSE)
+      set(CUDSS_OPENMP_FLAG "")
+      set(HAVE_CUDSS_OPENMP FALSE)
   endif()
 else()
   message(STATUS "CUDAToolkit was NOT found.")

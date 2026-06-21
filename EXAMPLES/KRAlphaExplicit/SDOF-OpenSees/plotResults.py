@@ -165,11 +165,27 @@ def sdof_panel_rows_with_flags(
             ],
         ),
         (
+            "KR_TP",
+            [
+                tag("KRAlphaExplicit_TP"),
+                tag("KRAlphaExplicitMultiSOE_TP"),
+                tag("CudaKRAlpha_TP"),
+            ],
+        ),
+        (
             "MKR",
             [
                 result_tag("MKRAlphaExplicit", p_cpu),
                 tag("MKRAlphaExplicitMultiSOE"),
                 tag("CudaMKRAlpha"),
+            ],
+        ),
+        (
+            "MKR_TP",
+            [
+                tag("MKRAlphaExplicit_TP"),
+                tag("MKRAlphaExplicitMultiSOE_TP"),
+                tag("CudaMKRAlpha_TP"),
             ],
         ),
     ]
