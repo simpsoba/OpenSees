@@ -675,7 +675,7 @@ endif()
 message(STATUS "SCALAPACK_LIBRARIES=${SCALAPACK_LIBRARIES}")
 
 # CUDA object-library layout:
-#   OPS_Cuda          - CudaGenBcsrLinSOE / CudaGenBcsrLinSolver (shared GPU SOE framework)
+#   OPS_Cuda          - CudaBcsrLinSOE / CudaBcsrLinSolver (shared GPU SOE framework)
 #   OPS_Cuda_AmgX     - AmgXLinSolver (optional, when AMGX_NO_MPI_DIR is set)
 #   OPS_Cuda_CuDSS    - cuDSS direct solver + CudaExplicitAlpha / CudaExplicitAlpha_TP (optional, when cuDSS is found)
 #   OPS_Cuda_Parallel - parallel assembly CUDA SOEs for OpenSeesSP / OpenSeesMP (future)
@@ -936,8 +936,8 @@ target_link_libraries(OpenSeesLIB
 if(HAVE_CUDA)
   add_library(OPS_Cuda OBJECT
     ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuSparseBackend.cu
-    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaGenBcsrLinSOE.cu
-    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaGenBcsrLinSolver.cu
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaBcsrLinSOE.cu
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaBcsrLinSolver.cu
   )
   configure_cuda_for_target(OPS_Cuda)
 
@@ -963,7 +963,7 @@ if(HAVE_CUDA)
   # Parallel assembly CUDA SOEs for OpenSeesSP / OpenSeesMP.
   # Add sources here when distributed GPU assembly is implemented, e.g.:
   # add_library(OPS_Cuda_Parallel OBJECT
-  #   ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaParallelGenBcsrLinSOE.cu
+  #   ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaParallelBcsrLinSOE.cu
   # )
   # configure_cuda_for_target(OPS_Cuda_Parallel)
 

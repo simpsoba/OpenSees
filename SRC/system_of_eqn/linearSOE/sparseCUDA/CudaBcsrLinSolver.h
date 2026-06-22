@@ -17,16 +17,16 @@
 **   Filip C. Filippou (filippou@ce.berkeley.edu)                     **
 ** ****************************************************************** */                                                                        
                                                                         
-// $Source: OpenSees/SRC/system_of_eqn/linearSOE/sparseCuda/CudaGenBcsrLinSolver.h
+// $Source: OpenSees/SRC/system_of_eqn/linearSOE/sparseCuda/CudaBcsrLinSolver.h
 //
 // Written: gaaraujo 
 // Created: 08/2025
 //
 // Description: This file contains the class definition for 
-// CudaGenBcsrLinSolver. It solves a CudaGenBcsrLinSOE object.
+// CudaBcsrLinSolver. It solves a CudaBcsrLinSOE object.
 
-#ifndef CudaGenBcsrLinSolver_h
-#define CudaGenBcsrLinSolver_h
+#ifndef CudaBcsrLinSolver_h
+#define CudaBcsrLinSolver_h
 
 // OpenSees includes
 #include <LinearSOESolver.h>
@@ -35,19 +35,19 @@
 #include "CudaUtils.h"
 
 // Forward declarations
-class CudaGenBcsrLinSOE;
+class CudaBcsrLinSOE;
 
-class CudaGenBcsrLinSolver : public LinearSOESolver
+class CudaBcsrLinSolver : public LinearSOESolver
 {
 public:
-    CudaGenBcsrLinSolver(int classTag, CudaPrecision precision = CudaPrecision::dDDI);    
-    virtual ~CudaGenBcsrLinSolver();
+    CudaBcsrLinSolver(int classTag, CudaPrecision precision = CudaPrecision::dDDI);    
+    virtual ~CudaBcsrLinSolver();
 
-    // Set the associated CudaGenBcsrLinSOE object
-    virtual int setLinearSOE(CudaGenBcsrLinSOE &theSOE);
+    // Set the associated CudaBcsrLinSOE object
+    virtual int setLinearSOE(CudaBcsrLinSOE &theSOE);
     
     // Get the associated SOE
-    CudaGenBcsrLinSOE* getLinearSOE(void) const;
+    CudaBcsrLinSOE* getLinearSOE(void) const;
     
     // Get solver precision
     CudaPrecision getPrecision(void) const { return m_precision; }
@@ -62,7 +62,7 @@ public:
     int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker) override;  
 
 protected:
-    CudaGenBcsrLinSOE* theSOE;
+    CudaBcsrLinSOE* theSOE;
     CudaPrecision m_precision;
 
 private:

@@ -23,7 +23,7 @@
 // CUDA implementation: Gustavo A. Araujo R. (garaujor@stanford.edu)
 //
 // Description: GPU explicit Kolay-Ricles trapezoidal-rule (TP) integrator for
-// CudaGenBcsrLinSOE + cuDSS, based on the CPU ExplicitAlpha_TP family.
+// CudaBcsrLinSOE + cuDSS, based on the CPU ExplicitAlpha_TP family.
 //
 // Reference: Kolay, C. and J. Ricles (2014). "Development of a family of
 // unconditionally stable explicit direct integration algorithms with
@@ -41,10 +41,10 @@ class Vector;
 class LinearSOE;
 class Channel;
 class FEM_ObjectBroker;
-class CudaGenBcsrLinSOE;
+class CudaBcsrLinSOE;
 
 /** GPU explicit Kolay-Ricles trapezoidal-rule (TP) integrator.
- *  Requires CudaGenBcsrLinSOE + cuDSS; mirrors ExplicitAlphaMultiSOE_TP control flow. */
+ *  Requires CudaBcsrLinSOE + cuDSS; mirrors ExplicitAlphaMultiSOE_TP control flow. */
 class CudaExplicitAlpha_TP : public TransientIntegrator
 {
 public:
@@ -112,8 +112,8 @@ protected:
     bool areAlphaMFClose() const;
 
     int formTangentIntoSOE(int statFlag, double c1v, double c2v, double c3v);
-    int validateCudaSOE(CudaGenBcsrLinSOE *&cudaSOE) const;
-    int formOperators(CudaGenBcsrLinSOE *cudaSOE);
+    int validateCudaSOE(CudaBcsrLinSOE *&cudaSOE) const;
+    int formOperators(CudaBcsrLinSOE *cudaSOE);
 
     template<typename T>
     friend struct ImplT_TP;
@@ -121,9 +121,9 @@ protected:
 private:
     struct ImplBase;
     ImplBase *m_impl;
-    bool m_deviceUsesFloat = false;  // follows CudaGenBcsrLinSOE precision (dFFI vs dDDI)
+    bool m_deviceUsesFloat = false;  // follows CudaBcsrLinSOE precision (dFFI vs dDDI)
 
-    void ensureDeviceImpl(CudaGenBcsrLinSOE *cudaSOE);
+    void ensureDeviceImpl(CudaBcsrLinSOE *cudaSOE);
     void destroyDeviceImpl();
 };
 

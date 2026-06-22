@@ -25,7 +25,7 @@
 // Created: 10/2025
 //
 // Description: This file contains the class definition for 
-// CudaDirectSparseSolver. It solves the CudaGenBcsrLinSOE object by calling
+// CudaDirectSparseSolver. It solves the CudaBcsrLinSOE object by calling
 // CuDSS routines.
 //
 
@@ -34,7 +34,7 @@
 #include <OPS_Globals.h>
 
 // Solve core classes
-#include <CudaGenBcsrLinSOE.h>
+#include <CudaBcsrLinSOE.h>
 #include <CudaDirectSparseSolver.h>
 #include "ParameterUtils.h"
 
@@ -67,7 +67,7 @@ CudaDirectSparseSolver::CudaDirectSparseSolver(CudaPrecision precision, bool ver
                                const std::vector<int>& deviceIndices,
                                int irNSteps,
                                double irTol)
-    :CudaGenBcsrLinSolver(SOLVER_TAGS_CudaDirectSparseSolver, precision), 
+    :CudaBcsrLinSolver(SOLVER_TAGS_CudaDirectSparseSolver, precision), 
     m_verbose(verbose),
     m_hybridMemoryMode(hybridMemoryMode),
     m_hybridDeviceMemoryLimits(hybridDeviceMemoryLimits),
@@ -114,7 +114,7 @@ CudaCsrMatrix::SolverConfig CudaDirectSparseSolver::makeSolverConfig(CudaPrecisi
     return solver;
 }
 
-int CudaDirectSparseSolver::ensureMatrix(CudaGenBcsrLinSOE *theSOE)
+int CudaDirectSparseSolver::ensureMatrix(CudaBcsrLinSOE *theSOE)
 {
     if (theSOE == nullptr) {
         return -1;
@@ -144,7 +144,7 @@ CudaDirectSparseSolver::~CudaDirectSparseSolver()
     return;
 }
 
-int CudaDirectSparseSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE) {
+int CudaDirectSparseSolver::setLinearSOE(CudaBcsrLinSOE &theSOE) {
     // cuDSS only supports scalar CSR (blockSize = 1), not BSR
     if (theSOE.getBlockSize() != 1) {
         opserr << "WARNING: CudaDirectSparseSolver::setLinearSOE() - "
@@ -161,11 +161,11 @@ int CudaDirectSparseSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE) {
         return -1;
     }
     
-    return this->CudaGenBcsrLinSolver::setLinearSOE(theSOE);
+    return this->CudaBcsrLinSolver::setLinearSOE(theSOE);
 }
 
 int CudaDirectSparseSolver::solve(void) {
-    CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
+    CudaBcsrLinSOE* theSOE = this->CudaBcsrLinSolver::getLinearSOE();
     if (theSOE == nullptr) {
         opserr << "WARNING: CudaDirectSparseSolver::solve() - LinearSOE not set" << endln;
         return -1;
@@ -175,7 +175,7 @@ int CudaDirectSparseSolver::solve(void) {
         return -1;
     }
 
-    CudaGenBcsrLinSOE::MatrixStatus matrixStatus = theSOE->getMatrixStatus();
+    CudaBcsrLinSOE::MatrixStatus matrixStatus = theSOE->getMatrixStatus();
     void* AValues = theSOE->getDeviceAValues();
     void* xValues = theSOE->getDeviceX();
     void* bValues = theSOE->getDeviceB();
@@ -196,11 +196,11 @@ int CudaDirectSparseSolver::solve(void) {
         if (m_matrix->factorize(bValues, xValues) != 0) {
             return -1;
         }
-    } else if (matrixStatus == CudaGenBcsrLinSOE::MatrixStatus::STRUCTURE_CHANGED) {
+    } else if (matrixStatus == CudaBcsrLinSOE::MatrixStatus::STRUCTURE_CHANGED) {
         if (m_matrix->factorize(bValues, xValues) != 0) {
             return -1;
         }
-    } else if (matrixStatus == CudaGenBcsrLinSOE::MatrixStatus::COEFFICIENTS_CHANGED) {
+    } else if (matrixStatus == CudaBcsrLinSOE::MatrixStatus::COEFFICIENTS_CHANGED) {
         if (m_matrix->refactorize(bValues, xValues) != 0) {
             return -1;
         }
@@ -243,7 +243,7 @@ CudaDirectSparseSolver::getCopy(void) const
 }
 
 int CudaDirectSparseSolver::setupMatrices() {
-    CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
+    CudaBcsrLinSOE* theSOE = this->CudaBcsrLinSolver::getLinearSOE();
     if (theSOE == nullptr) {
         opserr << "WARNING: CudaDirectSparseSolver::setupMatrices() - LinearSOE not set" << endln;
         return -1;
@@ -256,8 +256,8 @@ int CudaDirectSparseSolver::setupMatrices() {
         return -1;
     }
 
-    CudaGenBcsrLinSOE::MatrixStatus matrixStatus = theSOE->getMatrixStatus();
-    if (matrixStatus != CudaGenBcsrLinSOE::MatrixStatus::STRUCTURE_CHANGED &&
+    CudaBcsrLinSOE::MatrixStatus matrixStatus = theSOE->getMatrixStatus();
+    if (matrixStatus != CudaBcsrLinSOE::MatrixStatus::STRUCTURE_CHANGED &&
         m_matrix->isStructureBound()) {
         return 0;
     }
@@ -516,7 +516,7 @@ void CuDSSParameterParser::printUsageInfo() {
 }
 
 // Factory function to create CuDSS solver from parsed config
-CudaGenBcsrLinSolver* createCuDSSSolverFromConfig(const CuDSSConfig& config) {
+CudaBcsrLinSolver* createCuDSSSolverFromConfig(const CuDSSConfig& config) {
     // Convert string precision to enum
     CudaPrecision precision;
     if (!cudaPrecisionFromString(config.precision.c_str(), precision)) {
@@ -547,7 +547,7 @@ CudaGenBcsrLinSolver* createCuDSSSolverFromConfig(const CuDSSConfig& config) {
 }
 
 // Factory function that parses OPS arguments and creates solver
-CudaGenBcsrLinSolver* createCuDSSSolverFromParser() {
+CudaBcsrLinSolver* createCuDSSSolverFromParser() {
     CuDSSConfig config;
     
     // Parse command-line arguments
@@ -608,7 +608,7 @@ void* OPS_CudaDirectSparseSolver()
                << "Ignoring hybridDeviceMemoryLimit." << endln;
     }
 
-    CudaGenBcsrLinSolver* solver = nullptr;
+    CudaBcsrLinSolver* solver = nullptr;
     try {
         solver = createCuDSSSolverFromConfig(config);
     } catch (const std::exception& e) {
@@ -624,9 +624,9 @@ void* OPS_CudaDirectSparseSolver()
     const bool symmetricStorage = (config.cudssMatTypeStr == "symmetric" || config.cudssMatTypeStr == "spd");
     switch (precision) {
         case CudaPrecision::dDDI:
-            return CudaGenBcsrLinSOE::createDouble(*solver, blockSize, paddingEnabled, config.verbose, symmetricStorage);
+            return CudaBcsrLinSOE::createDouble(*solver, blockSize, paddingEnabled, config.verbose, symmetricStorage);
         case CudaPrecision::dFFI:
-            return CudaGenBcsrLinSOE::createFloat(*solver, blockSize, paddingEnabled, config.verbose, symmetricStorage);
+            return CudaBcsrLinSOE::createFloat(*solver, blockSize, paddingEnabled, config.verbose, symmetricStorage);
         default:
             opserr << "ERROR: OPS_CudaDirectSparseSolver() - Unexpected precision mode" << endln;
             delete solver;

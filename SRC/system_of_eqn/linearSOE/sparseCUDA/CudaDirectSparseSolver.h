@@ -24,7 +24,7 @@
 // Created: 10/2025
 //
 // Description: OpenSees LinearSOESolver for GPU direct sparse solve via cuDSS.
-// A CudaDirectSparseSolver solves a CudaGenBcsrLinSOE by delegating to CudaCsrMatrix.
+// A CudaDirectSparseSolver solves a CudaBcsrLinSOE by delegating to CudaCsrMatrix.
 //
 // The CuDSS library provides a high-performance GPU-accelerated direct solver
 // for sparse linear systems of the form AX = B. The cuDSS functionality allows 
@@ -38,7 +38,7 @@
 #define CudaDirectSparseSolver_h
 
 // OpenSees includes
-#include <CudaGenBcsrLinSolver.h>
+#include <CudaBcsrLinSolver.h>
 #include <OPS_Stream.h>
 #include "CudaCsrMatrix.h"
 
@@ -48,10 +48,10 @@
 #include <vector>
 
 // Matrix type for cuDSS: full, symmetric, or SPD (symmetric positive definite).
-// symmetric and spd both use symmetric lower storage in CudaGenBcsrLinSOE.
+// symmetric and spd both use symmetric lower storage in CudaBcsrLinSOE.
 // CuDSSMatrixType is defined in CuDSSBackend.h.
 
-class CudaDirectSparseSolver : public CudaGenBcsrLinSolver
+class CudaDirectSparseSolver : public CudaBcsrLinSolver
 {
 public:
     // Constructor with default parameters
@@ -77,7 +77,7 @@ public:
     // Solver methods
     int solve(void) override;
     int setSize(void) override;
-    int setLinearSOE(CudaGenBcsrLinSOE &theSOE) override;
+    int setLinearSOE(CudaBcsrLinSOE &theSOE) override;
     LinearSOESolver *getCopy(void) const override;
 
 protected:
@@ -113,7 +113,7 @@ private:
     void init(CudaPrecision precision);
 
     CudaCsrMatrix::SolverConfig makeSolverConfig(CudaPrecision precision) const;
-    int ensureMatrix(CudaGenBcsrLinSOE *theSOE);
+    int ensureMatrix(CudaBcsrLinSOE *theSOE);
 
     CudaCsrMatrix *m_matrix = nullptr;
 };

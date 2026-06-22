@@ -6,7 +6,7 @@
 ** All Rights Reserved.                                               **
 **                                                                    **
 ** Description: cuSPARSE SpMV backend for CSR and BSR device matrices.**
-** Composed by CudaCsrMatrix and CudaGenBcsrLinSOE; independent of cuDSS.**
+** Composed by CudaCsrMatrix and CudaBcsrLinSOE; independent of cuDSS.**
 ** ****************************************************************** */
 
 #ifndef CuSparseBackend_h

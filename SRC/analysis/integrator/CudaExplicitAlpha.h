@@ -17,7 +17,7 @@
 **   Filip C. Filippou (filippou@ce.berkeley.edu)                     **
 **                                                                    **
 ** Description: GPU explicit Kolay-Ricles integrator (alpha method)   **
-** for CudaGenBcsrLinSOE + cuDSS.                                     **
+** for CudaBcsrLinSOE + cuDSS.                                     **
 ** ****************************************************************** */
 
 #ifndef CudaExplicitAlpha_h
@@ -31,7 +31,7 @@ class Vector;
 class LinearSOE;
 class Channel;
 class FEM_ObjectBroker;
-class CudaGenBcsrLinSOE;
+class CudaBcsrLinSOE;
 
 class CudaExplicitAlpha : public TransientIntegrator
 {
@@ -97,8 +97,8 @@ protected:
     bool areAlphaMFClose() const;
 
     int formTangentIntoSOE(int statFlag, double c1v, double c2v, double c3v);
-    int validateCudaSOE(CudaGenBcsrLinSOE *&cudaSOE) const;
-    int formOperators(CudaGenBcsrLinSOE *cudaSOE);
+    int validateCudaSOE(CudaBcsrLinSOE *&cudaSOE) const;
+    int formOperators(CudaBcsrLinSOE *cudaSOE);
 
     template<typename T>
     friend struct ImplT;
@@ -106,9 +106,9 @@ protected:
 private:
     struct ImplBase;
     ImplBase *m_impl;
-    bool m_deviceUsesFloat = false;  // follows CudaGenBcsrLinSOE precision (dFFI vs dDDI)
+    bool m_deviceUsesFloat = false;  // follows CudaBcsrLinSOE precision (dFFI vs dDDI)
 
-    void ensureDeviceImpl(CudaGenBcsrLinSOE *cudaSOE);
+    void ensureDeviceImpl(CudaBcsrLinSOE *cudaSOE);
     void destroyDeviceImpl();
 };
 

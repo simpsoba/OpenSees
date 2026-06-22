@@ -18,20 +18,20 @@
 **                                                                    **
 ** ****************************************************************** */
                                                                         
-// $Source: OpenSees/SRC/system_of_eqn/linearSOE/sparseCuda/CudaGenBcsrLinSOE.cpp,v $
+// $Source: OpenSees/SRC/system_of_eqn/linearSOE/sparseCuda/CudaBcsrLinSOE.cpp,v $
                                                                         
                                                                         
 // Written: gaaraujo 
 // Created: 08/2025
 //
 // Description: This file contains the implementation for 
-// CudaGenBcsrLinSOE. It stores the sparse matrix A in a fashion
-// required by the CudaGenBcsrLinSolver object.
+// CudaBcsrLinSOE. It stores the sparse matrix A in a fashion
+// required by the CudaBcsrLinSolver object.
 //
 
 // OpenSees includes
-#include <CudaGenBcsrLinSOE.h>
-#include <CudaGenBcsrLinSolver.h>
+#include <CudaBcsrLinSOE.h>
+#include <CudaBcsrLinSolver.h>
 #include <LinearSOE.h>
 #include <Matrix.h>
 #include <Graph.h>
@@ -48,7 +48,7 @@
 #include <vector>
 #include <algorithm>
 
-#include "CudaGenBcsrLinSOEImpl.h"
+#include "CudaBcsrLinSOEImpl.h"
 #include "CuSparseBackend.h"
 #include "CudaUtils.h"
 
@@ -69,13 +69,13 @@ namespace {
     {
         const int numVertices = theGraph.getNumVertex();
         if (numVertices < 0) {
-            opserr << "WARNING: CudaGenBcsrLinSOE::countNonZeroElements() - "
+            opserr << "WARNING: CudaBcsrLinSOE::countNonZeroElements() - "
                    << "Graph size (" << numVertices << ") < 0" << endln;
             return -1;
         }
         const int numEdges = theGraph.getNumEdge();
         if (numEdges < 0) {
-            opserr << "WARNING: CudaGenBcsrLinSOE::countNonZeroElements() - "
+            opserr << "WARNING: CudaBcsrLinSOE::countNonZeroElements() - "
                    << "Graph size (" << numEdges << ") < 0" << endln;
             return -1;
         }
@@ -97,17 +97,17 @@ namespace {
 
         int size = theGraph.getNumVertex();
         if (size < 0) {
-            opserr << "WARNING: CudaGenBcsrLinSOE::countNonZeroBlocks() - "
+            opserr << "WARNING: CudaBcsrLinSOE::countNonZeroBlocks() - "
                    << "Graph size (" << size << ") < 0" << endln;
             return -1;
         }
         if (blockSize < 1) {
-            opserr << "WARNING: CudaGenBcsrLinSOE::countNonZeroBlocks() - "
+            opserr << "WARNING: CudaBcsrLinSOE::countNonZeroBlocks() - "
                    << "Block size (" << blockSize << ") < 1" << endln;
             return -1;
         }
         if (size % blockSize != 0 && !paddingEnabled) {
-            opserr << "WARNING: CudaGenBcsrLinSOE::countNonZeroBlocks() - "
+            opserr << "WARNING: CudaBcsrLinSOE::countNonZeroBlocks() - "
                    << "Graph size (" << size << ") not divisible by "
                    << "block size (" << blockSize << ") and "
                    << "padding is disabled" << endln;
@@ -122,7 +122,7 @@ namespace {
             const int blockRow = i / blockSize;
             Vertex* theVertex = theGraph.getVertexPtr(i);
             if (theVertex == nullptr) {
-                opserr << "WARNING: CudaGenBcsrLinSOE::countNonZeroBlocks() - "
+                opserr << "WARNING: CudaBcsrLinSOE::countNonZeroBlocks() - "
                        << "Vertex (" << i << ") not found in graph!" << endln;
                 return -1;
             }
@@ -147,7 +147,7 @@ namespace {
     }
 }
 
-CudaGenBcsrLinSOE::CudaGenBcsrLinSOE(int classTag, CudaGenBcsrLinSolver &theSolver, 
+CudaBcsrLinSOE::CudaBcsrLinSOE(int classTag, CudaBcsrLinSolver &theSolver, 
                              int blockSize, bool paddingEnabled,
                              bool verbose, bool symmetricStorage)
     : LinearSOE(theSolver, classTag), 
@@ -162,7 +162,7 @@ CudaGenBcsrLinSOE::CudaGenBcsrLinSOE(int classTag, CudaGenBcsrLinSolver &theSolv
     // Note: theSolver.setLinearSOE(*this) should be called in derived class constructor
 }
 
-CudaGenBcsrLinSOE::CudaGenBcsrLinSOE(int classTag): LinearSOE(classTag), 
+CudaBcsrLinSOE::CudaBcsrLinSOE(int classTag): LinearSOE(classTag), 
     m_X(), m_B(), m_hostX(), m_hostB(), m_hostAValues(), 
     m_hostCsrIndices(),
     m_blockSize(DEFAULT_BLOCK_SIZE),
@@ -173,17 +173,17 @@ CudaGenBcsrLinSOE::CudaGenBcsrLinSOE(int classTag): LinearSOE(classTag),
 {
 }
 
-CudaGenBcsrLinSOE::MatrixStorageMode CudaGenBcsrLinSOE::getMatrixStorageMode(void) const
+CudaBcsrLinSOE::MatrixStorageMode CudaBcsrLinSOE::getMatrixStorageMode(void) const
 {
     return m_storageMode;
 }
 
-bool CudaGenBcsrLinSOE::isSymmetricStorage(void) const
+bool CudaBcsrLinSOE::isSymmetricStorage(void) const
 {
     return m_storageMode == MatrixStorageMode::SYMMETRIC_LOWER;
 }
 
-CudaGenBcsrLinSOE::~CudaGenBcsrLinSOE() 
+CudaBcsrLinSOE::~CudaBcsrLinSOE() 
 {
     if (m_cudaStream != nullptr) {
         cudaStreamSynchronize(m_cudaStream);
@@ -196,26 +196,26 @@ CudaGenBcsrLinSOE::~CudaGenBcsrLinSOE()
 }
 
 // Validation methods
-bool CudaGenBcsrLinSOE::isValidBlockSize(int blockSize) const
+bool CudaBcsrLinSOE::isValidBlockSize(int blockSize) const
 {
     return blockSize > 0 && blockSize <= MAX_BLOCK_SIZE;
 }
 
-bool CudaGenBcsrLinSOE::isValidGlobalIndex(int index) const
+bool CudaBcsrLinSOE::isValidGlobalIndex(int index) const
 {
     return index >= 0 && index < m_X.Size();
 }
 
-int CudaGenBcsrLinSOE::getNumEqn(void) const 
+int CudaBcsrLinSOE::getNumEqn(void) const 
 {
     return m_X.Size();
 }
 
-int CudaGenBcsrLinSOE::buildStandardCSR(Graph &theGraph)
+int CudaBcsrLinSOE::buildStandardCSR(Graph &theGraph)
 {
     int size = theGraph.getNumVertex();
     if (size < 0) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::buildStandardCSR() - "
+        opserr << "WARNING: CudaBcsrLinSOE::buildStandardCSR() - "
                << "Graph size (" << size << ") < 0" << endln;
         return -1;
     }
@@ -234,7 +234,7 @@ int CudaGenBcsrLinSOE::buildStandardCSR(Graph &theGraph)
     for (int row = 0; row < size; ++row) {
         Vertex *theVertex = theGraph.getVertexPtr(row);
         if (theVertex == nullptr) {
-            opserr << "WARNING: CudaGenBcsrLinSOE::buildStandardCSR() - "
+            opserr << "WARNING: CudaBcsrLinSOE::buildStandardCSR() - "
                    << "Vertex (" << row << ") not found in graph!" << endln;
             return -1;
         }
@@ -255,7 +255,7 @@ int CudaGenBcsrLinSOE::buildStandardCSR(Graph &theGraph)
     }
 
     if (nnz != ArowPtr[size]) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::buildStandardCSR() - "
+        opserr << "WARNING: CudaBcsrLinSOE::buildStandardCSR() - "
                << "nnz (" << nnz << ") != ArowPtr[" << size << "]" << endln;
         return -1;
     }
@@ -267,7 +267,7 @@ int CudaGenBcsrLinSOE::buildStandardCSR(Graph &theGraph)
     return 0;
 }
 
-int CudaGenBcsrLinSOE::buildBlockCSR(Graph &theGraph)
+int CudaBcsrLinSOE::buildBlockCSR(Graph &theGraph)
 {
     // Estimate the block size if not provided
     if (m_blockSize == 0) {
@@ -277,7 +277,7 @@ int CudaGenBcsrLinSOE::buildBlockCSR(Graph &theGraph)
         }
         m_blockSize = estimateBlockSize(theGraph, nnz, DEFAULT_EFFICIENCY_THRESHOLD);
         if (m_verbose) {
-            opserr << "INFO: CudaGenBcsrLinSOE::buildBlockCSR() - "
+            opserr << "INFO: CudaBcsrLinSOE::buildBlockCSR() - "
                    << "Automatically estimating block size for "
                    << "efficiency >= " << DEFAULT_EFFICIENCY_THRESHOLD << ". "
                    << "Estimated block size: " << m_blockSize << endln;
@@ -291,7 +291,7 @@ int CudaGenBcsrLinSOE::buildBlockCSR(Graph &theGraph)
 
     // Validate block size
     if (!isValidBlockSize(m_blockSize)) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::buildBlockCSR() - "
+        opserr << "WARNING: CudaBcsrLinSOE::buildBlockCSR() - "
                << "Invalid block size (" << m_blockSize << "). "
                << "Must be between 1 and " << MAX_BLOCK_SIZE << endln;
         return -1;
@@ -300,7 +300,7 @@ int CudaGenBcsrLinSOE::buildBlockCSR(Graph &theGraph)
     // Compute the original number of equations
     const int originalSize = theGraph.getNumVertex();
     if (originalSize < 0) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::buildBlockCSR() - "
+        opserr << "WARNING: CudaBcsrLinSOE::buildBlockCSR() - "
                << "Graph size (" << originalSize << ") < 0" << endln;
         return -1;
     }
@@ -344,7 +344,7 @@ int CudaGenBcsrLinSOE::buildBlockCSR(Graph &theGraph)
         for (int row = startRow; row < endRow; ++row) {
             Vertex *theVertex = theGraph.getVertexPtr(row);
             if (theVertex == nullptr) {
-                opserr << "WARNING: CudaGenBcsrLinSOE::buildBlockCSR() - "
+                opserr << "WARNING: CudaBcsrLinSOE::buildBlockCSR() - "
                        << "Vertex (" << row << ") not found in graph!" << endln; 
                 return -1;
             }
@@ -371,7 +371,7 @@ int CudaGenBcsrLinSOE::buildBlockCSR(Graph &theGraph)
 
     // Check that we built row pointers correctly
     if (nnzBlock != ArowPtr[numBlockRows]) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::buildBlockCSR() - "
+        opserr << "WARNING: CudaBcsrLinSOE::buildBlockCSR() - "
                << "nnzBlock (" << nnzBlock << ") != ArowPtr[" << numBlockRows << "]" << endln;
         return -1;
     }
@@ -386,12 +386,12 @@ int CudaGenBcsrLinSOE::buildBlockCSR(Graph &theGraph)
     return 0;
 }
 
-int CudaGenBcsrLinSOE::setSize(Graph &theGraph) 
+int CudaBcsrLinSOE::setSize(Graph &theGraph) 
 {
     // Get the original size of the system of equations
     const int originalSize = theGraph.getNumVertex();
     if (originalSize < 0) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::setSize() - "
+        opserr << "WARNING: CudaBcsrLinSOE::setSize() - "
                << "Graph size (" << originalSize << ") < 0" << endln;
         return -1;
     }
@@ -399,13 +399,13 @@ int CudaGenBcsrLinSOE::setSize(Graph &theGraph)
     // Build data structures for the matrix in either standard or block CSR format
     if (m_blockSize == 1) {
         if (buildStandardCSR(theGraph) != 0) {
-            opserr << "WARNING: CudaGenBcsrLinSOE::setSize() - "
+            opserr << "WARNING: CudaBcsrLinSOE::setSize() - "
                    << "buildStandardCSR() failed" << endln;
             return -1;
         }
     } else {
         if (buildBlockCSR(theGraph) != 0) {
-            opserr << "WARNING: CudaGenBcsrLinSOE::setSize() - "
+            opserr << "WARNING: CudaBcsrLinSOE::setSize() - "
                    << "buildBlockCSR() failed" << endln;
             return -1;
         }
@@ -427,7 +427,7 @@ int CudaGenBcsrLinSOE::setSize(Graph &theGraph)
     // Get the solver
     LinearSOESolver *the_Solver = this->getSolver();
     if (the_Solver == nullptr) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::setSize() - "
+        opserr << "WARNING: CudaBcsrLinSOE::setSize() - "
                << "No solver set" << endln;
         return -1;
     }
@@ -435,7 +435,7 @@ int CudaGenBcsrLinSOE::setSize(Graph &theGraph)
     // invoke setSize() on the Solver
     int solverOK = the_Solver->setSize();
     if (solverOK < 0) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::setSize() - "
+        opserr << "WARNING: CudaBcsrLinSOE::setSize() - "
                << "Solver failed setSize()" << endln;
         return solverOK;
     }
@@ -444,7 +444,7 @@ int CudaGenBcsrLinSOE::setSize(Graph &theGraph)
 }
 
 // Helper methods for matrix assembly
-int CudaGenBcsrLinSOE::addAMatrixElement(int globalRow, int globalCol, double value)
+int CudaBcsrLinSOE::addAMatrixElement(int globalRow, int globalCol, double value)
 {
     if (!isValidGlobalIndex(globalRow) || !isValidGlobalIndex(globalCol)) {
         return -1;
@@ -464,7 +464,7 @@ int CudaGenBcsrLinSOE::addAMatrixElement(int globalRow, int globalCol, double va
     }
 }
 
-int CudaGenBcsrLinSOE::addAMatrixElementBlock(int globalRow, int globalCol, double value)
+int CudaBcsrLinSOE::addAMatrixElementBlock(int globalRow, int globalCol, double value)
 {
     const int numBlockRows = m_hostB.size() / m_blockSize;
     const int *ArowPtr = raw_pointer_cast(m_hostCsrIndices.data());
@@ -489,13 +489,13 @@ int CudaGenBcsrLinSOE::addAMatrixElementBlock(int globalRow, int globalCol, doub
         }
     }
     
-    opserr << "WARNING: CudaGenBcsrLinSOE::addAMatrixElementBlock() - "
+    opserr << "WARNING: CudaBcsrLinSOE::addAMatrixElementBlock() - "
            << "Could not find block for row (" << globalRow << "), "
            << "col (" << globalCol << ")" << endln;
     return -1;
 }
 
-int CudaGenBcsrLinSOE::addAMatrixElementStandard(int globalRow, int globalCol, double value)
+int CudaBcsrLinSOE::addAMatrixElementStandard(int globalRow, int globalCol, double value)
 {
     int size = m_hostB.size();
     const int *ArowPtr = raw_pointer_cast(m_hostCsrIndices.data());
@@ -511,13 +511,13 @@ int CudaGenBcsrLinSOE::addAMatrixElementStandard(int globalRow, int globalCol, d
         }
     }
     
-    opserr << "WARNING: CudaGenBcsrLinSOE::addAMatrixElementStandard() - "
+    opserr << "WARNING: CudaBcsrLinSOE::addAMatrixElementStandard() - "
            << "Could not find element for row (" << globalRow << "), "
            << "col (" << globalCol << ")" << endln;
     return -1;
 }
 
-int CudaGenBcsrLinSOE::addA(const Matrix &m, const ID &id, double fact)
+int CudaBcsrLinSOE::addA(const Matrix &m, const ID &id, double fact)
 {   
     // Check for a quick return
     if (fact == 0.0) {
@@ -532,13 +532,13 @@ int CudaGenBcsrLinSOE::addA(const Matrix &m, const ID &id, double fact)
 
     // Check that m and id are of similar size
     if (idSize != m.noRows() && idSize != m.noCols()) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::addA() - "
+        opserr << "WARNING: CudaBcsrLinSOE::addA() - "
                << "Matrix and ID not of similar sizes" << endln;
         return -1;
     }
     
     auto reportAddError = [](const Matrix &m, int i, int j, int globalRow, int globalCol) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::addA() - "
+        opserr << "WARNING: CudaBcsrLinSOE::addA() - "
                << "Failed to add m(" << i << ", " << j << ") = " << m(i, j)
                << " to the system of equations at location "
                << "(" << globalRow << ", " << globalCol << ")" << endln;
@@ -600,7 +600,7 @@ int CudaGenBcsrLinSOE::addA(const Matrix &m, const ID &id, double fact)
     return 0;
 }
 
-int CudaGenBcsrLinSOE::addA(const Matrix &m)
+int CudaBcsrLinSOE::addA(const Matrix &m)
 {
     // This method adds the entire matrix to the system
     // We need to create an ID with all the DOFs and call the main addA method
@@ -608,7 +608,7 @@ int CudaGenBcsrLinSOE::addA(const Matrix &m)
     const int numCols = m.noCols();
     
     if (numRows != numCols || numRows != getNumEqn()) {
-        opserr << "CudaGenBcsrLinSOE::addA(Matrix) - matrix size mismatch\n";
+        opserr << "CudaBcsrLinSOE::addA(Matrix) - matrix size mismatch\n";
         return -1;
     }
     
@@ -621,7 +621,7 @@ int CudaGenBcsrLinSOE::addA(const Matrix &m)
     return addA(m, allDOFs, 1.0);
 }
 
-int CudaGenBcsrLinSOE::addB(const Vector &v, const ID &id, double fact)
+int CudaBcsrLinSOE::addB(const Vector &v, const ID &id, double fact)
 {
     // Check for a quick return
     if (fact == 0.0) {
@@ -636,7 +636,7 @@ int CudaGenBcsrLinSOE::addB(const Vector &v, const ID &id, double fact)
 
     // Check that v and id are of similar size
     if (idSize != v.Size()) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::addB() - "
+        opserr << "WARNING: CudaBcsrLinSOE::addB() - "
                << "Vector and ID not of similar sizes" << endln;
         return -1;
     }
@@ -669,7 +669,7 @@ int CudaGenBcsrLinSOE::addB(const Vector &v, const ID &id, double fact)
     return 0;
 }
 
-int CudaGenBcsrLinSOE::setB(const Vector &v, double fact)
+int CudaBcsrLinSOE::setB(const Vector &v, double fact)
 {
     // Check for a quick return
     if (fact == 0.0) {
@@ -679,7 +679,7 @@ int CudaGenBcsrLinSOE::setB(const Vector &v, double fact)
 
     const int size = m_B.Size();
     if (size != v.Size()) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::setB() - "
+        opserr << "WARNING: CudaBcsrLinSOE::setB() - "
                << "Vector size mismatch" << endln;
         return -1;
     }
@@ -703,10 +703,10 @@ int CudaGenBcsrLinSOE::setB(const Vector &v, double fact)
     return 0;
 }
 
-int CudaGenBcsrLinSOE::copyDeviceAsync(void *dst, const void *src, std::size_t numBytes, const char *label)
+int CudaBcsrLinSOE::copyDeviceAsync(void *dst, const void *src, std::size_t numBytes, const char *label)
 {
     if (dst == nullptr || src == nullptr) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::" << label << " - null pointer\n";
+        opserr << "WARNING: CudaBcsrLinSOE::" << label << " - null pointer\n";
         return -1;
     }
     if (numBytes == 0) {
@@ -714,21 +714,21 @@ int CudaGenBcsrLinSOE::copyDeviceAsync(void *dst, const void *src, std::size_t n
     }
     cudaStream_t stream = static_cast<cudaStream_t>(getCudaStream());
     if (stream == nullptr) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::" << label << " - CUDA stream unavailable\n";
+        opserr << "WARNING: CudaBcsrLinSOE::" << label << " - CUDA stream unavailable\n";
         return -1;
     }
     cudaCheckError(cudaMemcpyAsync(dst, src, numBytes, cudaMemcpyDeviceToDevice, stream), label);
     return 0;
 }
 
-int CudaGenBcsrLinSOE::setDeviceB(const void *deviceSrc, int numEqn)
+int CudaBcsrLinSOE::setDeviceB(const void *deviceSrc, int numEqn)
 {
     if (numEqn <= 0 || numEqn > getNumEqn()) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceB() - invalid numEqn (" << numEqn << ")\n";
+        opserr << "WARNING: CudaBcsrLinSOE::setDeviceB() - invalid numEqn (" << numEqn << ")\n";
         return -1;
     }
     if (!isUniformPrecision(getPrecision())) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceB() - mixed precision not supported\n";
+        opserr << "WARNING: CudaBcsrLinSOE::setDeviceB() - mixed precision not supported\n";
         return -1;
     }
     ensureDeviceVectorSizes();
@@ -742,14 +742,14 @@ int CudaGenBcsrLinSOE::setDeviceB(const void *deviceSrc, int numEqn)
     return 0;
 }
 
-int CudaGenBcsrLinSOE::setDeviceX(const void *deviceSrc, int numEqn)
+int CudaBcsrLinSOE::setDeviceX(const void *deviceSrc, int numEqn)
 {
     if (numEqn <= 0 || numEqn > getNumEqn()) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceX() - invalid numEqn (" << numEqn << ")\n";
+        opserr << "WARNING: CudaBcsrLinSOE::setDeviceX() - invalid numEqn (" << numEqn << ")\n";
         return -1;
     }
     if (!isUniformPrecision(getPrecision())) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceX() - mixed precision not supported\n";
+        opserr << "WARNING: CudaBcsrLinSOE::setDeviceX() - mixed precision not supported\n";
         return -1;
     }
     ensureDeviceVectorSizes();
@@ -763,10 +763,10 @@ int CudaGenBcsrLinSOE::setDeviceX(const void *deviceSrc, int numEqn)
     return 0;
 }
 
-int CudaGenBcsrLinSOE::setDeviceAValues(const void *deviceSrc, int numNnz)
+int CudaBcsrLinSOE::setDeviceAValues(const void *deviceSrc, int numNnz)
 {
     if (numNnz <= 0 || numNnz > getNumNonZeroValues()) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceAValues() - invalid numNnz (" << numNnz << ")\n";
+        opserr << "WARNING: CudaBcsrLinSOE::setDeviceAValues() - invalid numNnz (" << numNnz << ")\n";
         return -1;
     }
     ensureDeviceVectorSizes();
@@ -784,15 +784,15 @@ int CudaGenBcsrLinSOE::setDeviceAValues(const void *deviceSrc, int numNnz)
     return 0;
 }
 
-int CudaGenBcsrLinSOE::setDeviceRowPtrs(const int *deviceSrc)
+int CudaBcsrLinSOE::setDeviceRowPtrs(const int *deviceSrc)
 {
     if (deviceSrc == nullptr) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceRowPtrs() - null deviceSrc\n";
+        opserr << "WARNING: CudaBcsrLinSOE::setDeviceRowPtrs() - null deviceSrc\n";
         return -1;
     }
     const int numRowPtrs = getNumRowBlocks() + 1;
     if (numRowPtrs <= 1) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceRowPtrs() - matrix structure empty\n";
+        opserr << "WARNING: CudaBcsrLinSOE::setDeviceRowPtrs() - matrix structure empty\n";
         return -1;
     }
     ensureDeviceVectorSizes();
@@ -804,15 +804,15 @@ int CudaGenBcsrLinSOE::setDeviceRowPtrs(const int *deviceSrc)
     return 0;
 }
 
-int CudaGenBcsrLinSOE::setDeviceColIndices(const int *deviceSrc)
+int CudaBcsrLinSOE::setDeviceColIndices(const int *deviceSrc)
 {
     if (deviceSrc == nullptr) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceColIndices() - null deviceSrc\n";
+        opserr << "WARNING: CudaBcsrLinSOE::setDeviceColIndices() - null deviceSrc\n";
         return -1;
     }
     const int numColIdx = getNumNonZeroBlocks();
     if (numColIdx <= 0) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::setDeviceColIndices() - matrix structure empty\n";
+        opserr << "WARNING: CudaBcsrLinSOE::setDeviceColIndices() - matrix structure empty\n";
         return -1;
     }
     ensureDeviceVectorSizes();
@@ -824,7 +824,7 @@ int CudaGenBcsrLinSOE::setDeviceColIndices(const int *deviceSrc)
     return 0;
 }
 
-void CudaGenBcsrLinSOE::zeroA(void)
+void CudaBcsrLinSOE::zeroA(void)
 {
     for (size_t i = 0; i < m_hostAValues.size(); i++) {
         m_hostAValues[i] = 0.0;
@@ -837,7 +837,7 @@ void CudaGenBcsrLinSOE::zeroA(void)
     setAValuesPrimaryLocation(DataLocation::Host);
 }
 
-void CudaGenBcsrLinSOE::zeroB(void)
+void CudaBcsrLinSOE::zeroB(void)
 {
     for (size_t i = 0; i < m_hostB.size(); i++) {
         m_hostB[i] = 0.0;
@@ -845,7 +845,7 @@ void CudaGenBcsrLinSOE::zeroB(void)
     setBPrimaryLocation(DataLocation::Host);
 }
 
-void CudaGenBcsrLinSOE::setX(int loc, double value)
+void CudaBcsrLinSOE::setX(int loc, double value)
 {
     if (isValidGlobalIndex(loc)) {
         m_X(loc) = value;
@@ -853,11 +853,11 @@ void CudaGenBcsrLinSOE::setX(int loc, double value)
     }
 }
 
-void CudaGenBcsrLinSOE::setX(const Vector &x)
+void CudaBcsrLinSOE::setX(const Vector &x)
 {
     const int size = m_X.Size();
     if (size != x.Size()) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::setX() - "
+        opserr << "WARNING: CudaBcsrLinSOE::setX() - "
                << "Vector size mismatch" << endln;
         return;
     }
@@ -866,17 +866,17 @@ void CudaGenBcsrLinSOE::setX(const Vector &x)
     setXPrimaryLocation(DataLocation::Host);
 }
 
-void CudaGenBcsrLinSOE::setXSyncMode(bool mode)
+void CudaBcsrLinSOE::setXSyncMode(bool mode)
 {
     m_xSyncMode = mode;
 }
 
-bool CudaGenBcsrLinSOE::getXSyncMode(void) const
+bool CudaBcsrLinSOE::getXSyncMode(void) const
 {
     return m_xSyncMode;
 }
 
-const Vector & CudaGenBcsrLinSOE::getX(void)
+const Vector & CudaBcsrLinSOE::getX(void)
 {
     if (m_xSyncMode) {
         syncXToHost();
@@ -884,26 +884,26 @@ const Vector & CudaGenBcsrLinSOE::getX(void)
     return m_X;
 }   
 
-const Vector & CudaGenBcsrLinSOE::getB(void)
+const Vector & CudaBcsrLinSOE::getB(void)
 {
     syncBToHost();
     return m_B;
 }
 
-double CudaGenBcsrLinSOE::normRHS(void)
+double CudaBcsrLinSOE::normRHS(void)
 {
     syncBToHost();
     return m_B.Norm();
 }
 
-int CudaGenBcsrLinSOE::setCudaGenBcsrLinSolver(CudaGenBcsrLinSolver &newSolver)
+int CudaBcsrLinSOE::setCudaBcsrLinSolver(CudaBcsrLinSolver &newSolver)
 {
     newSolver.setLinearSOE(*this);
     return this->LinearSOE::setSolver(newSolver);
 }
 
 // Fill padded diagonals with a user-supplied value plus an automatically computed value
-int CudaGenBcsrLinSOE::fillPaddedDiagonals(double value, bool autoCompute) {
+int CudaBcsrLinSOE::fillPaddedDiagonals(double value, bool autoCompute) {
     if (m_blockSize == 1 || m_X.Size() == m_hostX.size()) {
         return 0;
     }
@@ -912,7 +912,7 @@ int CudaGenBcsrLinSOE::fillPaddedDiagonals(double value, bool autoCompute) {
     const size_t startRow = m_X.Size() % m_blockSize;
 
     if (startRow == 0) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::fillPaddedDiagonals() - "
+        opserr << "WARNING: CudaBcsrLinSOE::fillPaddedDiagonals() - "
                << "Invalid start row" << endln;
         return -1;
     }
@@ -945,7 +945,7 @@ int CudaGenBcsrLinSOE::fillPaddedDiagonals(double value, bool autoCompute) {
     return 0;
 }
 
-int CudaGenBcsrLinSOE::solve(void)
+int CudaBcsrLinSOE::solve(void)
 {
     // Quick sanity check
     if (m_X.Size() == 0 || isMatrixEmpty()) {
@@ -955,7 +955,7 @@ int CudaGenBcsrLinSOE::solve(void)
     // Fill diagonal entries in rows beyond the original size
     if (m_matrixStatus != MatrixStatus::UNCHANGED && m_paddingEnabled) {
         if (fillPaddedDiagonals(0.0, true) != 0) {
-            opserr << "WARNING: CudaGenBcsrLinSOE::solve() - "
+            opserr << "WARNING: CudaBcsrLinSOE::solve() - "
                    << "Failed to fill padded diagonals" << endln;
             return -1;
         }
@@ -971,7 +971,7 @@ int CudaGenBcsrLinSOE::solve(void)
     }
     
     // Get the cuda solver
-    CudaGenBcsrLinSolver* theCudaSolver = getCudaGenBcsrLinSolver();
+    CudaBcsrLinSolver* theCudaSolver = getCudaBcsrLinSolver();
     
     if (theCudaSolver != nullptr) {
         // Solve the system of equations
@@ -985,16 +985,16 @@ int CudaGenBcsrLinSOE::solve(void)
 
         return solverOk;
     } else {
-        opserr << "WARNING: CudaGenBcsrLinSOE::solve() - "
-               << "No CudaGenBcsrLinSolver available" << endln;
+        opserr << "WARNING: CudaBcsrLinSOE::solve() - "
+               << "No CudaBcsrLinSolver available" << endln;
         return -1;
     }
 }
 
-int CudaGenBcsrLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
+int CudaBcsrLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
 {
     if (isMatrixEmpty()) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::saveSparseA() - "
+        opserr << "WARNING: CudaBcsrLinSOE::saveSparseA() - "
                << "Matrix data is empty" << endln;
         return 0;
     }
@@ -1004,7 +1004,7 @@ int CudaGenBcsrLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
     // Pad matrix before printing
     if (m_matrixStatus != MatrixStatus::UNCHANGED && m_paddingEnabled) {
         if (fillPaddedDiagonals(0.0, true) != 0) {
-            opserr << "WARNING: CudaGenBcsrLinSOE::saveSparseA() - "
+            opserr << "WARNING: CudaBcsrLinSOE::saveSparseA() - "
                    << "Failed to fill padded diagonals" << endln;
             return -1;
         }
@@ -1059,7 +1059,7 @@ int CudaGenBcsrLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
     }
 
     if (nnz_written != paddedNnz) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::saveSparseA() - "
+        opserr << "WARNING: CudaBcsrLinSOE::saveSparseA() - "
                << "written nnz (" << nnz_written << ") != "
                << "actual nnz (" << paddedNnz << ")" << endln;
         return -1;
@@ -1068,12 +1068,12 @@ int CudaGenBcsrLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
     return 0;
 }
 
-int CudaGenBcsrLinSOE::sendSelf(int commitTag, Channel &theChannel)
+int CudaBcsrLinSOE::sendSelf(int commitTag, Channel &theChannel)
 {
     return 0;
 }
 
-int CudaGenBcsrLinSOE::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
+int CudaBcsrLinSOE::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
     return 0;
 }
@@ -1084,11 +1084,11 @@ int CudaGenBcsrLinSOE::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBr
  */
 
 // Estimate the optimal block size based on sparsity pattern efficiency
-int CudaGenBcsrLinSOE::estimateBlockSize(Graph &theGraph, int nnz, double efficiency)
+int CudaBcsrLinSOE::estimateBlockSize(Graph &theGraph, int nnz, double efficiency)
 {
     const int size = theGraph.getNumVertex();
     if (size < 0) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::estimateBlockSize() - "
+        opserr << "WARNING: CudaBcsrLinSOE::estimateBlockSize() - "
                << "size of soe < 0" << endln;
         return -1;
     }
@@ -1098,7 +1098,7 @@ int CudaGenBcsrLinSOE::estimateBlockSize(Graph &theGraph, int nnz, double effici
     }
 
     if (efficiency <= 0.0 || efficiency >= 1.0) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::estimateBlockSize() - "
+        opserr << "WARNING: CudaBcsrLinSOE::estimateBlockSize() - "
                << "efficiency must satisfy 0.0 < efficiency < 1.0" << endln;
         return DEFAULT_BLOCK_SIZE;
     }
@@ -1121,32 +1121,32 @@ int CudaGenBcsrLinSOE::estimateBlockSize(Graph &theGraph, int nnz, double effici
 }
 
 // Additional method implementations
-int CudaGenBcsrLinSOE::getBlockSize(void) const
+int CudaBcsrLinSOE::getBlockSize(void) const
 {
     return m_blockSize;
 }
 
-int CudaGenBcsrLinSOE::getNumRowBlocks(void) const
+int CudaBcsrLinSOE::getNumRowBlocks(void) const
 {
     return m_hostB.size() / m_blockSize;
 }
 
-int CudaGenBcsrLinSOE::getNumNonZeroBlocks(void) const
+int CudaBcsrLinSOE::getNumNonZeroBlocks(void) const
 {
     return m_hostCsrIndices.size() - getNumRowBlocks() - 1;
 }
 
-int CudaGenBcsrLinSOE::getNumNonZeroValues(void) const
+int CudaBcsrLinSOE::getNumNonZeroValues(void) const
 {
     return m_hostAValues.size();
 }
 
-CudaGenBcsrLinSOE::MatrixStatus CudaGenBcsrLinSOE::getMatrixStatus(void) const
+CudaBcsrLinSOE::MatrixStatus CudaBcsrLinSOE::getMatrixStatus(void) const
 {
     return m_matrixStatus;
 }
 
-void *CudaGenBcsrLinSOE::getCudaStream(void)
+void *CudaBcsrLinSOE::getCudaStream(void)
 {
     if (m_cudaStream == nullptr) {
         cudaCheckError(cudaStreamCreate(&m_cudaStream), "create SOE CUDA stream");
@@ -1156,38 +1156,38 @@ void *CudaGenBcsrLinSOE::getCudaStream(void)
 
 // set*PrimaryLocation: declare authority after an in-place write.
 // Prefer Host or Device; Both is reserved for sync* after a transfer.
-void CudaGenBcsrLinSOE::setBPrimaryLocation(DataLocation loc)
+void CudaBcsrLinSOE::setBPrimaryLocation(DataLocation loc)
 {
     m_bLoc = loc;
 }
 
-void CudaGenBcsrLinSOE::setXPrimaryLocation(DataLocation loc)
+void CudaBcsrLinSOE::setXPrimaryLocation(DataLocation loc)
 {
     m_xLoc = loc;
 }
 
-void CudaGenBcsrLinSOE::setAValuesPrimaryLocation(DataLocation loc)
+void CudaBcsrLinSOE::setAValuesPrimaryLocation(DataLocation loc)
 {
     m_aLoc = loc;
 }
 
-void CudaGenBcsrLinSOE::setAIndicesPrimaryLocation(DataLocation loc)
+void CudaBcsrLinSOE::setAIndicesPrimaryLocation(DataLocation loc)
 {
     m_aIndicesLoc = loc;
 }
 
-bool CudaGenBcsrLinSOE::isMatrixEmpty(void) const
+bool CudaBcsrLinSOE::isMatrixEmpty(void) const
 {
     return m_hostAValues.size() == 0 || m_hostCsrIndices.size() <= 1;
 }
 
-CudaGenBcsrLinSolver* CudaGenBcsrLinSOE::getCudaGenBcsrLinSolver(void)
+CudaBcsrLinSolver* CudaBcsrLinSOE::getCudaBcsrLinSolver(void)
 {
-    return dynamic_cast<CudaGenBcsrLinSolver*>(this->LinearSOE::getSolver());
+    return dynamic_cast<CudaBcsrLinSolver*>(this->LinearSOE::getSolver());
 }
 
 int
-CudaGenBcsrLinSOE::ensureSpMVOperator(void)
+CudaBcsrLinSOE::ensureSpMVOperator(void)
 {
     const int numRows = getNumRowBlocks();
     if (numRows <= 0) {
@@ -1202,7 +1202,7 @@ CudaGenBcsrLinSOE::ensureSpMVOperator(void)
     const int *rowPtrs = getDeviceRowPtrs();
     const int *colIndices = getDeviceColIndices();
     if (rowPtrs == nullptr || colIndices == nullptr) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::ensureSpMVOperator() - null CSR indices\n";
+        opserr << "WARNING: CudaBcsrLinSOE::ensureSpMVOperator() - null CSR indices\n";
         return -1;
     }
 
@@ -1227,11 +1227,11 @@ CudaGenBcsrLinSOE::ensureSpMVOperator(void)
 }
 
 int
-CudaGenBcsrLinSOE::formAp(const Vector &p, Vector &Ap)
+CudaBcsrLinSOE::formAp(const Vector &p, Vector &Ap)
 {
     const int n = getNumEqn();
     if (p.Size() != n || Ap.Size() != n) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::formAp() - vector size mismatch\n";
+        opserr << "WARNING: CudaBcsrLinSOE::formAp() - vector size mismatch\n";
         return -1;
     }
     if (n <= 0) {
@@ -1250,7 +1250,7 @@ CudaGenBcsrLinSOE::formAp(const Vector &p, Vector &Ap)
     void *deviceP = getDeviceSpmvP();
     void *deviceAp = getDeviceSpmvY();
     if (deviceA == nullptr || deviceP == nullptr || deviceAp == nullptr) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::formAp() - null device pointer(s)\n";
+        opserr << "WARNING: CudaBcsrLinSOE::formAp() - null device pointer(s)\n";
         return -1;
     }
 
@@ -1258,7 +1258,7 @@ CudaGenBcsrLinSOE::formAp(const Vector &p, Vector &Ap)
         return -1;
     }
     if (m_spmvBackend->spmv(deviceP, deviceAp, 1.0, 0.0) != 0) {
-        opserr << "WARNING: CudaGenBcsrLinSOE::formAp() - SpMV failed\n";
+        opserr << "WARNING: CudaBcsrLinSOE::formAp() - SpMV failed\n";
         return -1;
     }
 
@@ -1267,10 +1267,10 @@ CudaGenBcsrLinSOE::formAp(const Vector &p, Vector &Ap)
 }
 
 LinearSOE *
-CudaGenBcsrLinSOE::getCopy(void) const
+CudaBcsrLinSOE::getCopy(void) const
 {
-    const CudaGenBcsrLinSolver *baseSolver =
-        dynamic_cast<const CudaGenBcsrLinSolver *>(this->LinearSOE::getSolver());
+    const CudaBcsrLinSolver *baseSolver =
+        dynamic_cast<const CudaBcsrLinSolver *>(this->LinearSOE::getSolver());
     if (baseSolver == nullptr) {
         return nullptr;
     }
@@ -1280,14 +1280,14 @@ CudaGenBcsrLinSOE::getCopy(void) const
         return nullptr;
     }
 
-    CudaGenBcsrLinSolver *cudaSolver = dynamic_cast<CudaGenBcsrLinSolver *>(newSolver);
+    CudaBcsrLinSolver *cudaSolver = dynamic_cast<CudaBcsrLinSolver *>(newSolver);
     if (cudaSolver == nullptr) {
         delete newSolver;
         return nullptr;
     }
 
     const bool symmetricStorage = isSymmetricStorage();
-    CudaGenBcsrLinSOE *out = nullptr;
+    CudaBcsrLinSOE *out = nullptr;
     switch (getPrecision()) {
         case CudaPrecision::dDDI:
             out = createDouble(*cudaSolver, m_blockSize, m_paddingEnabled, m_verbose, symmetricStorage);
@@ -1313,64 +1313,64 @@ CudaGenBcsrLinSOE::getCopy(void) const
 }
 
 // Factory method implementations
-CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createDouble(
-    CudaGenBcsrLinSolver &theSolver, 
+CudaBcsrLinSOE* CudaBcsrLinSOE::createDouble(
+    CudaBcsrLinSolver &theSolver, 
     int blockSize, 
     bool paddingEnabled,
     bool verbose,
     bool symmetricStorage
 ) {
-    return new CudaGenBcsrLinSOEImpl<double, double>(
+    return new CudaBcsrLinSOEImpl<double, double>(
         theSolver, blockSize, paddingEnabled, verbose, symmetricStorage
     );
 }
 
-CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloat(
-    CudaGenBcsrLinSolver &theSolver,
+CudaBcsrLinSOE* CudaBcsrLinSOE::createFloat(
+    CudaBcsrLinSolver &theSolver,
     int blockSize, 
     bool paddingEnabled,
     bool verbose,
     bool symmetricStorage
 ) {
-    return new CudaGenBcsrLinSOEImpl<float, float>(
+    return new CudaBcsrLinSOEImpl<float, float>(
         theSolver, blockSize, paddingEnabled, verbose, symmetricStorage
     );
 }
 
-CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createDoubleFloat(
-    CudaGenBcsrLinSolver &theSolver,
+CudaBcsrLinSOE* CudaBcsrLinSOE::createDoubleFloat(
+    CudaBcsrLinSolver &theSolver,
     int blockSize, 
     bool paddingEnabled,
     bool verbose,
     bool symmetricStorage
 ) {
-    return new CudaGenBcsrLinSOEImpl<double, float>(
+    return new CudaBcsrLinSOEImpl<double, float>(
         theSolver, blockSize, paddingEnabled, verbose, symmetricStorage
     );
 }
 
-CudaGenBcsrLinSOE* CudaGenBcsrLinSOE::createFloatDouble(
-    CudaGenBcsrLinSolver &theSolver,
+CudaBcsrLinSOE* CudaBcsrLinSOE::createFloatDouble(
+    CudaBcsrLinSolver &theSolver,
     int blockSize, 
     bool paddingEnabled,
     bool verbose,
     bool symmetricStorage
 ) {
-    return new CudaGenBcsrLinSOEImpl<float, double>(
+    return new CudaBcsrLinSOEImpl<float, double>(
         theSolver, blockSize, paddingEnabled, verbose, symmetricStorage
     );
 }
 
-LinearSOE* CudaGenBcsrLinSOE::createCudaLinearSOE(int classTag) {
+LinearSOE* CudaBcsrLinSOE::createCudaLinearSOE(int classTag) {
     switch(classTag) {
         case LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE:
-            return new CudaGenBcsrLinSOEImpl<double, double>();  // dDDI
+            return new CudaBcsrLinSOEImpl<double, double>();  // dDDI
         case LinSOE_TAGS_CudaBcsrLinSOE_FLOAT:
-            return new CudaGenBcsrLinSOEImpl<float, float>();    // dFFI
+            return new CudaBcsrLinSOEImpl<float, float>();    // dFFI
         case LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE_FLOAT:
-            return new CudaGenBcsrLinSOEImpl<double, float>();   // dDFI
+            return new CudaBcsrLinSOEImpl<double, float>();   // dDFI
         case LinSOE_TAGS_CudaBcsrLinSOE_FLOAT_DOUBLE:
-            return new CudaGenBcsrLinSOEImpl<float, double>();   // dFDI
+            return new CudaBcsrLinSOEImpl<float, double>();   // dFDI
         default:
             return nullptr;
     }

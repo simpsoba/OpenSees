@@ -18,20 +18,20 @@
 **                                                                    **
 ** ****************************************************************** */
                                                                         
-// $Source: OpenSees/SRC/system_of_eqn/linearSOE/sparseCuda/CudaGenBcsrLinSOE.h
+// $Source: OpenSees/SRC/system_of_eqn/linearSOE/sparseCuda/CudaBcsrLinSOE.h
                                                                         
 // Written: gaaraujo 
 // Created: 08/2025
 //
 // Description: This file contains the class definition for 
-// CudaGenBcsrLinSOE. It stores the sparse matrix A in a fashion
-// required by the CudaGenBcsrLinSolver object.
-// "Gen" denotes a general interface that supports both full and
-// symmetric (lower-triangle) storage; solvers can query and exploit symmetry.
+// CudaBcsrLinSOE. It stores the sparse matrix A in a fashion
+// required by the CudaBcsrLinSolver object.
+// Supports full and symmetric (lower-triangle) storage; solvers can query
+// and exploit symmetry via MatrixStorageMode / backend matrix type.
 //
 // This is the ONLY public interface users should interact with.
 // We use type erasure to hide the template implementation details from users.
-// The actual template code lives in CudaGenBcsrLinSOEImpl.h, which users never see.
+// The actual template code lives in CudaBcsrLinSOEImpl.h, which users never see.
 //
 // Design contract:
 //   - This base class owns host-side CSR/BCSR assembly (graph -> sparse structure, addA/addB).
@@ -39,8 +39,8 @@
 //   - A new backend (e.g. ROCm) is added by implementing a new Impl subclass.
 //
 
-#ifndef CudaGenBcsrLinSOE_h
-#define CudaGenBcsrLinSOE_h
+#ifndef CudaBcsrLinSOE_h
+#define CudaBcsrLinSOE_h
 
 // OpenSees includes
 #include <LinearSOE.h>
@@ -49,7 +49,7 @@
 #include "CudaUtils.h"
 
 #ifndef _CUDA
-#error "CudaGenBcsrLinSOE requires a CUDA build"
+#error "CudaBcsrLinSOE requires a CUDA build"
 #endif
 
 // CUDA includes
@@ -62,7 +62,7 @@
 #include <thrust/mr/allocator.h>
 
 // Forward declarations
-class CudaGenBcsrLinSolver;
+class CudaBcsrLinSolver;
 class CuSparseBackend;
 
 // Pinned memory allocators for improved host-device transfer performance
@@ -74,7 +74,7 @@ using pinned_allocator = thrust::mr::stateless_resource_allocator<T, pinned_mr>;
 template <typename T>
 using pinned_host_vector = thrust::host_vector<T, pinned_allocator<T>>;
 
-class CudaGenBcsrLinSOE : public LinearSOE
+class CudaBcsrLinSOE : public LinearSOE
 {
 public:
     // Constants for block size limits and efficiency thresholds
@@ -89,27 +89,27 @@ public:
         SYMMETRIC_LOWER    // Store only lower triangle; addA(i,j) and addA(j,i) both update (max(i,j), min(i,j))
     };
 
-    CudaGenBcsrLinSOE(int classTag, CudaGenBcsrLinSolver &theSolver, 
+    CudaBcsrLinSOE(int classTag, CudaBcsrLinSolver &theSolver, 
                       int blockSize = DEFAULT_BLOCK_SIZE, 
                       bool paddingEnabled = true,
                       bool verbose = false,
                       bool symmetricStorage = false);
-    CudaGenBcsrLinSOE(int classTag);
+    CudaBcsrLinSOE(int classTag);
 
-    ~CudaGenBcsrLinSOE();
+    ~CudaBcsrLinSOE();
     
     // Factory methods - no templates exposed to users
     // Uniform precision modes (matrix and vector types match)
-    static CudaGenBcsrLinSOE* createDouble(
-        CudaGenBcsrLinSolver &theSolver, 
+    static CudaBcsrLinSOE* createDouble(
+        CudaBcsrLinSolver &theSolver, 
         int blockSize = DEFAULT_BLOCK_SIZE, 
         bool paddingEnabled = true,
         bool verbose = false,
         bool symmetricStorage = false
     );
     
-    static CudaGenBcsrLinSOE* createFloat(
-        CudaGenBcsrLinSolver &theSolver,
+    static CudaBcsrLinSOE* createFloat(
+        CudaBcsrLinSolver &theSolver,
         int blockSize = DEFAULT_BLOCK_SIZE, 
         bool paddingEnabled = true,
         bool verbose = false,
@@ -117,16 +117,16 @@ public:
     );
     
     // Mixed-precision modes (available, but most solvers don't support these yet)
-    static CudaGenBcsrLinSOE* createDoubleFloat(
-        CudaGenBcsrLinSolver &theSolver,
+    static CudaBcsrLinSOE* createDoubleFloat(
+        CudaBcsrLinSolver &theSolver,
         int blockSize = DEFAULT_BLOCK_SIZE, 
         bool paddingEnabled = true,
         bool verbose = false,
         bool symmetricStorage = false
     );
     
-    static CudaGenBcsrLinSOE* createFloatDouble(
-        CudaGenBcsrLinSolver &theSolver,
+    static CudaBcsrLinSOE* createFloatDouble(
+        CudaBcsrLinSolver &theSolver,
         int blockSize = DEFAULT_BLOCK_SIZE, 
         bool paddingEnabled = true,
         bool verbose = false,
@@ -160,9 +160,9 @@ public:
     int formAp(const Vector &p, Vector &Ap) override;
     LinearSOE *getCopy(void) const override;
     
-    // Set and get the associated CudaGenBcsrLinSolver object
-    int setCudaGenBcsrLinSolver(CudaGenBcsrLinSolver &newSolver);
-    CudaGenBcsrLinSolver* getCudaGenBcsrLinSolver(void);
+    // Set and get the associated CudaBcsrLinSolver object
+    int setCudaBcsrLinSolver(CudaBcsrLinSolver &newSolver);
+    CudaBcsrLinSolver* getCudaBcsrLinSolver(void);
 
     // Other getters
     int getBlockSize(void) const;
@@ -220,7 +220,7 @@ public:
     int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker) override;
 
     // Friend declarations
-    friend class CudaGenBcsrLinSolver;
+    friend class CudaBcsrLinSolver;
     
     // Required methods for subclasses
     // These are pure virtual methods that provide type-erased access to device data without exposing the template nature.
@@ -316,13 +316,13 @@ protected:
     virtual void downloadSpmvYToHost(Vector &Ap, int n) = 0;
 };
 
-inline OPS_Stream& operator<<(OPS_Stream& os, CudaGenBcsrLinSOE::MatrixStatus status) {
+inline OPS_Stream& operator<<(OPS_Stream& os, CudaBcsrLinSOE::MatrixStatus status) {
     switch (status) {
-        case CudaGenBcsrLinSOE::MatrixStatus::UNCHANGED:
+        case CudaBcsrLinSOE::MatrixStatus::UNCHANGED:
             return os << "UNCHANGED";
-        case CudaGenBcsrLinSOE::MatrixStatus::COEFFICIENTS_CHANGED:
+        case CudaBcsrLinSOE::MatrixStatus::COEFFICIENTS_CHANGED:
             return os << "COEFFICIENTS_CHANGED";
-        case CudaGenBcsrLinSOE::MatrixStatus::STRUCTURE_CHANGED:
+        case CudaBcsrLinSOE::MatrixStatus::STRUCTURE_CHANGED:
             return os << "STRUCTURE_CHANGED";
         default:
             return os << "UNKNOWN";

@@ -18,26 +18,26 @@
 **                                                                    **
 ** ****************************************************************** */
                                                                         
-// $Source: OpenSees/SRC/system_of_eqn/linearSOE/sparseCuda/CudaGenBcsrLinSOEImpl.h
+// $Source: OpenSees/SRC/system_of_eqn/linearSOE/sparseCuda/CudaBcsrLinSOEImpl.h
                                                                         
 // Written: gaaraujo 
 // Created: 08/2025
 //
 // Description: This file contains the internal template implementation for 
-// CudaGenBcsrLinSOE. This is an internal implementation detail and should
-// not be included by users of the CudaGenBcsrLinSOE interface.
+// CudaBcsrLinSOE. This is an internal implementation detail and should
+// not be included by users of the CudaBcsrLinSOE interface.
 //
 
-#ifndef CudaGenBcsrLinSOEImpl_h
-#define CudaGenBcsrLinSOEImpl_h
+#ifndef CudaBcsrLinSOEImpl_h
+#define CudaBcsrLinSOEImpl_h
 
 #ifndef _CUDA
-#error "CudaGenBcsrLinSOEImpl.h requires a CUDA build"
+#error "CudaBcsrLinSOEImpl.h requires a CUDA build"
 #endif
 
 // OpenSees includes
-#include <CudaGenBcsrLinSOE.h>
-#include <CudaGenBcsrLinSolver.h>
+#include <CudaBcsrLinSOE.h>
+#include <CudaBcsrLinSolver.h>
 
 // CUDA includes
 #include <cuda_runtime.h>
@@ -53,37 +53,37 @@ using thrust::raw_pointer_cast;
 #include <type_traits>
 
 // Forward declarations
-class CudaGenBcsrLinSolver;
+class CudaBcsrLinSolver;
 
 // This template class provides the actual implementation for different data types.
-// It inherits from CudaGenBcsrLinSOE and implements all the pure virtual methods.
+// It inherits from CudaBcsrLinSOE and implements all the pure virtual methods.
 // The template parameters allow us to specialize matrix and vector types independently:
 //   - MatrixType: Type for matrix values (A)
 //   - VectorType: Type for vectors (x, b)
 // 
 // Currently instantiated combinations:
-//   - CudaGenBcsrLinSOEImpl<double, double> (dDDI) - uniform double precision
-//   - CudaGenBcsrLinSOEImpl<float, float>   (dFFI) - uniform float precision
+//   - CudaBcsrLinSOEImpl<double, double> (dDDI) - uniform double precision
+//   - CudaBcsrLinSOEImpl<float, float>   (dFFI) - uniform float precision
 // 
 // Additional combinations can be instantiated when needed:
-//   - CudaGenBcsrLinSOEImpl<double, float>  (dDFI) - double matrix, float vectors
-//   - CudaGenBcsrLinSOEImpl<float, double>  (dFDI) - float matrix, double vectors
+//   - CudaBcsrLinSOEImpl<double, float>  (dDFI) - double matrix, float vectors
+//   - CudaBcsrLinSOEImpl<float, double>  (dFDI) - float matrix, double vectors
 // 
 // Note: Whether a precision mode is "supported" depends on the solver, not the SOE.
 //       The SOE simply provides the data in the requested format.
 template<typename MatrixType, typename VectorType = MatrixType>
-class CudaGenBcsrLinSOEImpl : public CudaGenBcsrLinSOE
+class CudaBcsrLinSOEImpl : public CudaBcsrLinSOE
 {
 public:
     // Constructor with solver
-    explicit CudaGenBcsrLinSOEImpl(
-        CudaGenBcsrLinSolver &theSolver, 
+    explicit CudaBcsrLinSOEImpl(
+        CudaBcsrLinSolver &theSolver, 
         int blockSize = DEFAULT_BLOCK_SIZE, 
         bool paddingEnabled = true,
         bool verbose = false,
         bool symmetricStorage = false
     )
-    : CudaGenBcsrLinSOE(CudaGenBcsrLinSOEImpl<MatrixType, VectorType>::getClassTagForType(), theSolver, blockSize, paddingEnabled, verbose, symmetricStorage),
+    : CudaBcsrLinSOE(CudaBcsrLinSOEImpl<MatrixType, VectorType>::getClassTagForType(), theSolver, blockSize, paddingEnabled, verbose, symmetricStorage),
       m_deviceAValues(), m_deviceX(), m_deviceB(), m_deviceCsrIndices()
     {
         // Now that the derived class is fully constructed, we can safely call setLinearSOE
@@ -91,25 +91,25 @@ public:
     }
     
     // Default constructor
-    CudaGenBcsrLinSOEImpl()
-    : CudaGenBcsrLinSOE(CudaGenBcsrLinSOEImpl<MatrixType, VectorType>::getClassTagForType()),
+    CudaBcsrLinSOEImpl()
+    : CudaBcsrLinSOE(CudaBcsrLinSOEImpl<MatrixType, VectorType>::getClassTagForType()),
       m_deviceAValues(), m_deviceX(), m_deviceB(), m_deviceCsrIndices()
     {
         /* Nothing to do here */
     }
 
     // Destructor
-    ~CudaGenBcsrLinSOEImpl() = default;
+    ~CudaBcsrLinSOEImpl() = default;
 
     // Disable copy constructor and assignment
-    CudaGenBcsrLinSOEImpl(const CudaGenBcsrLinSOEImpl&) = delete;
-    CudaGenBcsrLinSOEImpl& operator=(const CudaGenBcsrLinSOEImpl&) = delete;
+    CudaBcsrLinSOEImpl(const CudaBcsrLinSOEImpl&) = delete;
+    CudaBcsrLinSOEImpl& operator=(const CudaBcsrLinSOEImpl&) = delete;
 
     // Move constructor and assignment
-    CudaGenBcsrLinSOEImpl(CudaGenBcsrLinSOEImpl&&) = default;
-    CudaGenBcsrLinSOEImpl& operator=(CudaGenBcsrLinSOEImpl&&) = default;
+    CudaBcsrLinSOEImpl(CudaBcsrLinSOEImpl&&) = default;
+    CudaBcsrLinSOEImpl& operator=(CudaBcsrLinSOEImpl&&) = default;
 
-    // Required methods for CudaGenBcsrLinSOE subclasses
+    // Required methods for CudaBcsrLinSOE subclasses
     // These methods provide type-erased access to device data.
     // The void* return type allows the solver to work with any data type without knowing the specifics.
     const void* getDeviceAValues(void) const noexcept override {
@@ -156,25 +156,25 @@ public:
     // Lazy sync: guard + host/device copy in one method.
     inline void syncBToDevice(void) override {
         if (this->m_bLoc == DataLocation::Host) {
-            m_deviceB = this->CudaGenBcsrLinSOE::m_hostB;
-            m_deviceX.resize(this->CudaGenBcsrLinSOE::m_hostX.size());
+            m_deviceB = this->CudaBcsrLinSOE::m_hostB;
+            m_deviceX.resize(this->CudaBcsrLinSOE::m_hostX.size());
             this->m_bLoc = DataLocation::Both;
         }
     }
 
     inline void syncBToHost(void) override {
         if (this->m_bLoc == DataLocation::Device) {
-            this->CudaGenBcsrLinSOE::m_hostB = m_deviceB;
+            this->CudaBcsrLinSOE::m_hostB = m_deviceB;
             this->m_bLoc = DataLocation::Both;
         }
     }
 
     inline void syncXToHost(void) override {
         if (this->m_xLoc == DataLocation::Device) {
-            this->CudaGenBcsrLinSOE::m_hostX = m_deviceX;
-            this->CudaGenBcsrLinSOE::m_X.setData(
-                raw_pointer_cast(this->CudaGenBcsrLinSOE::m_hostX.data()),
-                this->CudaGenBcsrLinSOE::m_X.Size()
+            this->CudaBcsrLinSOE::m_hostX = m_deviceX;
+            this->CudaBcsrLinSOE::m_X.setData(
+                raw_pointer_cast(this->CudaBcsrLinSOE::m_hostX.data()),
+                this->CudaBcsrLinSOE::m_X.Size()
             );
             this->m_xLoc = DataLocation::Both;
         }
@@ -182,33 +182,33 @@ public:
 
     inline void syncAValuesToDevice(void) override {
         if (this->m_aLoc == DataLocation::Host) {
-            m_deviceAValues = this->CudaGenBcsrLinSOE::m_hostAValues;
+            m_deviceAValues = this->CudaBcsrLinSOE::m_hostAValues;
             this->m_aLoc = DataLocation::Both;
         }
     }
 
     inline void syncAValuesToHost(void) override {
         if (this->m_aLoc == DataLocation::Device) {
-            this->CudaGenBcsrLinSOE::m_hostAValues = m_deviceAValues;
+            this->CudaBcsrLinSOE::m_hostAValues = m_deviceAValues;
             this->m_aLoc = DataLocation::Both;
         }
     }
 
     inline void syncIndicesToDevice(void) override {
         if (this->m_aIndicesLoc == DataLocation::Host) {
-            m_deviceCsrIndices = this->CudaGenBcsrLinSOE::m_hostCsrIndices;
+            m_deviceCsrIndices = this->CudaBcsrLinSOE::m_hostCsrIndices;
             this->m_aIndicesLoc = DataLocation::Both;
         }
     }
 
     inline void ensureDeviceVectorSizes(void) override {
-        const size_t bSize = static_cast<size_t>(this->CudaGenBcsrLinSOE::m_hostB.size());
-        const size_t xSize = static_cast<size_t>(this->CudaGenBcsrLinSOE::m_hostX.size());
-        const size_t aSize = this->CudaGenBcsrLinSOE::m_hostAValues.size();
+        const size_t bSize = static_cast<size_t>(this->CudaBcsrLinSOE::m_hostB.size());
+        const size_t xSize = static_cast<size_t>(this->CudaBcsrLinSOE::m_hostX.size());
+        const size_t aSize = this->CudaBcsrLinSOE::m_hostAValues.size();
         m_deviceB.resize(bSize);
         m_deviceX.resize(xSize);
         m_deviceAValues.resize(aSize);
-        m_deviceCsrIndices.resize(this->CudaGenBcsrLinSOE::m_hostCsrIndices.size());
+        m_deviceCsrIndices.resize(this->CudaBcsrLinSOE::m_hostCsrIndices.size());
     }
 
     const int* getDeviceRowPtrs(void) const override {
@@ -230,7 +230,7 @@ public:
     }
 
     void ensureSpmvScratchSizes(void) override {
-        const size_t n = this->CudaGenBcsrLinSOE::m_hostB.size();
+        const size_t n = this->CudaBcsrLinSOE::m_hostB.size();
         m_deviceSpmvP.resize(n);
         m_deviceSpmvY.resize(n);
     }
@@ -324,9 +324,9 @@ private:
 // Explicit template instantiations
 // All four precision modes are instantiated and ready to use.
 // Solvers validate which modes they support at construction/connection time.
-template class CudaGenBcsrLinSOEImpl<double, double>;  // dDDI - uniform double precision
-template class CudaGenBcsrLinSOEImpl<float, float>;    // dFFI - uniform float precision
-template class CudaGenBcsrLinSOEImpl<double, float>;   // dDFI - double matrix, float vectors (mixed)
-template class CudaGenBcsrLinSOEImpl<float, double>;   // dFDI - float matrix, double vectors (mixed)
+template class CudaBcsrLinSOEImpl<double, double>;  // dDDI - uniform double precision
+template class CudaBcsrLinSOEImpl<float, float>;    // dFFI - uniform float precision
+template class CudaBcsrLinSOEImpl<double, float>;   // dDFI - double matrix, float vectors (mixed)
+template class CudaBcsrLinSOEImpl<float, double>;   // dFDI - float matrix, double vectors (mixed)
 
 #endif

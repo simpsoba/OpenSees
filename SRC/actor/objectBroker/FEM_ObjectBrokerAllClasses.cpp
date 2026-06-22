@@ -707,7 +707,7 @@
 #include "LinearSOE.h"
 #include "DomainSolver.h"
 #ifdef _CUDA
-#include "sparseCUDA/CudaGenBcsrLinSOE.h"
+#include "sparseCUDA/CudaBcsrLinSOE.h"
 #endif
 #include "fullGEN/FullGenLinSOE.h"
 #include "bandGEN/BandGenLinSOE.h"
@@ -3234,7 +3234,7 @@ FEM_ObjectBrokerAllClasses::getNewLinearSOE(int classTagSOE)
     case LinSOE_TAGS_CudaBcsrLinSOE_FLOAT:
     case LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE_FLOAT:
     case LinSOE_TAGS_CudaBcsrLinSOE_FLOAT_DOUBLE:
-        theSOE = CudaGenBcsrLinSOE::createCudaLinearSOE(classTagSOE);
+        theSOE = CudaBcsrLinSOE::createCudaLinearSOE(classTagSOE);
         if (theSOE != nullptr) return theSOE;
         break;
 #endif // _CUDA

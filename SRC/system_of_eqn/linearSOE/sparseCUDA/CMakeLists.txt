@@ -4,7 +4,7 @@
 #                Pacific Earthquake Engineering Research Center
 #
 # GPU sparse SOE layout (see root CMakeLists.txt):
-#   OPS_Cuda          - CudaGenBcsrLinSOE / CudaGenBcsrLinSolver (base SOE framework)
+#   OPS_Cuda          - CudaBcsrLinSOE / CudaBcsrLinSolver (base SOE framework)
 #   OPS_Cuda_AmgX     - AmgXLinSolver (optional, when AMGX is found)
 #   OPS_Cuda_CuDSS    - CuDSSBackend, CudaDirectSparseSolver, CudaExplicitAlpha (optional, when cuDSS is found)
 #   OPS_Cuda_Parallel - distributed assembly SOEs for OpenSeesSP/MP (future)
@@ -16,8 +16,8 @@
 if(TARGET OPS_Cuda)
   target_sources(OPS_Cuda
     PUBLIC
-      CudaGenBcsrLinSOE.h
-      CudaGenBcsrLinSolver.h
+      CudaBcsrLinSOE.h
+      CudaBcsrLinSolver.h
       CuSparseBackend.h
   )
 

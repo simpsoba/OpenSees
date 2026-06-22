@@ -24,7 +24,7 @@
 // Created: 08/2025
 //
 // Description: This file contains the class definition for AmgXLinSolver.
-// An AmgXLinSolver object can be constructed to solve a CudaGenBcsrLinSOE
+// An AmgXLinSolver object can be constructed to solve a CudaBcsrLinSOE
 // object. It obtains the solution by making calls to the
 // AmgX library developed by NVIDIA.
 //
@@ -44,7 +44,7 @@
 #define AmgXLinSolver_h
 
 // OpenSees includes
-#include <CudaGenBcsrLinSolver.h>
+#include <CudaBcsrLinSolver.h>
 #include <OPS_Stream.h>
 
 // C++ includes
@@ -61,7 +61,7 @@ void AmgXCallback(const char* msg, int length);
 }
 #endif // __cplusplus
 
-class AmgXLinSolver : public CudaGenBcsrLinSolver
+class AmgXLinSolver : public CudaBcsrLinSolver
 {
 public:
     // Constructor with default config
@@ -87,7 +87,7 @@ public:
     int setSize(void) override;
     int getNumIterations(void);
     double getResidualNorm(void);
-    int setLinearSOE(CudaGenBcsrLinSOE &theSOE) override;
+    int setLinearSOE(CudaBcsrLinSOE &theSOE) override;
     
     // Output stream
     static void setCallbackStream(OPS_Stream* output);

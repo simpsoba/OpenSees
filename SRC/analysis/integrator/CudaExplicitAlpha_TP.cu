@@ -23,7 +23,7 @@
 // CUDA implementation: Gustavo A. Araujo R. (garaujor@stanford.edu)
 //
 // Description: GPU explicit Kolay-Ricles trapezoidal-rule (TP) integrator for
-// CudaGenBcsrLinSOE + cuDSS, based on the CPU ExplicitAlpha_TP family.
+// CudaBcsrLinSOE + cuDSS, based on the CPU ExplicitAlpha_TP family.
 //
 // Reference: Kolay, C. and J. Ricles (2014). "Development of a family of
 // unconditionally stable explicit direct integration algorithms with
@@ -31,7 +31,7 @@
 // Structural Dynamics, 43(9):1361-1380.
 
 #include <CudaExplicitAlpha_TP.h>
-#include <CudaGenBcsrLinSOE.h>
+#include <CudaBcsrLinSOE.h>
 #include <AnalysisModel.h>
 #include <Channel.h>
 #include <DOF_Group.h>
@@ -56,7 +56,7 @@ using thrust::raw_pointer_cast;
 
 using namespace CudaUtils;
 
-// Kolay-Ricles trapezoidal-rule (TP) integrator on GPU (CudaGenBcsrLinSOE + cuDSS).
+// Kolay-Ricles trapezoidal-rule (TP) integrator on GPU (CudaBcsrLinSOE + cuDSS).
 // Unlike the midpoint CUDA path, TP uses two residual passes per step and a blended Put vector.
 // Device scalar type T follows SOE precision (dDDI=double, dFFI=float); host stays double.
 
@@ -123,16 +123,16 @@ struct CudaExplicitAlpha_TP::ImplBase {
     virtual void destroySolvers() = 0;
     virtual void shutdown() = 0;
     virtual void ensureAlphaBuffers(int alphaNumRhs) = 0;
-    virtual int formOperators(CudaExplicitAlpha_TP *integrator, CudaGenBcsrLinSOE *cudaSOE) = 0;
+    virtual int formOperators(CudaExplicitAlpha_TP *integrator, CudaBcsrLinSOE *cudaSOE) = 0;
     virtual HostMotionPtrs ensureHostMotionBuffers(int n) = 0;
     virtual int newStepPredictor(CudaExplicitAlpha_TP *integrator) = 0;
-    virtual int formUnbalanceFromPut(CudaGenBcsrLinSOE *cudaSOE, bool alphaClose) = 0;
-    virtual int updateState(CudaGenBcsrLinSOE *cudaSOE, bool incrementalAccel, double alphaF) = 0;
+    virtual int formUnbalanceFromPut(CudaBcsrLinSOE *cudaSOE, bool alphaClose) = 0;
+    virtual int updateState(CudaBcsrLinSOE *cudaSOE, bool incrementalAccel, double alphaF) = 0;
     virtual void zeroState() = 0;
     virtual int getSize() const = 0;
     virtual double *getPutHostPtr() = 0;
-    virtual int capturePutFromDeviceB(CudaGenBcsrLinSOE *cudaSOE) = 0;
-    virtual void blendPutFromHostB(CudaGenBcsrLinSOE *cudaSOE, double oneMinusAlphaF, double alphaF) = 0;
+    virtual int capturePutFromDeviceB(CudaBcsrLinSOE *cudaSOE) = 0;
+    virtual void blendPutFromHostB(CudaBcsrLinSOE *cudaSOE, double oneMinusAlphaF, double alphaF) = 0;
 };
 
 template<typename T>
@@ -261,7 +261,7 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         spmv.sharedPattern = sharedPattern;
     }
 
-    int bindStream(CudaGenBcsrLinSOE *cudaSOE)
+    int bindStream(CudaBcsrLinSOE *cudaSOE)
     {
         if (cudaSOE == nullptr) {
             return -1;
@@ -304,7 +304,7 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         }
     }
 
-    int bindSharedStructure(CudaGenBcsrLinSOE *soe)
+    int bindSharedStructure(CudaBcsrLinSOE *soe)
     {
         // Reuse one CSR pattern for matM, matAlpha, and matA (values differ).
         const int nnz = soe->getNumNonZeroValues();
@@ -343,7 +343,7 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
     int applyM(const T *x, T *y) { return matM->spmv(x, y); }
 
     // Build/refactor GPU operators used by newStepPredictor() and formUnbalanceFromPut().
-    int formOperators(CudaExplicitAlpha_TP *integrator, CudaGenBcsrLinSOE *cudaSOE) override
+    int formOperators(CudaExplicitAlpha_TP *integrator, CudaBcsrLinSOE *cudaSOE) override
     {
         const double bdt2 = integrator->beta * integrator->deltaT * integrator->deltaT;
         const double gdt = integrator->gamma * integrator->deltaT;
@@ -470,7 +470,7 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
     double *getPutHostPtr() override { return raw_pointer_cast(h_put.data()); }
 
     // Put <- B^(1): sync SOE B to device and copy into d_put (B is overwritten in pass 2).
-    int capturePutFromDeviceB(CudaGenBcsrLinSOE *cudaSOE) override
+    int capturePutFromDeviceB(CudaBcsrLinSOE *cudaSOE) override
     {
         if (bindStream(cudaSOE) != 0) {
             return -1;
@@ -488,7 +488,7 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         return 0;
     }
 
-    void blendPutFromHostB(CudaGenBcsrLinSOE *cudaSOE, double oneMinusAlphaF, double alphaF) override
+    void blendPutFromHostB(CudaBcsrLinSOE *cudaSOE, double oneMinusAlphaF, double alphaF) override
     {
         if (bindStream(cudaSOE) != 0) {
             return;
@@ -504,7 +504,7 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
     }
 
     // CudaExplicitAlpha_TP::formUnbalance() (from Linear::solveCurrentStep): B <- Put or B <- alpha * M^{-1} * Put.
-    int formUnbalanceFromPut(CudaGenBcsrLinSOE *cudaSOE, bool alphaClose) override
+    int formUnbalanceFromPut(CudaBcsrLinSOE *cudaSOE, bool alphaClose) override
     {
         if (bindStream(cudaSOE) != 0) {
             return -1;
@@ -524,12 +524,12 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         }
         void *b = cudaSOE->getDeviceB();
         matAlpha->spmv(w2, b);  // B = alpha * M^{-1} * Put
-        cudaSOE->setBPrimaryLocation(CudaGenBcsrLinSOE::DataLocation::Device);
+        cudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Device);
         return 0;
     }
 
     // TP update only refreshes acceleration; U and Udot were set in newStep().
-    int updateState(CudaGenBcsrLinSOE *cudaSOE, bool incrementalAccel, double alphaF) override
+    int updateState(CudaBcsrLinSOE *cudaSOE, bool incrementalAccel, double alphaF) override
     {
         if (bindStream(cudaSOE) != 0) {
             return -1;
@@ -577,7 +577,7 @@ void CudaExplicitAlpha_TP::destroyDeviceImpl()
     }
 }
 
-void CudaExplicitAlpha_TP::ensureDeviceImpl(CudaGenBcsrLinSOE *cudaSOE)
+void CudaExplicitAlpha_TP::ensureDeviceImpl(CudaBcsrLinSOE *cudaSOE)
 {
     // Pick ImplT_TP<float> or ImplT_TP<double> to match uniform SOE precision.
     const CudaPrecision prec = cudaSOE->getPrecision();
@@ -594,7 +594,7 @@ void CudaExplicitAlpha_TP::ensureDeviceImpl(CudaGenBcsrLinSOE *cudaSOE)
     m_deviceUsesFloat = useFloat;
 }
 
-int CudaExplicitAlpha_TP::formOperators(CudaGenBcsrLinSOE *cudaSOE)
+int CudaExplicitAlpha_TP::formOperators(CudaBcsrLinSOE *cudaSOE)
 {
     return m_impl->formOperators(this, cudaSOE);
 }
@@ -775,7 +775,7 @@ CudaExplicitAlpha_TP::CudaExplicitAlpha_TP(int classTag, double _alphaF, double 
 
 CudaExplicitAlpha_TP::~CudaExplicitAlpha_TP()
 {
-    CudaGenBcsrLinSOE *cudaSOE = nullptr;
+    CudaBcsrLinSOE *cudaSOE = nullptr;
     if (validateCudaSOE(cudaSOE) == 0) {
         cudaSOE->setXSyncMode(true);
     }
@@ -794,14 +794,14 @@ bool CudaExplicitAlpha_TP::areAlphaMFClose() const
     return useAlphaCloseCheck && std::fabs(alphaM - alphaF) <= toleranceAlphaMF;
 }
 
-int CudaExplicitAlpha_TP::validateCudaSOE(CudaGenBcsrLinSOE *&cudaSOE) const
+int CudaExplicitAlpha_TP::validateCudaSOE(CudaBcsrLinSOE *&cudaSOE) const
 {
     LinearSOE *soe = this->getLinearSOE();
     if (soe == nullptr) {
         return -1;
     }
-    cudaSOE = dynamic_cast<CudaGenBcsrLinSOE *>(soe);
-    if (cudaSOE == nullptr || cudaSOE->getBlockSize() != 1 || cudaSOE->getCudaGenBcsrLinSolver() == nullptr) {
+    cudaSOE = dynamic_cast<CudaBcsrLinSOE *>(soe);
+    if (cudaSOE == nullptr || cudaSOE->getBlockSize() != 1 || cudaSOE->getCudaBcsrLinSolver() == nullptr) {
         return -2;
     }
     if (!isUniformPrecision(cudaSOE->getPrecision())) {
@@ -878,7 +878,7 @@ int CudaExplicitAlpha_TP::formNodUnbalance(DOF_Group *theDof)
 
 int CudaExplicitAlpha_TP::domainChanged()
 {
-    CudaGenBcsrLinSOE *cudaSOE = nullptr;
+    CudaBcsrLinSOE *cudaSOE = nullptr;
     if (validateCudaSOE(cudaSOE) != 0) {
         operatorsBuilt = false;
         return -1;
@@ -942,7 +942,7 @@ int CudaExplicitAlpha_TP::newStep(double _deltaT)
     if (theModel == nullptr || m_impl == nullptr) {
         return -2;
     }
-    CudaGenBcsrLinSOE *cudaSOE = nullptr;
+    CudaBcsrLinSOE *cudaSOE = nullptr;
     if (validateCudaSOE(cudaSOE) != 0) {
         return -3;
     }
@@ -1006,7 +1006,7 @@ int CudaExplicitAlpha_TP::formUnbalance()
     if (m_impl == nullptr) {
         return -1;
     }
-    CudaGenBcsrLinSOE *cudaSOE = nullptr;
+    CudaBcsrLinSOE *cudaSOE = nullptr;
     if (validateCudaSOE(cudaSOE) != 0) {
         return -2;
     }
@@ -1024,7 +1024,7 @@ int CudaExplicitAlpha_TP::update(const Vector &aiPlusOne)
     if (theModel == nullptr || U->Size() <= 0 || aiPlusOne.Size() != U->Size() || m_impl == nullptr) {
         return -2;
     }
-    CudaGenBcsrLinSOE *cudaSOE = nullptr;
+    CudaBcsrLinSOE *cudaSOE = nullptr;
     if (validateCudaSOE(cudaSOE) != 0) {
         return -4;
     }
@@ -1050,7 +1050,7 @@ int CudaExplicitAlpha_TP::commit()
 
 int CudaExplicitAlpha_TP::revertToLastStep()
 {
-    CudaGenBcsrLinSOE *cudaSOE = nullptr;
+    CudaBcsrLinSOE *cudaSOE = nullptr;
     if (validateCudaSOE(cudaSOE) == 0) {
         cudaSOE->setXSyncMode(true);
     }
@@ -1107,7 +1107,7 @@ void CudaExplicitAlpha_TP::Print(OPS_Stream &s, int flag)
 
 int CudaExplicitAlpha_TP::revertToStart()
 {
-    CudaGenBcsrLinSOE *cudaSOE = nullptr;
+    CudaBcsrLinSOE *cudaSOE = nullptr;
     if (validateCudaSOE(cudaSOE) == 0) {
         cudaSOE->setXSyncMode(true);
     }

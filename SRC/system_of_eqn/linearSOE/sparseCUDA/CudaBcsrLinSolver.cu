@@ -19,20 +19,20 @@
                                                                         
 // $Revision: 1.1 $
 // $Date: 2005-04-08 02:38:18 $
-// $Source: OpenSees/SRC/system_of_eqn/linearSOE/sparseCuda/CudaGenBcsrLinSolver.cpp,v $
+// $Source: OpenSees/SRC/system_of_eqn/linearSOE/sparseCuda/CudaBcsrLinSolver.cpp,v $
                                                                         
 // Written: gaaraujo 
 // Created: 08/2025
 //
-// Description: This file contains the implementation for CudaGenBcsrLinSolver
+// Description: This file contains the implementation for CudaBcsrLinSolver
 //
-// What: "@(#) CudaGenBcsrLinSolver.C, revA"
+// What: "@(#) CudaBcsrLinSolver.C, revA"
 
 // OpenSees includes
-#include <CudaGenBcsrLinSolver.h>
-#include <CudaGenBcsrLinSOE.h>
+#include <CudaBcsrLinSolver.h>
+#include <CudaBcsrLinSOE.h>
 
-CudaGenBcsrLinSolver::CudaGenBcsrLinSolver(int theClassTag, CudaPrecision precision)    
+CudaBcsrLinSolver::CudaBcsrLinSolver(int theClassTag, CudaPrecision precision)    
 :LinearSOESolver(theClassTag),
  theSOE(nullptr),
  m_precision(precision)
@@ -40,39 +40,39 @@ CudaGenBcsrLinSolver::CudaGenBcsrLinSolver(int theClassTag, CudaPrecision precis
 
 }    
 
-CudaGenBcsrLinSolver::~CudaGenBcsrLinSolver()    
+CudaBcsrLinSolver::~CudaBcsrLinSolver()    
 {
 
 }    
 
-int CudaGenBcsrLinSolver::setLinearSOE(CudaGenBcsrLinSOE &theCudaGenBcsrLinSOE)
+int CudaBcsrLinSolver::setLinearSOE(CudaBcsrLinSOE &theCudaBcsrLinSOE)
 {
-    theSOE = &theCudaGenBcsrLinSOE;
+    theSOE = &theCudaBcsrLinSOE;
     return 0;
 }
 
-CudaGenBcsrLinSOE* CudaGenBcsrLinSolver::getLinearSOE(void) const
+CudaBcsrLinSOE* CudaBcsrLinSolver::getLinearSOE(void) const
 {
     return theSOE;
 }
 
-int CudaGenBcsrLinSolver::setSize(void)
+int CudaBcsrLinSolver::setSize(void)
 {
     return 0;
 }
 
-int CudaGenBcsrLinSolver::sendSelf(int commitTag, Channel &theChannel)
+int CudaBcsrLinSolver::sendSelf(int commitTag, Channel &theChannel)
 {
     return 0;
 }
 
-int CudaGenBcsrLinSolver::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
+int CudaBcsrLinSolver::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
     return 0;
 }
 
 LinearSOESolver *
-CudaGenBcsrLinSolver::getCopy(void) const
+CudaBcsrLinSolver::getCopy(void) const
 {
     return nullptr;
 }

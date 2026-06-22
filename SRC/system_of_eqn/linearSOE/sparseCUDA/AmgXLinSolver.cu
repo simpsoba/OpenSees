@@ -25,7 +25,7 @@
 // Created: 08/2025
 //
 // Description: This file contains the class definition for 
-// AmgXLinSolver. It solves the CudaGenBcsrLinSOE object by calling
+// AmgXLinSolver. It solves the CudaBcsrLinSOE object by calling
 // AMGX routines.
 //
 
@@ -34,7 +34,7 @@
 #include <OPS_Globals.h>
 
 // Solve core classes
-#include <CudaGenBcsrLinSOE.h>
+#include <CudaBcsrLinSOE.h>
 #include <AmgXLinSolver.h>
 
 // for parsing command line arguments
@@ -194,7 +194,7 @@ AmgXLinSolver::AmgXLinSolver(
     const std::string solver, const std::string preconditioner, const std::string smoother, 
     int max_iters, double abs_tolerance, double rel_tolerance, int monitor_residual, 
     bool verbose)
-    :CudaGenBcsrLinSolver(SOLVER_TAGS_AmgXLinSolver, CudaPrecision::dDDI),  // Simple constructor always uses double
+    :CudaBcsrLinSolver(SOLVER_TAGS_AmgXLinSolver, CudaPrecision::dDDI),  // Simple constructor always uses double
     m_verbose(verbose)
 {
     std::string configOptions = getDefaultConfigOptions(
@@ -209,7 +209,7 @@ AmgXLinSolver::AmgXLinSolver(
 AmgXLinSolver::AmgXLinSolver( 
     const char *configFile, const char *configOptions, 
     CudaPrecision precision, bool verbose, OPS_Stream* callbackStream)
-    :CudaGenBcsrLinSolver(SOLVER_TAGS_AmgXLinSolver, precision), 
+    :CudaBcsrLinSolver(SOLVER_TAGS_AmgXLinSolver, precision), 
     m_verbose(verbose)
 {
     // AmgX currently only supports uniform precision (dDDI or dFFI)
@@ -340,7 +340,7 @@ AmgXLinSolver::~AmgXLinSolver() {
     return;
 }
 
-int AmgXLinSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE) {
+int AmgXLinSolver::setLinearSOE(CudaBcsrLinSOE &theSOE) {
     // Check precision match between solver and SOE
     if (theSOE.getPrecision() != this->getPrecision()) {
         opserr << "WARNING: AmgXLinSolver::setLinearSOE() - "
@@ -349,13 +349,13 @@ int AmgXLinSolver::setLinearSOE(CudaGenBcsrLinSOE &theSOE) {
         return -1;
     }
     
-    return this->CudaGenBcsrLinSolver::setLinearSOE(theSOE);
+    return this->CudaBcsrLinSolver::setLinearSOE(theSOE);
 
     return 0;
 }
 
 int AmgXLinSolver::solve() {
-    CudaGenBcsrLinSOE* theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
+    CudaBcsrLinSOE* theSOE = this->CudaBcsrLinSolver::getLinearSOE();
     if (theSOE == nullptr) {
         opserr << "WARNING: AmgXLinSolver::solve() - "
                << "LinearSOE not set" << endln;
@@ -363,7 +363,7 @@ int AmgXLinSolver::solve() {
     }
 
     // Extract info from the SOE
-    CudaGenBcsrLinSOE::MatrixStatus matrixStatus = theSOE->getMatrixStatus();
+    CudaBcsrLinSOE::MatrixStatus matrixStatus = theSOE->getMatrixStatus();
     int numRowBlocks = theSOE->getNumRowBlocks();
     int numNonZeroBlocks = theSOE->getNumNonZeroBlocks();
     int numNonZeroValues = theSOE->getNumNonZeroValues();
@@ -398,7 +398,7 @@ int AmgXLinSolver::solve() {
     }
 
     // Upload the matrix data to the GPU
-    if (matrixStatus == CudaGenBcsrLinSOE::MatrixStatus::STRUCTURE_CHANGED) {
+    if (matrixStatus == CudaBcsrLinSOE::MatrixStatus::STRUCTURE_CHANGED) {
         AMGX_matrix_upload_all(
             m_Matrix, numRowBlocks, numNonZeroBlocks, 
             blockSize, blockSize, rowPtrs,
@@ -406,7 +406,7 @@ int AmgXLinSolver::solve() {
         );
         // Setup the solver with the new matrix structure
         AMGX_solver_setup(m_Solver, m_Matrix);
-    } else if (matrixStatus == CudaGenBcsrLinSOE::MatrixStatus::COEFFICIENTS_CHANGED) {
+    } else if (matrixStatus == CudaBcsrLinSOE::MatrixStatus::COEFFICIENTS_CHANGED) {
         AMGX_matrix_replace_coefficients(
             m_Matrix, numRowBlocks, numNonZeroBlocks,
             values, nullptr
@@ -475,7 +475,7 @@ double AmgXLinSolver::getResidualNorm() {
         return 0.0;
     }
     
-    CudaGenBcsrLinSOE *theSOE = this->CudaGenBcsrLinSolver::getLinearSOE();
+    CudaBcsrLinSOE *theSOE = this->CudaBcsrLinSolver::getLinearSOE();
     int blockSize = theSOE->getBlockSize();
     std::vector<double> residualComponent(blockSize, 0.0);
     AMGX_solver_calculate_residual_norm(m_Solver, m_Matrix, m_RHS, m_Solution, (void*)residualComponent.data());
@@ -489,8 +489,8 @@ double AmgXLinSolver::getResidualNorm() {
 
 struct AmgXGeneralConfig;
 struct AmgXSimpleConfig;
-CudaGenBcsrLinSolver* createAmgXSolver(const AmgXGeneralConfig& config);
-CudaGenBcsrLinSolver* createAmgXSolver(const AmgXSimpleConfig& config);
+CudaBcsrLinSolver* createAmgXSolver(const AmgXGeneralConfig& config);
+CudaBcsrLinSolver* createAmgXSolver(const AmgXSimpleConfig& config);
 
 // Configuration structures for input parsing
 struct AmgXGeneralConfig {
@@ -764,7 +764,7 @@ void AmgXParameterParser::printSimpleUsageInfo() {
 }
 
 // Factory functions for creating solvers and SOEs
-CudaGenBcsrLinSolver* createAmgXSolver(const AmgXGeneralConfig& config) {
+CudaBcsrLinSolver* createAmgXSolver(const AmgXGeneralConfig& config) {
     // Convert string precision to enum
     CudaPrecision precision;
     if (!cudaPrecisionFromString(config.precision.c_str(), precision)) {
@@ -787,7 +787,7 @@ CudaGenBcsrLinSolver* createAmgXSolver(const AmgXGeneralConfig& config) {
     }
 }
 
-CudaGenBcsrLinSolver* createAmgXSolver(const AmgXSimpleConfig& config) {
+CudaBcsrLinSolver* createAmgXSolver(const AmgXSimpleConfig& config) {
     return new AmgXLinSolver(
         config.solver.c_str(), 
         config.preconditioner.c_str(), 
@@ -802,7 +802,7 @@ CudaGenBcsrLinSolver* createAmgXSolver(const AmgXSimpleConfig& config) {
 
 // Helper struct to return both solver and SOE config from parsing
 struct AmgXSolverAndConfig {
-    CudaGenBcsrLinSolver* solver;
+    CudaBcsrLinSolver* solver;
     int blockSize;
     std::string precision;
     bool paddingEnabled;
@@ -911,12 +911,12 @@ void* OPS_AmgXLinSolver()
     CudaPrecision precision = result.solver->getPrecision();
     switch(precision) {
         case CudaPrecision::dDDI:
-            return CudaGenBcsrLinSOE::createDouble(
+            return CudaBcsrLinSOE::createDouble(
                 *result.solver, result.blockSize, 
                 result.paddingEnabled, result.verbose
             );
         case CudaPrecision::dFFI:
-            return CudaGenBcsrLinSOE::createFloat(
+            return CudaBcsrLinSOE::createFloat(
                 *result.solver, result.blockSize, 
                 result.paddingEnabled, result.verbose
             );
