@@ -36,6 +36,15 @@ if(TARGET OpenSeesSPFresco)
   )
 endif()
 
+if(TARGET OpenSeesMPFresco)
+  target_sources(OpenSeesMPFresco
+       PRIVATE
+         MPI_MachineBroker.cpp
+       PUBLIC
+         MPI_MachineBroker.h
+  )
+endif()
+
 endif()
 
 target_include_directories(OPS_Actor PUBLIC ${CMAKE_CURRENT_LIST_DIR})

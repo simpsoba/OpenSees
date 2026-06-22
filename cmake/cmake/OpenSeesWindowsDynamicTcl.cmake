@@ -1,4 +1,4 @@
-# Dynamic Tcl (tcl86t.dll) for OpenSeesFresco / OpenSeesSPFresco on Windows.
+# Dynamic Tcl (tcl86t.dll) for OpenSeesFresco / OpenSeesSPFresco / OpenSeesMPFresco on Windows.
 # Conan links static tcl86ts into the default OpenSees target; OpenFrescoTcl
 # plugins require the host to share tcl86t.dll like the Win64 sln build.
 
@@ -11,7 +11,7 @@ function(ops_configure_windows_dynamic_tcl)
   if(NOT EXISTS "${_ops_tcl_root}/lib/tcl86t.lib")
     message(WARNING
       "tcl86t.lib not found at ${_ops_tcl_root}; "
-      "OpenSeesFresco and OpenSeesSPFresco will not be configured.")
+      "OpenSeesFresco, OpenSeesSPFresco, and OpenSeesMPFresco will not be configured.")
     return()
   endif()
 

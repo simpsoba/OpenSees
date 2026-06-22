@@ -43,6 +43,15 @@ if(TARGET OpenSeesSPFresco)
   )
 endif()
 
+if(TARGET OpenSeesMPFresco)
+  target_sources(OpenSeesMPFresco
+      PRIVATE
+        MPI_Channel.cpp
+      PUBLIC
+        MPI_Channel.h
+  )
+endif()
+
 endif()
 
 

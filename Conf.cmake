@@ -27,7 +27,7 @@ option(FMK
   "Special FMK Code"                                       OFF)
 
 option(PARALLEL
-  "Compile with _PARALLEL_PROCESSING for OpenSeesSP/OpenSeesSPFresco" OFF)
+  "Enable OpenSeesSP/OpenSeesSPFresco (_PARALLEL_PROCESSING on object libs; mutually exclusive with OpenSeesMP _PARALLEL_INTERPRETERS)" OFF)
 
 set(OPS_Use_Graphics_Option
   None

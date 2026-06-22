@@ -126,7 +126,7 @@ endif()
 
 # define user-selectable options for end target
 set_property(CACHE OPS_FINAL_TARGET PROPERTY STRINGS
-    G3 OpenSees OpenSeesFresco OpenSeesMP OpenSeesSP OpenSeesSPFresco OpenSeesPy)
+    G3 OpenSees OpenSeesFresco OpenSeesMP OpenSeesMPFresco OpenSeesSP OpenSeesSPFresco OpenSeesPy)
 
 #
 # OS Configuration:
@@ -362,7 +362,7 @@ if(MPI_FOUND)
   else()
      set (MUMPS_FLAG -D_MUMPS)
      if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-       set (MUMPS_LIBRARIES "${MUMPS_DIR}/dmumps;${MUMPS_DIR}/mumps_common;${MUMPS_DIR}/pord")
+       set (MUMPS_LIBRARIES "${MUMPS_DIR}/dmumps.lib;${MUMPS_DIR}/mumps_common.lib;${MUMPS_DIR}/pord.lib")
      else()
        set (MUMPS_LIBRARIES "${MUMPS_DIR}/libdmumps.a;${MUMPS_DIR}/libmumps_common.a;${MUMPS_DIR}/libpord.a")
      endif()
@@ -427,10 +427,9 @@ set(TCL_LIBRARIES ${TCL_LIBRARY})
 # OpenSees OBJECT LIBRARIES
 #
 
-if(PARALLEL)
-  message(STATUS "PARALLEL FOR SP TURNED ON ...")
-  add_compile_definitions(_PARALLEL_PROCESSING)
-endif()
+# _PARALLEL_PROCESSING (OpenSeesSP) and _PARALLEL_INTERPRETERS (OpenSeesMP) are
+# mutually exclusive per executable. Do not use a global compile definition here;
+# SP object libraries and SP/Fresco executables get _PARALLEL_PROCESSING below.
 
 add_library(OPS_Matrix             OBJECT)
 add_library(OPS_Actor              OBJECT)
@@ -769,7 +768,7 @@ endif()
 
 if(MPI_FOUND)
 
-    add_executable(OpenSeesMP EXCLUDE_FROM_ALL
+    set(_OPS_TCL_MP_SOURCES
       ${OPS_SRC_DIR}/tcl/mpiParameterMain.cpp
       ${OPS_SRC_DIR}/tcl/tclMain.cpp
       ${OPS_SRC_DIR}/tcl/commands.cpp
@@ -787,6 +786,8 @@ if(MPI_FOUND)
       ${OPS_SRC_DIR}/domain/subdomain/ActorSubdomain.cpp
       ${OPS_SRC_DIR}/domain/subdomain/ShadowSubdomain.cpp
     )
+
+    add_executable(OpenSeesMP EXCLUDE_FROM_ALL ${_OPS_TCL_MP_SOURCES})
 
     target_include_directories(OpenSeesMP PRIVATE ${MUMPS_DIR}/_deps/mumps-src/include ${MPI_CXX_INCLUDE_DIRS})
 
@@ -822,6 +823,61 @@ if(MPI_FOUND)
        ${MPI_Fortran_LIBRARIES}
        ${MPI_CXX_LINK_FLAGS}
     )
+
+    #
+    # OpenSeesMPFresco -- MPI parallel interpreters + OpenFresco loadPackage (Windows)
+    # Links dynamic tcl86t.dll instead of Conan static Tcl.
+    #
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND DEFINED OPS_FRESCO_TCL_LIBRARY)
+      add_executable(OpenSeesMPFresco EXCLUDE_FROM_ALL ${_OPS_TCL_MP_SOURCES})
+
+      set_target_properties(OpenSeesMPFresco PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin-fresco
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/bin-fresco
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/bin-fresco
+        RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL ${CMAKE_BINARY_DIR}/bin-fresco
+        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_BINARY_DIR}/bin-fresco
+      )
+
+      target_include_directories(OpenSeesMPFresco
+        PRIVATE ${MUMPS_DIR}/_deps/mumps-src/include ${MPI_CXX_INCLUDE_DIRS}
+        PUBLIC ${OPS_FRESCO_TCL_INCLUDE})
+      target_compile_options(OpenSeesMPFresco PRIVATE ${MPI_CXX_COMPILE_FLAGS})
+
+      if (NOT DEFINED MUMPS_DIR)
+          add_dependencies(OpenSeesMPFresco mumps)
+      endif()
+
+      if (DEFINED OPENMPI)
+        target_compile_definitions(OpenSeesMPFresco
+          PUBLIC _PARALLEL_INTERPRETERS ${MUMPS_FLAG} _OPENMPI)
+      else()
+        target_compile_definitions(OpenSeesMPFresco
+          PUBLIC _PARALLEL_INTERPRETERS ${MUMPS_FLAG})
+      endif()
+
+      ops_add_fresco_tcl_runtime(OpenSeesMPFresco)
+
+      target_link_libraries(OpenSeesMPFresco
+        OPS_InterpTcl
+        OpenSeesLIB
+        OPS_Reliability
+        OPS_ReliabilityTcl
+        OPS_Recorder
+        METIS
+        SUPERLU_DIST
+        OPS_Numerics
+        ${MUMPS_LIBRARIES}
+        ${CMAKE_DL_LIBS}
+        ${HDF5_LIBRARIES}
+        ${OPS_FRESCO_LINK_LIBS}
+        ${MPI_CXX_LIBRARIES}
+        ${SCALAPACK_LIBRARIES}
+        ${MPI_Fortran_LIBRARIES}
+        ${MPI_CXX_LINK_FLAGS}
+      )
+    endif()
 
 endif()
 
@@ -885,6 +941,48 @@ add_subdirectory(${OPS_SRC_DIR})
 #                            Apply Options
 #
 #==============================================================================
+
+#----------------------------
+# PARALLEL (OpenSeesSP object libraries)
+#----------------------------
+if(PARALLEL)
+  message(STATUS "PARALLEL FOR SP: applying _PARALLEL_PROCESSING to object libraries")
+
+  function(ops_apply_parallel_processing_to_object_libs dir)
+    get_property(_ops_targets DIRECTORY "${dir}" PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(_ops_tgt IN LISTS _ops_targets)
+      if(NOT TARGET "${_ops_tgt}")
+        continue()
+      endif()
+      get_target_property(_ops_type "${_ops_tgt}" TYPE)
+      if(_ops_type STREQUAL "OBJECT_LIBRARY")
+        target_compile_definitions("${_ops_tgt}" PRIVATE _PARALLEL_PROCESSING)
+      endif()
+    endforeach()
+    get_property(_ops_subdirs DIRECTORY "${dir}" PROPERTY SUBDIRECTORIES)
+    foreach(_ops_subdir IN LISTS _ops_subdirs)
+      ops_apply_parallel_processing_to_object_libs("${_ops_subdir}")
+    endforeach()
+  endfunction()
+
+  foreach(_ops_tgt
+      OPS_Matrix OPS_Actor OPS_ObjectBroker OPS_Handler OPS_Recorder
+      OPS_Reliability OPS_Tagged OPS_Utilities OPS_ModelBuilder OPS_Domain
+      OPS_SysOfEqn OPS_Analysis OPS_ConvergenceTest OPS_Thermal OPS_Element
+      OPS_ElementFortran OPS_Material OPS_MaterialFortran OPS_Damage
+      OPS_Database OPS_INTERPRETER OPS_Paraview OPS_Renderer OPS_Graphics
+      OPS_Graphics_Default OPS_Graphics_GL OPS_PFEM OpenSeesLIB)
+    if(TARGET "${_ops_tgt}")
+      get_target_property(_ops_type "${_ops_tgt}" TYPE)
+      if(_ops_type STREQUAL "OBJECT_LIBRARY")
+        target_compile_definitions("${_ops_tgt}" PRIVATE _PARALLEL_PROCESSING)
+      endif()
+    endif()
+  endforeach()
+
+  ops_apply_parallel_processing_to_object_libs("${PROJECT_SOURCE_DIR}/SRC")
+endif()
+
 #----------------------------
 # FMK
 #----------------------------

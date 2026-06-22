@@ -103,6 +103,24 @@ if(TARGET OpenSeesSPFresco)
   )
 endif()
 
+if(TARGET OpenSeesMPFresco)
+  target_sources(OpenSeesMPFresco
+      PRIVATE
+          DistributedSuperLU.cpp
+          DistributedSparseGenColLinSOE.cpp
+          DistributedSparseGenRowLinSOE.cpp
+          PFEMSolver_Mumps.cpp
+          PFEMSolver_LumpM.cpp
+          PFEMCompressibleSolver_Mumps.cpp
+      PUBLIC
+          DistributedSuperLU.h
+          DistributedSparseGenColLinSOE.h
+          DistributedSparseGenRowLinSOE.h
+          PFEMSolver_Mumps.h
+          PFEMCompressibleSolver_Mumps.h
+  )
+endif()
+
 endif()
 
 
