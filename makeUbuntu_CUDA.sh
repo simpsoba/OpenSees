@@ -44,9 +44,25 @@ echo "MUMPS_DIR=${MUMPS_DIR}"
 echo "CUDAToolkit_ROOT=${CUDAToolkit_ROOT}"
 echo "JOBS=${JOBS}"
 
+if [[ -f /opt/intel/oneapi/setvars.sh ]]; then
+  set +u
+  # shellcheck source=/dev/null
+  source /opt/intel/oneapi/setvars.sh --force
+  set -u
+fi
+
+if ! command -v conan >/dev/null 2>&1; then
+  echo "ERROR: conan not found. Install with: pip install conan" >&2
+  exit 1
+fi
+
+conan install . -of "${BUILD_DIR}" --build=missing \
+  -c tools.cmake.cmaketoolchain:generator=Ninja
+
 cmake -S . -B "${BUILD_DIR}" \
   -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE="${BUILD_DIR}/generators/conan_toolchain.cmake" \
   -DCMAKE_INSTALL_PREFIX="${HOME}/bin" \
   -DMPI_C_COMPILER="${IMPI_ROOT}/bin/mpigcc" \
   -DMPI_CXX_COMPILER="${IMPI_ROOT}/bin/mpigxx" \
@@ -58,6 +74,9 @@ cmake -S . -B "${BUILD_DIR}" \
 
 cmake --build "${BUILD_DIR}" --target OpenSees OpenSeesPy -j"${JOBS}"
 cp -f "${BUILD_DIR}/OpenSeesPy.so" "${BUILD_DIR}/opensees.so"
+
+# OpenSees.exe looks for Tcl under build/lib/tcl8.6; clock.tcl also needs build/lib/tcl8 (msgcat).
+bash "${REPO_ROOT}/SCRIPTS/linux/stage-tcl-runtime.sh"
 
 echo
 echo "Build complete."

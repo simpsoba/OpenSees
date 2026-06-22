@@ -25,6 +25,7 @@ call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 mod
 REM --- User-tunable dependency paths (defaults for this machine) ---
 if not defined CUDAToolkit_ROOT set "CUDAToolkit_ROOT=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9"
 if not defined MUMPS_DIR set "MUMPS_DIR=%REPO_ROOT%..\mumps\build"
+REM Runtime PATH only (cuDSS DLLs). CMake discovers cuDSS via default install hints.
 if not defined OPENSEES_CUDSS_DIR set "OPENSEES_CUDSS_DIR=C:\Program Files\NVIDIA cuDSS\v0.8"
 
 set "PATH=%OPENSEES_CUDSS_DIR%\bin\12;%CUDAToolkit_ROOT%\bin;%PATH%"
@@ -62,7 +63,6 @@ if errorlevel 1 exit /b 1
   -DMKL_INTERFACE_FULL=intel_lp64 ^
   -DMUMPS_DIR="%MUMPS_DIR%" ^
   -DCUDAToolkit_ROOT="%CUDAToolkit_ROOT%" ^
-  -DCUDSS_ROOT="%OPENSEES_CUDSS_DIR%" ^
   -Ucudss_DIR -Ucudss_INCLUDE_DIR -Ucudss_LIBRARY_DIR -Ucudss_BINARY_DIR ^
   -UAMGX_NO_MPI_DIR ^
   -DCMAKE_EXE_LINKER_FLAGS="/FORCE:MULTIPLE" ^

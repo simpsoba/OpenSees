@@ -12,6 +12,7 @@ CUDAToolkit_ROOT="${CUDAToolkit_ROOT:-/usr/local/cuda}"
 CUDSS_LIB="${CUDSS_LIB:-/usr/lib/x86_64-linux-gnu/libcudss/12}"
 
 export PYTHONPATH="${BUILD_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+export TCL_LIBRARY="${REPO_ROOT}/build/lib/tcl8.6"
 export LD_LIBRARY_PATH="${MKL_LIB}:${IMPI_ROOT}/lib/release:${IMPI_ROOT}/lib:${CUDSS_LIB}:${CUDAToolkit_ROOT}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 export OPENSEES="${BUILD_DIR}/OpenSees"
