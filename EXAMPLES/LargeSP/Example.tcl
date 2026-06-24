@@ -130,6 +130,7 @@ recorder Element -file 3d/ele.out -eleRange 1 10 material 1 strains
 
 analyze 2 1.0
 
+puts "HE - FINISHED TRANSIENT"
 
 
 

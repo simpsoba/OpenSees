@@ -6,6 +6,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -13,15 +16,19 @@ NSTORIES = 40
 GM_STEPS = 1560
 DT = 0.02
 GM_DURATION = GM_STEPS * DT
-SUBPLOT_HEIGHT_IN = 2.2
-FIG_WIDTH_IN = 16
+SUBPLOT_HEIGHT_IN = 1.4
+FIG_WIDTH_IN = 14
+DEFAULT_MODE = "analytical"
 PLOT_ROWS = 20
 PLOT_COLS = 2
-CASES = (
-    ("OpenSeesFresco", "output", "-"),
-    ("OpenSeesSPFresco", "output-sp", "--"),
-    ("OpenSeesMPFresco", "output-mp", ":"),
-)
+
+
+def cases_for_mode(mode: str) -> tuple[tuple[str, str, str], ...]:
+    return (
+        ("OpenSeesFresco", f"output-{mode}", "-"),
+        ("OpenSeesSPFresco", f"output-sp-{mode}", "--"),
+        ("OpenSeesMPFresco", f"output-mp-{mode}", ":"),
+    )
 
 
 def find_node_file(out_dir: Path, node: int) -> Path | None:
@@ -46,11 +53,8 @@ def node_for_cell(row: int, col: int) -> int:
 def plot_displacements(
     root: Path,
     *,
-    t_min: float,
-    t_max: float | None,
+    cases: tuple[tuple[str, str, str], ...],
     save_path: Path,
-    title: str,
-    mark_gm_end: bool,
 ) -> list[str]:
     nrows = PLOT_ROWS
     ncols = PLOT_COLS
@@ -60,13 +64,13 @@ def plot_displacements(
         figsize=(FIG_WIDTH_IN, SUBPLOT_HEIGHT_IN * nrows),
         sharex=True,
         squeeze=False,
+        layout="constrained",
     )
-    fig.suptitle(title, fontsize=14, y=0.995)
 
     legend_handles: list = []
     legend_labels: list[str] = []
     missing: list[str] = []
-    t_end = t_min
+    t_end = 0.0
 
     for row in range(nrows):
         for col in range(ncols):
@@ -74,18 +78,13 @@ def plot_displacements(
             ax = axes[row, col]
             plotted = False
 
-            for label, folder, linestyle in CASES:
+            for label, folder, linestyle in cases:
                 out_dir = root / folder
                 node_file = find_node_file(out_dir, node)
                 if node_file is None:
                     missing.append(f"{folder}/node_{node}_disp.out")
                     continue
                 time, disp = load_disp(node_file)
-                mask = time >= t_min - 1e-9
-                if t_max is not None:
-                    mask &= time <= t_max + 1e-9
-                time = time[mask]
-                disp = disp[mask]
                 if time.size == 0:
                     continue
                 t_end = max(t_end, float(time[-1]))
@@ -97,8 +96,7 @@ def plot_displacements(
 
             ax.set_title(f"Node {node}", fontsize=9)
             ax.grid(True, alpha=0.3)
-            if mark_gm_end and GM_DURATION >= t_min and (t_max is None or GM_DURATION <= t_max):
-                ax.axvline(GM_DURATION, color="0.5", linestyle=":", linewidth=0.8, alpha=0.8)
+            ax.axvline(GM_DURATION, color="0.5", linestyle=":", linewidth=0.8, alpha=0.8)
             if not plotted:
                 ax.text(
                     0.5,
@@ -111,9 +109,8 @@ def plot_displacements(
                     color="gray",
                 )
 
-    x_hi = t_max if t_max is not None else t_end
     for ax in axes.ravel():
-        ax.set_xlim(t_min, x_hi)
+        ax.set_xlim(0.0, t_end)
 
     for col in range(ncols):
         axes[-1, col].set_xlabel("Time (s)", fontsize=9)
@@ -125,17 +122,15 @@ def plot_displacements(
         fig.legend(
             legend_handles,
             legend_labels,
-            loc="upper center",
+            loc="outside upper center",
             ncol=len(legend_labels),
-            bbox_to_anchor=(0.5, 0.98),
             fontsize=10,
             frameon=False,
         )
 
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    fig.savefig(save_path, dpi=120)
     plt.close(fig)
-    print(f"Saved {save_path}  (t = {t_min:.2f} .. {x_hi:.2f} s)")
+    print(f"Saved {save_path}")
     return missing
 
 
@@ -148,50 +143,23 @@ def main() -> int:
         help="Example directory containing output folders",
     )
     parser.add_argument(
+        "--mode",
+        type=str,
+        default=DEFAULT_MODE,
+        help="expElementMode label (analytical, local)",
+    )
+    parser.add_argument(
         "--save",
         type=Path,
         default=None,
-        help="Full-record PNG (default: <root>/compare_displacements.png)",
-    )
-    parser.add_argument(
-        "--save-free",
-        type=Path,
-        default=None,
-        help="Free-vibration PNG (default: <root>/compare_displacements_freevib.png)",
-    )
-    parser.add_argument(
-        "--show",
-        action="store_true",
-        help="Display the figures interactively (not implemented; saves only)",
+        help="Output PNG (default: compare_displacements_<mode>.png)",
     )
     args = parser.parse_args()
     root = args.root.resolve()
-    save_full = args.save or (root / "compare_displacements.png")
-    save_free = args.save_free or (root / "compare_displacements_freevib.png")
+    save_path = args.save or (root / f"compare_displacements_{args.mode}.png")
+    cases = cases_for_mode(args.mode)
 
-    missing: list[str] = []
-    missing += plot_displacements(
-        root,
-        t_min=0.0,
-        t_max=None,
-        save_path=save_full,
-        title=(
-            "Story displacements (nodes 1–40): "
-            "OpenSeesFresco vs OpenSeesSPFresco vs OpenSeesMPFresco"
-        ),
-        mark_gm_end=True,
-    )
-    missing += plot_displacements(
-        root,
-        t_min=GM_DURATION,
-        t_max=None,
-        save_path=save_free,
-        title=(
-            f"Free vibration (t ≥ {GM_DURATION:.1f} s, nodes 1–40): "
-            "OpenSeesFresco vs OpenSeesSPFresco vs OpenSeesMPFresco"
-        ),
-        mark_gm_end=False,
-    )
+    missing = plot_displacements(root, cases=cases, save_path=save_path)
 
     if missing:
         print(f"Warning: {len(missing)} missing file reference(s), e.g. {missing[0]}")

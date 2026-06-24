@@ -41,6 +41,8 @@
 
 // Convergence tests
 #include "convergenceTest/CTestNormUnbalance.h"
+#include "convergenceTest/NormDispAndUnbalance.h"
+#include "convergenceTest/NormDispOrUnbalance.h"
 #include "convergenceTest/CTestRelativeNormUnbalance.h"
 #include "convergenceTest/CTestNormDispIncr.h"
 #include "convergenceTest/CTestRelativeNormDispIncr.h"
@@ -2488,6 +2490,12 @@ FEM_ObjectBrokerAllClasses::getNewConvergenceTest(int classTag)
     switch(classTag) {
 	case CONVERGENCE_TEST_CTestNormUnbalance:  
 	     return new CTestNormUnbalance();
+
+	case CONVERGENCE_TEST_NormDispAndUnbalance:
+	     return new NormDispAndUnbalance();
+
+	case CONVERGENCE_TEST_NormDispOrUnbalance:
+	     return new NormDispOrUnbalance();
 	     
 	case CONVERGENCE_TEST_CTestRelativeNormUnbalance:  
 	     return new CTestRelativeNormUnbalance();

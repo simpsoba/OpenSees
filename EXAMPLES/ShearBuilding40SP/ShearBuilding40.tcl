@@ -5,13 +5,19 @@
 #   OpenSeesFresco.exe ShearBuilding40.tcl
 #
 # References:
-#   twoNodeLink -> OpenFresco EXAMPLES/OneBayFrame/OpenSees/OneBayFrame_Local.tcl
-#   generic     -> OpenFresco EXAMPLES/ThreeStoryBuilding/ThreeStoryBuilding_Master.tcl
+#   local -> OpenFresco EXAMPLES/OneBayFrame/OpenSees/OneBayFrame_Local.tcl
 
 # =============================================================================
 # Example mode
 # =============================================================================
-set expElementMode twoNodeLink
+# analytical  - all stories are numerical zeroLength springs (no OpenFresco)
+# local       - one story replaced by expElement twoNodeLink
+set expElementMode analytical
+
+if {[info exists ::env(SHEAR40_MODE)] && [string length [string trim $::env(SHEAR40_MODE)]] > 0} {
+    set expElementMode [string trim $::env(SHEAR40_MODE)]
+}
+set outputDir "output-$expElementMode"
 
 # =============================================================================
 # Model settings
@@ -32,12 +38,12 @@ set w2 20.0
 # =============================================================================
 # Analysis scheme
 # =============================================================================
-set analysisScheme Newmark
+set analysisScheme NewmarkExplicit
 
 set nSteps 3120
 set dt 0.02
 
-set outputDir output
+source [file join [pwd] shear40_print.tcl]
 
 # =============================================================================
 
@@ -45,54 +51,20 @@ proc storyStiff {i Nstories kbottom ktop} {
     return [expr {$kbottom + ($ktop-$kbottom)*double($i-1)/double($Nstories-1)}]
 }
 
-proc ensureOutputDir {dir} {
-    if {[file exists $dir]} {
-        foreach f [glob -nocomplain [file join $dir *]] {
-            catch { file delete -force $f }
-        }
-    } else {
-        file mkdir $dir
-    }
-}
-
-proc cleanupStaleOutput {outputDir} {
-    set outNorm [file normalize [file join [pwd] $outputDir]]
-    set outPrefix "${outNorm}[file separator]"
-    foreach pat {
-        Node_Dsp.out*
-        Elmt_Frc.out*
-        Elmt_ctrlDsp.out*
-        node_*_disp.out*
-        ShearBuilding40_*.log
-        ShearBuilding40SP_*.log
-        ShearBuilding40MP_*.log
-        run_output.txt
-        run_HHTHybridSimulation_Linear.txt
-    } {
-        foreach f [glob -nocomplain $pat] {
-            set fNorm [file normalize $f]
-            if {[string first $outPrefix $fNorm] == 0} {
-                continue
-            }
-            catch { file delete -force $f }
-        }
-    }
-}
-
 proc applyAnalysisScheme {scheme} {
     switch -exact $scheme {
         NewmarkExplicit {
-            algorithm Linear
             integrator NewmarkExplicit 0.5
+            algorithm Linear
         }
         AlphaOSGeneralized {
-            algorithm Linear
             integrator AlphaOSGeneralized 0.9
+            algorithm Linear
         }
         Newmark {
+            integrator Newmark 0.5 0.25
             test EnergyIncr 1.0e-10 20 0
             algorithm KrylovNewton
-            integrator Newmark 0.5 0.25
         }
         default {
             puts "ERROR unknown analysisScheme: $scheme (use NewmarkExplicit, AlphaOSGeneralized, or Newmark)"
@@ -107,7 +79,14 @@ proc addNumericalSpring {i Nstories kbottom ktop} {
     element zeroLength $i [expr {$i - 1}] $i -mat $i -dir 1 -doRayleigh
 }
 
-proc defineTwoNodeLinkExperiment {ExpEleTag Nstories kbottom ktop} {
+proc defineAnalyticalModel {Nstories kbottom ktop} {
+    for {set i 1} {$i <= $Nstories} {incr i} {
+        addNumericalSpring $i $Nstories $kbottom $ktop
+    }
+    printElementAnalytical $Nstories
+}
+
+proc setupLocalSite {ExpEleTag Nstories kbottom ktop} {
     global expSiteTag
 
     set k [storyStiff $ExpEleTag $Nstories $kbottom $ktop]
@@ -123,76 +102,37 @@ proc defineTwoNodeLinkExperiment {ExpEleTag Nstories kbottom ktop} {
     expSetup OneActuator $expSetupTag -control $expCtrlTag 1 -sizeTrialOut 1 1
     expSite LocalSite $expSiteTag $expSetupTag
 
+    return $k
+}
+
+proc defineLocalExperiment {ExpEleTag Nstories kbottom ktop} {
+    global expSiteTag
+
+    set k [setupLocalSite $ExpEleTag $Nstories $kbottom $ktop]
+
     for {set i 1} {$i <= $Nstories} {incr i} {
         if {$i == $ExpEleTag} {
             expElement twoNodeLink $i [expr {$i - 1}] $i -dir 1 -site $expSiteTag -initStif $k
-            puts "twoNodeLink element $i (k=$k) between nodes [expr {$i - 1}] and $i"
+            printElementLocal $i $k
         } else {
             addNumericalSpring $i $Nstories $kbottom $ktop
         }
     }
 }
 
-proc defineGenericExperiment {ExpEleTag Nstories kbottom ktop} {
-    global expSiteTag
-
-    if {$ExpEleTag < 2 || $ExpEleTag >= $Nstories} {
-        puts "ERROR ExpEleTag must be between 2 and [expr {$Nstories - 1}] for generic element"
-        exit 1
-    }
-
-    set nLo [expr {$ExpEleTag - 1}]
-    set nMid $ExpEleTag
-    set nHi [expr {$ExpEleTag + 1}]
-
-    set kA [storyStiff $ExpEleTag $Nstories $kbottom $ktop]
-    set kB [storyStiff [expr {$ExpEleTag + 1}] $Nstories $kbottom $ktop]
-    set k22 [expr {$kA + $kB}]
-
-    set kExp [list \
-        $kA              [expr {-$kA}]  0.0 \
-        [expr {-$kA}]    $k22           [expr {-$kB}] \
-        0.0              [expr {-$kB}]  $kB]
-
-    set expMatTag1 9001
-    set expMatTag2 9002
-    set expMatTag3 9003
-    set expCtrlTag 9000
-    set expSetupTag 9000
-    set expSiteTag 9000
-
-    uniaxialMaterial Elastic $expMatTag1 $kA
-    uniaxialMaterial Elastic $expMatTag2 $k22
-    uniaxialMaterial Elastic $expMatTag3 $kB
-
-    expControlPoint 9001  1 disp 2 disp 3 disp
-    expControlPoint 9002  1 disp 2 disp 3 disp  1 force 2 force 3 force
-    expControl SimUniaxialMaterials $expCtrlTag $expMatTag1 $expMatTag2 $expMatTag3
-    expSetup NoTransformation $expSetupTag -control $expCtrlTag -dof 1 2 3 -sizeTrialOut 3 3
-    expSite LocalSite $expSiteTag $expSetupTag
-
-    for {set i 1} {$i <= $Nstories} {incr i} {
-        if {$i == $ExpEleTag || $i == [expr {$ExpEleTag + 1}]} {
-            continue
-        }
-        addNumericalSpring $i $Nstories $kbottom $ktop
-    }
-
-    expElement generic $ExpEleTag -node $nLo $nMid $nHi -dof 1 -dof 1 -dof 1 -site $expSiteTag -initStif {*}$kExp
-    puts "generic element $ExpEleTag on nodes $nLo $nMid $nHi (replaces springs $ExpEleTag and [expr {$ExpEleTag + 1}])"
-}
-
 # --- model generation ---
 
-ensureOutputDir $outputDir
-cleanupStaleOutput $outputDir
+resetOutputDir $outputDir
 
 wipe
 logFile [file join $outputDir ShearBuilding40_${expElementMode}.log]
 model BasicBuilder -ndm 1 -ndf 1
+printRunHeader "OpenSeesFresco"
 
-loadPackage OpenFrescoTcl
-puts "OpenFresco package version = [packageVersion]"
+if {$expElementMode ne "analytical"} {
+    loadPackage OpenFrescoTcl
+    printOpenFrescoVersion
+}
 
 node 0 0
 fix 0 1
@@ -201,50 +141,51 @@ for {set i 1} {$i <= $Nstories} {incr i} {
 }
 
 switch -exact $expElementMode {
-    twoNodeLink {
-        defineTwoNodeLinkExperiment $ExpEleTag $Nstories $kbottom $ktop
+    analytical {
+        defineAnalyticalModel $Nstories $kbottom $ktop
     }
-    generic {
-        defineGenericExperiment $ExpEleTag $Nstories $kbottom $ktop
+    local {
+        defineLocalExperiment $ExpEleTag $Nstories $kbottom $ktop
     }
     default {
-        puts "ERROR unknown expElementMode: $expElementMode (use twoNodeLink or generic)"
+        puts "ERROR unknown expElementMode: $expElementMode (use analytical or local)"
         exit 1
     }
 }
 
 timeSeries Path 1 -filePath elcentro.txt -dt $dt -factor 1.0
-pattern UniformExcitation 1 1 -accel 1
+pattern UniformExcitation 2 1 -accel 1
 
 set alphaM [expr {$zeta * 2.0 * $w1 * $w2 / ($w1 + $w2)}]
 set betaK [expr {$zeta * 2.0 / ($w1 + $w2)}]
-rayleigh $alphaM $betaK 0.0 0.0
-puts "Rayleigh damping: zeta=$zeta at w1=$w1 w2=$w2 rad/s (alphaM=$alphaM betaK=$betaK)"
+rayleigh $alphaM 0.0 $betaK 0.0
+printRayleighDamping $alphaM $betaK
 
-system BandGeneral
+# integrator -> test -> algorithm -> numberer -> constraints -> system -> analysis
+applyAnalysisScheme $analysisScheme
 numberer RCM
 constraints Plain
-applyAnalysisScheme $analysisScheme
+system BandGeneral
 analysis Transient
 
-puts "Model built (mode=$expElementMode ExpEleTag=$ExpEleTag analysisScheme=$analysisScheme solver=BandGeneral)"
+printModelBuilt "OpenSeesFresco" "BandGeneral+RCM"
 
 for {set i 0} {$i <= $Nstories} {incr i} {
     recorder Node -file [file join $outputDir node_${i}_disp.out] -time -node $i -dof 1 disp
 }
 recorder Element -file [file join $outputDir Elmt_Frc.out] -time -ele $ExpEleTag forces
-recorder Element -file [file join $outputDir Elmt_ctrlDsp.out] -time -ele $ExpEleTag ctrlDisp
-
-record
-puts "Starting transient analysis ($nSteps steps, dt=$dt s)"
-
-set ok [analyze $nSteps $dt]
-if {$ok != 0} {
-    puts "WARNING analyze failed at time [getTime] (return code $ok)"
-} else {
-    puts "Finished transient analysis ($nSteps steps)"
+if {$expElementMode ne "analytical"} {
+    recorder Element -file [file join $outputDir Elmt_ctrlDsp.out] -time -ele $ExpEleTag ctrlDisp
 }
 
-wipeExp
+record
+printAnalysisStart
+
+set ok [analyze $nSteps $dt]
+printAnalysisDone $ok
+
+if {$expElementMode ne "analytical"} {
+    wipeExp
+}
 wipe
 exit
