@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   sync:
@@ -18,14 +19,26 @@ jobs:
         with:
           ref: master
           fetch-depth: 0
+          submodules: false
 
       - name: Add upstream
         run: |
           git remote add upstream https://github.com/OpenSees/OpenSees.git
           git fetch upstream master
 
-      - name: Fast-forward master from upstream
+      - name: Create sync branch
         run: |
-          git checkout master
+          git checkout -B sync/upstream-master master
           git merge --ff-only upstream/master
-          git push origin master
+
+      - name: Push sync branch
+        run: |
+          git push origin sync/upstream-master --force
+
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: sync/upstream-master
+          base: master
+          title: "Sync master with upstream OpenSees"
+          body: "Automated PR to fast-forward SIMPSOBA master with upstream OpenSees master."
