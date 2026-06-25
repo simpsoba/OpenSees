@@ -449,7 +449,7 @@ if(MPI_FOUND)
   else()
      set (MUMPS_FLAG -D_MUMPS)
      if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-       set (MUMPS_LIBRARIES "${MUMPS_DIR}/dmumps;${MUMPS_DIR}/mumps_common;${MUMPS_DIR}/pord")
+       set (MUMPS_LIBRARIES "${MUMPS_DIR}/dmumps.lib;${MUMPS_DIR}/mumps_common.lib;${MUMPS_DIR}/pord.lib")
      else()
        set (MUMPS_LIBRARIES "${MUMPS_DIR}/libdmumps.a;${MUMPS_DIR}/libmumps_common.a;${MUMPS_DIR}/libpord.a")
      endif()
@@ -469,15 +469,15 @@ if(MKL_FOUND)
      set (SCALAPACK_LIBRARIES ${MKL_LIBRARIES})
   endif()
   if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-     if(EXISTS "${MKL_ROOT}/lib/mkl_core.lib")
-      set(MKL_LPATH "${MKL_ROOT}/lib")
-    elseif(EXISTS "${MKL_ROOT}/lib/intel64/mkl_core.lib")
+    if(EXISTS "${MKL_ROOT}/lib/intel64/mkl_scalapack_lp64.lib")
       set(MKL_LPATH "${MKL_ROOT}/lib/intel64")
+    elseif(EXISTS "${MKL_ROOT}/lib/mkl_scalapack_lp64.lib")
+      set(MKL_LPATH "${MKL_ROOT}/lib")
     else()
-      message(FATAL_ERROR "MKL libraries not found in expected locations")
+      message(FATAL_ERROR "MKL lp64 ScaLAPACK libraries not found under ${MKL_ROOT}")
     endif()
 
-    set (SCALAPACK_LIBRARIES "${MKL_LPATH}/mkl_scalapack_ilp64.lib;${MKL_LPATH}/mkl_intel_ilp64.lib;${MKL_LPATH}/mkl_sequential.lib;${MKL_LPATH}/mkl_core.lib;${MKL_LPATH}/mkl_blacs_intelmpi_ilp64.lib")
+    set (SCALAPACK_LIBRARIES "${MKL_LPATH}/mkl_scalapack_lp64.lib;${MKL_LPATH}/mkl_intel_lp64.lib;${MKL_LPATH}/mkl_sequential.lib;${MKL_LPATH}/mkl_core.lib;${MKL_LPATH}/mkl_blacs_intelmpi_lp64.lib")
   endif()
 
 else()
@@ -807,8 +807,12 @@ set(TCL_LIBRARIES ${TCL_LIBRARY})
 
 
 #
-# OpenSees OBJECT LIBRARIES
-#
+ # OpenSees OBJECT LIBRARIES
+ #
+
+# _PARALLEL_PROCESSING (OpenSeesSP) and _PARALLEL_INTERPRETERS (OpenSeesMP) are
+# mutually exclusive per executable. Do not use a global compile definition here;
+# SP object libraries and OpenSeesSP get _PARALLEL_PROCESSING when PARALLEL_PROCESSING=ON.
 
 add_library(OPS_Matrix             OBJECT)
 add_library(OPS_Actor              OBJECT)
@@ -1242,6 +1246,47 @@ add_subdirectory(${OPS_SRC_DIR})
 #                            Apply Options
 #
 #==============================================================================
+#----------------------------
+# PARALLEL_PROCESSING (OpenSeesSP object libraries + OPS_InterpTcl)
+#----------------------------
+if(PARALLEL_PROCESSING)
+  message(STATUS "PARALLEL_PROCESSING: applying _PARALLEL_PROCESSING to object libraries for OpenSeesSP")
+
+  function(ops_apply_parallel_processing_to_object_libs dir)
+    get_property(_ops_targets DIRECTORY "${dir}" PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(_ops_tgt IN LISTS _ops_targets)
+      if(NOT TARGET "${_ops_tgt}")
+        continue()
+      endif()
+      get_target_property(_ops_type "${_ops_tgt}" TYPE)
+      if(_ops_type STREQUAL "OBJECT_LIBRARY")
+        target_compile_definitions("${_ops_tgt}" PRIVATE _PARALLEL_PROCESSING)
+      endif()
+    endforeach()
+    get_property(_ops_subdirs DIRECTORY "${dir}" PROPERTY SUBDIRECTORIES)
+    foreach(_ops_subdir IN LISTS _ops_subdirs)
+      ops_apply_parallel_processing_to_object_libs("${_ops_subdir}")
+    endforeach()
+  endfunction()
+
+  foreach(_ops_tgt
+      OPS_Matrix OPS_Actor OPS_ObjectBroker OPS_Handler OPS_Recorder
+      OPS_Reliability OPS_Tagged OPS_Utilities OPS_ModelBuilder OPS_Domain
+      OPS_SysOfEqn OPS_Analysis OPS_ConvergenceTest OPS_Thermal OPS_Element
+      OPS_ElementFortran OPS_Material OPS_MaterialFortran OPS_Damage
+      OPS_Database OPS_INTERPRETER OPS_Paraview OPS_Renderer OPS_Graphics
+      OPS_Graphics_Default OPS_Graphics_GL OPS_PFEM OpenSeesLIB OPS_InterpTcl)
+    if(TARGET "${_ops_tgt}")
+      get_target_property(_ops_type "${_ops_tgt}" TYPE)
+      if(_ops_type STREQUAL "OBJECT_LIBRARY" OR _ops_tgt STREQUAL "OPS_InterpTcl")
+        target_compile_definitions("${_ops_tgt}" PRIVATE _PARALLEL_PROCESSING)
+      endif()
+    endif()
+  endforeach()
+
+  ops_apply_parallel_processing_to_object_libs("${PROJECT_SOURCE_DIR}/SRC")
+endif()
+
 #----------------------------
 # FMK
 #----------------------------

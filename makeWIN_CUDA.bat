@@ -1,5 +1,7 @@
 @echo off
-REM Build OpenSees + OpenSeesPy with CUDA and cuDSS on Windows (AmgX disabled for now).
+REM Build OpenSees, OpenSeesMP, OpenSeesSP, and OpenSeesPy with CUDA and cuDSS on Windows.
+REM   build/     PARALLEL_PROCESSING=OFF  -> OpenSees.exe, OpenSeesMP.exe, OpenSeesPy
+REM   build-sp/  PARALLEL_PROCESSING=ON   -> OpenSeesSP.exe
 REM Requires: VS 2022, Intel oneAPI (ifx/MKL), Anaconda env opensees-cuda, MUMPS build.
 REM Override paths below via environment variables before running.
 
@@ -43,40 +45,31 @@ if not exist "%CMAKE_EXE%" (
 )
 
 set "BUILD_DIR=build"
-set "OUT_DIR=%BUILD_DIR%\Release"
+set "BUILD_SP_DIR=build-sp"
 
 echo CUDAToolkit_ROOT=%CUDAToolkit_ROOT%
 echo MUMPS_DIR=%MUMPS_DIR%
 echo OPENSEES_CUDSS_DIR=%OPENSEES_CUDSS_DIR%
-echo Build tree: %BUILD_DIR%  (Release binaries: %OUT_DIR%)
+echo Build trees: %BUILD_DIR% (OpenSees, OpenSeesMP, OpenSeesPy^)  %BUILD_SP_DIR% (OpenSeesSP^)
 
-REM VS generator: -B build + --config Release => build/Release/OpenSees.exe (not build/Release/Release/)
-conan install . -of %BUILD_DIR% -s arch=x86_64 -s compiler.runtime=static --build=missing -c tools.cmake.cmaketoolchain:generator="Visual Studio 17 2022"
+REM --- Configure build/ (serial + MP): PARALLEL_PROCESSING=OFF ---
+call :configure_cuda_tree "%BUILD_DIR%" OFF
 if errorlevel 1 exit /b 1
 
-"%CMAKE_EXE%" -S . -B %BUILD_DIR% -G "Visual Studio 17 2022" -A x64 ^
-  -DCMAKE_TOOLCHAIN_FILE=%BUILD_DIR%/generators/conan_toolchain.cmake ^
-  -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded ^
-  -DCMAKE_Fortran_COMPILER="C:/Program Files (x86)/Intel/oneAPI/compiler/latest/bin/ifx.exe" ^
-  -DBLA_STATIC=ON ^
-  -DMKL_LINK=static ^
-  -DMKL_INTERFACE_FULL=intel_lp64 ^
-  -DMUMPS_DIR="%MUMPS_DIR%" ^
-  -DCUDAToolkit_ROOT="%CUDAToolkit_ROOT%" ^
-  -Ucudss_DIR -Ucudss_INCLUDE_DIR -Ucudss_LIBRARY_DIR -Ucudss_BINARY_DIR ^
-  -UAMGX_NO_MPI_DIR ^
-  -DCMAKE_EXE_LINKER_FLAGS="/FORCE:MULTIPLE" ^
-  -DCMAKE_SHARED_LINKER_FLAGS="/FORCE:MULTIPLE" ^
-  -DCMAKE_INSTALL_PREFIX=%USERPROFILE%\bin\OpenSees-CUDA
+REM --- Configure build-sp/ (SP): PARALLEL_PROCESSING=ON ---
+call :configure_cuda_tree "%BUILD_SP_DIR%" ON
 if errorlevel 1 exit /b 1
 
-"%CMAKE_EXE%" --build %BUILD_DIR% --config Release --target OpenSees --parallel 10
+"%CMAKE_EXE%" --build %BUILD_DIR% --config Release --target OpenSees OpenSeesMP --parallel 10
 if errorlevel 1 exit /b 1
 
 "%CMAKE_EXE%" --build %BUILD_DIR% --config Release --target OpenSeesPy
 if errorlevel 1 exit /b 1
 
-REM OpenSees.exe looks for Tcl under build/lib/tcl8.6; clock.tcl also needs build/lib/tcl8 (msgcat).
+"%CMAKE_EXE%" --build %BUILD_SP_DIR% --config Release --target OpenSeesSP --parallel 10
+if errorlevel 1 exit /b 1
+
+REM Tcl runtimes: OpenSees*.exe look for lib/tcl8.6 next to the build tree root.
 set "TCL_PKG_LIB="
 for /d %%d in ("%USERPROFILE%\.conan2\p\b\tcl*") do (
   if exist "%%d\p\lib\tcl8.6\init.tcl" (
@@ -87,28 +80,76 @@ for /d %%d in ("%USERPROFILE%\.conan2\p\b\tcl*") do (
 echo ERROR: Conan Tcl not found under %USERPROFILE%\.conan2\p\b
 exit /b 1
 :tcl_found
-set "TCL_DEST=%BUILD_DIR%\lib"
-if not exist "%TCL_DEST%" mkdir "%TCL_DEST%"
-robocopy "%TCL_PKG_LIB%\tcl8.6" "%TCL_DEST%\tcl8.6" /E /NFL /NDL /NJH /NJS /NC /NS >nul
-if errorlevel 8 (
-  echo ERROR: failed to copy Tcl tcl8.6 to %TCL_DEST%\tcl8.6
-  exit /b 1
-)
-robocopy "%TCL_PKG_LIB%\tcl8" "%TCL_DEST%\tcl8" /E /NFL /NDL /NJH /NJS /NC /NS >nul
-if errorlevel 8 (
-  echo ERROR: failed to copy Tcl tcl8 to %TCL_DEST%\tcl8
-  exit /b 1
-)
-echo Staged Tcl runtime from %TCL_PKG_LIB% to %TCL_DEST%
 
-cd %OUT_DIR%
+for %%B in ("%BUILD_DIR%" "%BUILD_SP_DIR%") do (
+  set "TCL_DEST=%%~B\lib"
+  if not exist "!TCL_DEST!" mkdir "!TCL_DEST!"
+  robocopy "!TCL_PKG_LIB!\tcl8.6" "!TCL_DEST!\tcl8.6" /E /NFL /NDL /NJH /NJS /NC /NS >nul
+  if errorlevel 8 (
+    echo ERROR: failed to copy Tcl tcl8.6 to !TCL_DEST!\tcl8.6
+    exit /b 1
+  )
+  robocopy "!TCL_PKG_LIB!\tcl8" "!TCL_DEST!\tcl8" /E /NFL /NDL /NJH /NJS /NC /NS >nul
+  if errorlevel 8 (
+    echo ERROR: failed to copy Tcl tcl8 to !TCL_DEST!\tcl8
+    exit /b 1
+  )
+  echo Staged Tcl runtime to !TCL_DEST!
+)
 
+cd %BUILD_DIR%\Release
 if exist OpenSeesPy.dll (
   copy /Y OpenSeesPy.dll opensees.pyd
 )
 
 echo.
-echo Build complete. Run from a shell with setvars + GPU PATH, e.g.:
-echo   SCRIPTS\windows\run-cuda-smoke.bat
+echo Build complete.
+echo   %BUILD_DIR%\Release\OpenSees.exe
+echo   %BUILD_DIR%\Release\OpenSeesMP.exe
+echo   %BUILD_SP_DIR%\Release\OpenSeesSP.exe
+echo Run from a shell with setvars + GPU PATH, e.g. SCRIPTS\windows\run-cuda-smoke.bat
 
 endlocal
+exit /b 0
+
+:configure_cuda_tree
+set "CFG_BUILD_DIR=%~1"
+set "CFG_PARALLEL_PROCESSING=%~2"
+
+echo.
+echo === Configuring %CFG_BUILD_DIR% (PARALLEL_PROCESSING=%CFG_PARALLEL_PROCESSING%^) ===
+
+conan install . -of %CFG_BUILD_DIR% -s arch=x86_64 -s compiler.runtime=static --build=missing -c tools.cmake.cmaketoolchain:generator="Visual Studio 17 2022"
+if errorlevel 1 exit /b 1
+
+if /I "%CFG_PARALLEL_PROCESSING%"=="ON" (
+  set "CFG_PARALLEL_FLAG=-DPARALLEL_PROCESSING=ON"
+) else (
+  set "CFG_PARALLEL_FLAG=-DPARALLEL_PROCESSING=OFF"
+)
+
+set "CFG_TOOLCHAIN=%CFG_BUILD_DIR%\build\generators\conan_toolchain.cmake"
+if not exist "%CFG_TOOLCHAIN%" set "CFG_TOOLCHAIN=%CFG_BUILD_DIR%\generators\conan_toolchain.cmake"
+if not exist "%CFG_TOOLCHAIN%" (
+  echo ERROR: Conan toolchain not found under %CFG_BUILD_DIR%\build\generators or %CFG_BUILD_DIR%\generators
+  exit /b 1
+)
+
+"%CMAKE_EXE%" -S . -B %CFG_BUILD_DIR% -G "Visual Studio 17 2022" -A x64 ^
+  -DCMAKE_TOOLCHAIN_FILE=%CFG_TOOLCHAIN% ^
+  -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded ^
+  -DCMAKE_Fortran_COMPILER="C:/Program Files (x86)/Intel/oneAPI/compiler/latest/bin/ifx.exe" ^
+  -DBLA_STATIC=ON ^
+  -DMKL_LINK=static ^
+  -DMKL_INTERFACE_FULL=intel_lp64 ^
+  -DMUMPS_DIR="%MUMPS_DIR%" ^
+  -DCUDAToolkit_ROOT="%CUDAToolkit_ROOT%" ^
+  %CFG_PARALLEL_FLAG% ^
+  -Ucudss_DIR -Ucudss_INCLUDE_DIR -Ucudss_LIBRARY_DIR -Ucudss_BINARY_DIR ^
+  -UAMGX_NO_MPI_DIR ^
+  -DCMAKE_EXE_LINKER_FLAGS="/FORCE:MULTIPLE" ^
+  -DCMAKE_SHARED_LINKER_FLAGS="/FORCE:MULTIPLE" ^
+  -DCMAKE_INSTALL_PREFIX=%USERPROFILE%\bin\OpenSees-CUDA
+if errorlevel 1 exit /b 1
+
+exit /b 0
