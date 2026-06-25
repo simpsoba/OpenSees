@@ -26,6 +26,9 @@ option(OPS_Use_Dev_Directories
 option(FMK
   "Special FMK Code"                                       OFF)
 
+option(PARALLEL_PROCESSING
+  "OpenSeesSP build mode: apply _PARALLEL_PROCESSING to object libs and OPS_InterpTcl (mutually exclusive with OpenSeesMP _PARALLEL_INTERPRETERS in one configure)" OFF)
+
 set(OPS_Use_Graphics_Option
   None
   # Base
