@@ -449,7 +449,11 @@ if(MPI_FOUND)
   else()
      set (MUMPS_FLAG -D_MUMPS)
      if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-       set (MUMPS_LIBRARIES "${MUMPS_DIR}/dmumps.lib;${MUMPS_DIR}/mumps_common.lib;${MUMPS_DIR}/pord.lib")
+       get_filename_component(MUMPS_DIR "${MUMPS_DIR}" ABSOLUTE)
+       set (MUMPS_LIBRARIES
+         "${MUMPS_DIR}/dmumps.lib"
+         "${MUMPS_DIR}/mumps_common.lib"
+         "${MUMPS_DIR}/pord.lib")
      else()
        set (MUMPS_LIBRARIES "${MUMPS_DIR}/libdmumps.a;${MUMPS_DIR}/libmumps_common.a;${MUMPS_DIR}/libpord.a")
      endif()
@@ -809,6 +813,10 @@ set(TCL_LIBRARIES ${TCL_LIBRARY})
 #
  # OpenSees OBJECT LIBRARIES
  #
+
+# _PARALLEL_PROCESSING (OpenSeesSP) and _PARALLEL_INTERPRETERS (OpenSeesMP) are
+# mutually exclusive per executable. Do not use a global compile definition here;
+# SP object libraries and OpenSeesSP get _PARALLEL_PROCESSING when PARALLEL_PROCESSING=ON.
 
 # _PARALLEL_PROCESSING (OpenSeesSP) and _PARALLEL_INTERPRETERS (OpenSeesMP) are
 # mutually exclusive per executable. Do not use a global compile definition here;
