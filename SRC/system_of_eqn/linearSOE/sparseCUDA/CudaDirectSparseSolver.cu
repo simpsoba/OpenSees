@@ -56,7 +56,58 @@
 #include <cmath>
 #include <stdexcept>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 using namespace CudaUtils;
+
+// Fail fast at "system CuDSS" time instead of silently crashing on the first analyze().
+static bool verifyCuDSSRuntime()
+{
+#ifdef _WIN32
+    HMODULE hCudss = LoadLibraryA("cudss64.dll");
+    if (hCudss == nullptr) {
+        const DWORD err = GetLastError();
+        opserr << "ERROR: verifyCuDSSRuntime() - cannot load cudss64.dll (GetLastError="
+               << err << ")" << endln;
+        opserr << "  On Windows run: call SCRIPTS\\windows\\opensees-cuda-env.bat" << endln;
+        opserr << "  Ensure OPENSEES_CUDSS_DIR\\bin\\12 and CUDA bin are on PATH." << endln;
+        return false;
+    }
+#endif
+
+    int deviceCount = 0;
+    const cudaError_t cudaErr = cudaGetDeviceCount(&deviceCount);
+    if (cudaErr != cudaSuccess) {
+        opserr << "ERROR: verifyCuDSSRuntime() - cudaGetDeviceCount failed: "
+               << cudaGetErrorString(cudaErr) << endln;
+        opserr << "  Check CUDA driver/runtime and PATH to CUDAToolkit bin." << endln;
+        return false;
+    }
+    if (deviceCount <= 0) {
+        opserr << "ERROR: verifyCuDSSRuntime() - no CUDA devices found" << endln;
+        return false;
+    }
+
+    cudssHandle_t handle = nullptr;
+    cudssStatus_t status = cudssCreate(&handle);
+    if (status != CUDSS_STATUS_SUCCESS || handle == nullptr) {
+        opserr << "ERROR: verifyCuDSSRuntime() - cudssCreate failed with status "
+               << status << endln;
+#ifdef _WIN32
+        opserr << "  On Windows run: call SCRIPTS\\windows\\opensees-cuda-env.bat" << endln;
+#endif
+        return false;
+    }
+
+    status = cudssDestroy(handle);
+    if (status != CUDSS_STATUS_SUCCESS) {
+        opserr << "WARNING: verifyCuDSSRuntime() - cudssDestroy failed with status "
+               << status << endln;
+    }
+    return true;
+}
 
 CudaDirectSparseSolver::CudaDirectSparseSolver(CudaPrecision precision, bool verbose, 
                                bool hybridMemoryMode, const std::vector<size_t>& hybridDeviceMemoryLimits, 
@@ -606,6 +657,12 @@ void* OPS_CudaDirectSparseSolver()
         opserr << "WARNING: OPS_CudaDirectSparseSolver() - "
                << "hybridDeviceMemoryLimit is only valid with hybridMemoryMode enabled. "
                << "Ignoring hybridDeviceMemoryLimit." << endln;
+    }
+
+    if (!verifyCuDSSRuntime()) {
+        opserr << "ERROR: OPS_CudaDirectSparseSolver() - cuDSS/CUDA runtime verification failed"
+               << endln;
+        return nullptr;
     }
 
     CudaBcsrLinSolver* solver = nullptr;
