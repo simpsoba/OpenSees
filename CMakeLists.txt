@@ -448,7 +448,11 @@ if(MPI_FOUND)
   else()
      set (MUMPS_FLAG -D_MUMPS)
      if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-       set (MUMPS_LIBRARIES "${MUMPS_DIR}/dmumps.lib;${MUMPS_DIR}/mumps_common.lib;${MUMPS_DIR}/pord.lib")
+       get_filename_component(MUMPS_DIR "${MUMPS_DIR}" ABSOLUTE)
+       set (MUMPS_LIBRARIES
+         "${MUMPS_DIR}/dmumps.lib"
+         "${MUMPS_DIR}/mumps_common.lib"
+         "${MUMPS_DIR}/pord.lib")
      else()
        set (MUMPS_LIBRARIES "${MUMPS_DIR}/libdmumps.a;${MUMPS_DIR}/libmumps_common.a;${MUMPS_DIR}/libpord.a")
      endif()
