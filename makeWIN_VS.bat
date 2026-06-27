@@ -1,5 +1,5 @@
-#rd /s /q build
-#rd /s /q build-sp
+REM rd /s /q build
+REM rd /s /q build-sp
 
 cd /d "%~dp0"
 
