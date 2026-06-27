@@ -13,7 +13,7 @@ if "%SCALE%"=="" set "SCALE=3.0"
 
 cd EXAMPLES\KRAlphaExplicit\Two-Story_MRF
 echo Running: OpenSees.exe two_story_MRF.tcl %METHOD% %RHO% %SCALE%
-"%REPO_ROOT%\build\Release\OpenSees.exe" two_story_MRF.tcl %METHOD% %RHO% %SCALE%
+"%REPO_ROOT%\%OPENSEES_BUILD_DIR%\Release\OpenSees.exe" two_story_MRF.tcl %METHOD% %RHO% %SCALE%
 if errorlevel 1 exit /b 1
 
 for /f "delims=" %%f in ('dir /s /b results\results.txt 2^>nul') do (

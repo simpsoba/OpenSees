@@ -1,14 +1,15 @@
 @echo off
-REM Build OpenSees, OpenSeesMP, OpenSeesSP, and OpenSeesPy with CUDA and cuDSS on Windows.
-REM   build/     PARALLEL_PROCESSING=OFF  -> OpenSees.exe, OpenSeesMP.exe, OpenSeesPy
-REM   build-sp/  PARALLEL_PROCESSING=ON   -> OpenSeesSP.exe
+REM Build OpenSees, OpenSeesMP, and OpenSeesPy with CUDA and cuDSS on Windows.
+REM   build-cuda/  PARALLEL_PROCESSING=OFF  -> OpenSees.exe, OpenSeesMP.exe, OpenSeesPy
+REM   (OpenSeesSP disabled for now — see commented build-sp-cuda sections below)
+REM Non-CUDA devel builds use makeWIN_VS.bat (build/, build-sp/).
 REM Requires: VS 2022, Intel oneAPI (ifx/MKL), Anaconda env opensees-cuda, MUMPS build.
-REM Override paths below via environment variables before running.
+REM Override BUILD_DIR, BUILD_SP_DIR, MUMPS_DIR, CUDAToolkit_ROOT before running.
 
 setlocal EnableDelayedExpansion
 
-set "REPO_ROOT=%~dp0"
-cd /d "%REPO_ROOT%"
+cd /d "%~dp0"
+set "REPO_ROOT=%CD%"
 
 REM --- Anaconda (Python 3.12 + conan) ---
 set "ANACONDA_ROOT=%LOCALAPPDATA%\anaconda3"
@@ -24,9 +25,11 @@ if exist "%ANACONDA_ROOT%\Scripts\activate.bat" (
 REM --- Intel oneAPI (ifx, MKL) + GPU runtime PATH (cuDSS not covered by setvars) ---
 call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 mod
 
-REM --- User-tunable dependency paths (defaults for this machine) ---
+REM --- User-tunable paths (defaults for this machine) ---
+if not defined BUILD_DIR set "BUILD_DIR=build-cuda"
+REM if not defined BUILD_SP_DIR set "BUILD_SP_DIR=build-sp-cuda"
+if not defined MUMPS_DIR for %%I in ("%~dp0..\mumps\build") do set "MUMPS_DIR=%%~fI"
 if not defined CUDAToolkit_ROOT set "CUDAToolkit_ROOT=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9"
-if not defined MUMPS_DIR set "MUMPS_DIR=%REPO_ROOT%..\mumps\build"
 REM Runtime PATH only (cuDSS DLLs). CMake discovers cuDSS via default install hints.
 if not defined OPENSEES_CUDSS_DIR set "OPENSEES_CUDSS_DIR=C:\Program Files\NVIDIA cuDSS\v0.8"
 
@@ -44,21 +47,20 @@ if not exist "%CMAKE_EXE%" (
   exit /b 1
 )
 
-set "BUILD_DIR=build"
-set "BUILD_SP_DIR=build-sp"
-
 echo CUDAToolkit_ROOT=%CUDAToolkit_ROOT%
 echo MUMPS_DIR=%MUMPS_DIR%
 echo OPENSEES_CUDSS_DIR=%OPENSEES_CUDSS_DIR%
-echo Build trees: %BUILD_DIR% (OpenSees, OpenSeesMP, OpenSeesPy^)  %BUILD_SP_DIR% (OpenSeesSP^)
+echo Build tree: %BUILD_DIR% (OpenSees, OpenSeesMP, OpenSeesPy^)
+REM echo Build tree: %BUILD_SP_DIR% (OpenSeesSP^)
+echo devel/non-CUDA trees: build/ and build-sp/ via makeWIN_VS.bat
 
-REM --- Configure build/ (serial + MP): PARALLEL_PROCESSING=OFF ---
+REM --- Configure %BUILD_DIR% (serial + MP): PARALLEL_PROCESSING=OFF ---
 call :configure_cuda_tree "%BUILD_DIR%" OFF
 if errorlevel 1 exit /b 1
 
-REM --- Configure build-sp/ (SP): PARALLEL_PROCESSING=ON ---
-call :configure_cuda_tree "%BUILD_SP_DIR%" ON
-if errorlevel 1 exit /b 1
+REM --- Configure %BUILD_SP_DIR% (SP): PARALLEL_PROCESSING=ON ---
+REM call :configure_cuda_tree "%BUILD_SP_DIR%" ON
+REM if errorlevel 1 exit /b 1
 
 "%CMAKE_EXE%" --build %BUILD_DIR% --config Release --target OpenSees OpenSeesMP --parallel 10
 if errorlevel 1 exit /b 1
@@ -66,10 +68,10 @@ if errorlevel 1 exit /b 1
 "%CMAKE_EXE%" --build %BUILD_DIR% --config Release --target OpenSeesPy
 if errorlevel 1 exit /b 1
 
-"%CMAKE_EXE%" --build %BUILD_SP_DIR% --config Release --target OpenSeesSP --parallel 10
-if errorlevel 1 exit /b 1
+REM "%CMAKE_EXE%" --build %BUILD_SP_DIR% --config Release --target OpenSeesSP --parallel 10
+REM if errorlevel 1 exit /b 1
 
-REM Tcl runtimes: OpenSees*.exe look for lib/tcl8.6 next to the build tree root.
+REM Tcl runtimes: OpenSees*.exe look for lib\tcl8.6 next to the build tree root.
 set "TCL_PKG_LIB="
 for /d %%d in ("%USERPROFILE%\.conan2\p\b\tcl*") do (
   if exist "%%d\p\lib\tcl8.6\init.tcl" (
@@ -81,7 +83,8 @@ echo ERROR: Conan Tcl not found under %USERPROFILE%\.conan2\p\b
 exit /b 1
 :tcl_found
 
-for %%B in ("%BUILD_DIR%" "%BUILD_SP_DIR%") do (
+REM Original: for %%B in ("%BUILD_DIR%" "%BUILD_SP_DIR%") do (
+for %%B in ("%BUILD_DIR%") do (
   set "TCL_DEST=%%~B\lib"
   if not exist "!TCL_DEST!" mkdir "!TCL_DEST!"
   robocopy "!TCL_PKG_LIB!\tcl8.6" "!TCL_DEST!\tcl8.6" /E /NFL /NDL /NJH /NJS /NC /NS >nul
@@ -96,6 +99,16 @@ for %%B in ("%BUILD_DIR%" "%BUILD_SP_DIR%") do (
   )
   echo Staged Tcl runtime to !TCL_DEST!
 )
+REM OpenSeesSP Tcl staging (re-enable with build-sp-cuda sections above):
+REM for %%B in ("%BUILD_SP_DIR%") do (
+REM   set "TCL_DEST=%%~B\lib"
+REM   if not exist "!TCL_DEST!" mkdir "!TCL_DEST!"
+REM   robocopy "!TCL_PKG_LIB!\tcl8.6" "!TCL_DEST!\tcl8.6" /E /NFL /NDL /NJH /NJS /NC /NS >nul
+REM   if errorlevel 8 exit /b 1
+REM   robocopy "!TCL_PKG_LIB!\tcl8" "!TCL_DEST!\tcl8" /E /NFL /NDL /NJH /NJS /NC /NS >nul
+REM   if errorlevel 8 exit /b 1
+REM   echo Staged Tcl runtime to !TCL_DEST!
+REM )
 
 cd %BUILD_DIR%\Release
 if exist OpenSeesPy.dll (
@@ -106,8 +119,9 @@ echo.
 echo Build complete.
 echo   %BUILD_DIR%\Release\OpenSees.exe
 echo   %BUILD_DIR%\Release\OpenSeesMP.exe
-echo   %BUILD_SP_DIR%\Release\OpenSeesSP.exe
-echo Run from a shell with setvars + GPU PATH, e.g. SCRIPTS\windows\run-cuda-smoke.bat
+REM echo   %BUILD_SP_DIR%\Release\OpenSeesSP.exe
+echo Run: call SCRIPTS\windows\opensees-cuda-env.bat
+REM echo SP runs: set TCL_LIBRARY=%%REPO_ROOT%%\%BUILD_SP_DIR%\lib\tcl8.6
 
 endlocal
 exit /b 0
@@ -147,6 +161,8 @@ if not exist "%CFG_TOOLCHAIN%" (
   %CFG_PARALLEL_FLAG% ^
   -Ucudss_DIR -Ucudss_INCLUDE_DIR -Ucudss_LIBRARY_DIR -Ucudss_BINARY_DIR ^
   -UAMGX_NO_MPI_DIR ^
+  -DCMAKE_EXE_LINKER_FLAGS="/FORCE:MULTIPLE" ^
+  -DCMAKE_SHARED_LINKER_FLAGS="/FORCE:MULTIPLE" ^
   -DCMAKE_INSTALL_PREFIX=%USERPROFILE%\bin\OpenSees-CUDA
 if errorlevel 1 exit /b 1
 

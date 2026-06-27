@@ -13,7 +13,7 @@ echo === CudaExplicitAlpha_TP smoke (Python) ===
 if errorlevel 1 exit /b 1
 
 echo === CudaExplicitAlpha_TP smoke (Tcl / OpenSees.exe) ===
-build\Release\OpenSees.exe tests\cuda_explicit_alpha_tp_smoke.tcl
+"%REPO_ROOT%\%OPENSEES_BUILD_DIR%\Release\OpenSees.exe" tests\cuda_explicit_alpha_tp_smoke.tcl
 if errorlevel 1 exit /b 1
 
 echo === KRAlphaExplicit SDOF: CudaKRAlpha ===
