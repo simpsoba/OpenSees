@@ -710,6 +710,24 @@ macro(ops_cuda_apply_backend_defs target_name)
   ops_cuda_apply_cudss_toolchain(${target_name})
 endmacro()
 
+# OpenSeesCommands.cpp (Python) lives in OPS_INTERPRETER inside OpenSeesLIB.
+# It must see _CUDA/_CUDSS at compile time; GPU backends link only on OpenSeesPy.
+macro(ops_cuda_apply_interpreter_defs target_name)
+  target_compile_definitions(${target_name} PRIVATE ${CUDA_FLAG})
+  if(HAVE_AMGX)
+    target_compile_definitions(${target_name} PRIVATE ${AMGX_FLAG})
+    if(AMGX_INCLUDE_DIR)
+      target_include_directories(${target_name} PRIVATE ${AMGX_INCLUDE_DIR})
+    endif()
+  endif()
+  if(HAVE_CUDSS)
+    target_compile_definitions(${target_name} PRIVATE ${CUDSS_FLAG})
+    if(cudss_INCLUDE_DIR)
+      target_include_directories(${target_name} SYSTEM PRIVATE ${cudss_INCLUDE_DIR})
+    endif()
+  endif()
+endmacro()
+
 function(ops_cuda_link_backends target_name)
   if(NOT HAVE_CUDA)
     return()
@@ -760,6 +778,8 @@ function(configure_cuda_for_target target_name)
   endif()
 
   if(${target_name} STREQUAL "OPS_INTERPRETER" OR ${target_name} STREQUAL "OPS_InterpTcl")
+    ops_cuda_apply_interpreter_defs(${target_name})
+    target_link_libraries(${target_name} PRIVATE OPS_Cuda)
     return()
   endif()
 
@@ -988,6 +1008,9 @@ if(HAVE_CUDA)
     )
     configure_cuda_for_target(OPS_Cuda_CuDSS)
   endif()
+
+  configure_cuda_for_target(OPS_INTERPRETER)
+  configure_cuda_for_target(OPS_InterpTcl)
 endif()
 
 # ########################################################################

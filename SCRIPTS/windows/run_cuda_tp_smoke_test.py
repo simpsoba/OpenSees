@@ -4,7 +4,8 @@ import runpy
 import sys
 
 root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-release = os.path.join(root, "build", "Release")
+build_name = os.environ.get("OPENSEES_BUILD_DIR", "build-cuda")
+release = os.path.join(root, build_name, "Release")
 cuda_root = os.environ.get("CUDAToolkit_ROOT", r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9")
 cudss_root = os.environ.get("CUDSS_DIR", r"C:\Program Files\NVIDIA cuDSS\v0.8")
 oneapi_bin = os.environ.get(

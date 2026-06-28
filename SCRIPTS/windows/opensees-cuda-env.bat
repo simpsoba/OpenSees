@@ -23,3 +23,6 @@ if not defined OPENSEES_BUILD_DIR set "OPENSEES_BUILD_DIR=build-cuda"
 if not defined OPENSEES_BUILD_SP_DIR set "OPENSEES_BUILD_SP_DIR=build-sp-cuda"
 set "PYTHONPATH=%REPO_ROOT%\%OPENSEES_BUILD_DIR%\Release"
 set "TCL_LIBRARY=%REPO_ROOT%\%OPENSEES_BUILD_DIR%\lib\tcl8.6"
+if exist "%REPO_ROOT%\%OPENSEES_BUILD_DIR%\Release\OpenSeesPy.dll" (
+  copy /Y "%REPO_ROOT%\%OPENSEES_BUILD_DIR%\Release\OpenSeesPy.dll" "%REPO_ROOT%\%OPENSEES_BUILD_DIR%\Release\opensees.pyd" >nul
+)

@@ -17,3 +17,8 @@ export LD_LIBRARY_PATH="${MKL_LIB}:${IMPI_ROOT}/lib/release:${IMPI_ROOT}/lib:${C
 
 export OPENSEES="${BUILD_DIR}/OpenSees"
 export OPENSEES_PYTHON="${OPENSEES_PYTHON:-python3}"
+
+# Python imports the opensees module from opensees.so (copy of OpenSeesPy.so).
+if [[ -f "${BUILD_DIR}/OpenSeesPy.so" ]]; then
+  cp -f "${BUILD_DIR}/OpenSeesPy.so" "${BUILD_DIR}/opensees.so"
+fi
