@@ -54,6 +54,7 @@
 #include <string>
 #include <cstring>
 #include <cmath>
+#include <cstdlib>
 #include <stdexcept>
 
 #ifdef _WIN32
@@ -62,17 +63,42 @@
 
 using namespace CudaUtils;
 
+#ifdef _WIN32
+static void printCuDSSPathHint()
+{
+    opserr << "  Add cuDSS and CUDA bin directories to PATH, for example:" << endln;
+    const char* cudssDir = std::getenv("CUDSS_DIR");
+    if (cudssDir != nullptr && cudssDir[0] != '\0') {
+        opserr << "    " << cudssDir << "\\bin\\12" << endln;
+    } else {
+        opserr << "    <cuDSS install>\\bin\\12"
+               << "  (e.g. C:\\Program Files\\NVIDIA cuDSS\\v0.8\\bin\\12)" << endln;
+    }
+    const char* cudaRoot = std::getenv("CUDAToolkit_ROOT");
+    if (cudaRoot != nullptr && cudaRoot[0] != '\0') {
+        opserr << "    " << cudaRoot << "\\bin" << endln;
+    } else {
+        opserr << "    <CUDA toolkit>\\bin"
+               << "  (e.g. C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.9\\bin)"
+               << endln;
+    }
+    opserr << "  Set CUDSS_DIR / CUDAToolkit_ROOT if installs are non-default." << endln;
+}
+#endif
+
 // Fail fast at "system CuDSS" time instead of silently crashing on the first analyze().
 static bool verifyCuDSSRuntime()
 {
 #ifdef _WIN32
-    HMODULE hCudss = LoadLibraryA("cudss64.dll");
+    HMODULE hCudss = LoadLibraryA("cudss64_0.dll");
+    if (hCudss == nullptr) {
+        hCudss = LoadLibraryA("cudss64.dll");
+    }
     if (hCudss == nullptr) {
         const DWORD err = GetLastError();
-        opserr << "ERROR: verifyCuDSSRuntime() - cannot load cudss64.dll (GetLastError="
+        opserr << "ERROR: verifyCuDSSRuntime() - cannot load cuDSS runtime DLL (GetLastError="
                << err << ")" << endln;
-        opserr << "  On Windows run: call SCRIPTS\\windows\\opensees-cuda-env.bat" << endln;
-        opserr << "  Ensure OPENSEES_CUDSS_DIR\\bin\\12 and CUDA bin are on PATH." << endln;
+        printCuDSSPathHint();
         return false;
     }
 #endif
@@ -96,7 +122,7 @@ static bool verifyCuDSSRuntime()
         opserr << "ERROR: verifyCuDSSRuntime() - cudssCreate failed with status "
                << status << endln;
 #ifdef _WIN32
-        opserr << "  On Windows run: call SCRIPTS\\windows\\opensees-cuda-env.bat" << endln;
+        printCuDSSPathHint();
 #endif
         return false;
     }
@@ -350,8 +376,12 @@ struct CuDSSConfig {
     bool hybridMemoryMode = false;        // Hybrid host/device memory mode
     std::vector<size_t> hybridDeviceMemoryLimits;   // Per-device limit for hybrid memory (empty = use heuristic; one value = same for all)
     bool hybridExecuteMode = false;       // Hybrid host/device execute mode
-    bool multiThreadingMode = false;      // OpenMP multi-threading mode (requires OpenMP at build time)
-    std::string threadingLibPath = "/usr/lib/x86_64-linux-gnu/libcudss_mtlayer_gomp.so";  // Threading layer library path ("NULL" = pass NULL to cuDSS)
+    bool multiThreadingMode = false;      // cuDSS MT mode via runtime cudssSetThreadingLayer()
+#ifdef _WIN32
+    std::string threadingLibPath = "cudss_mtlayer_vcomp14064_0.dll";
+#else
+    std::string threadingLibPath = "/usr/lib/x86_64-linux-gnu/libcudss_mtlayer_gomp.so";
+#endif
     std::string cudssMatTypeStr = "full"; // full | symmetric | spd (symmetric/spd use lower storage in SOE)
     std::string parallelMode = "single";  // single | multiGPU | MGMN (parallelism across processes/GPUs)
     int distributed = 0;                  // For MGMN: 0 = root-only (gather-scatter), 1 = row-wise distributed
@@ -550,9 +580,13 @@ void CuDSSParameterParser::printUsageInfo() {
     opserr << "  -hybridMemoryMode <0|1>         Hybrid host/device memory mode (default: 0)" << endln;
     opserr << "  -hybridDeviceMemoryLimit <bytes1 [bytes2 ...]> Per-device limit for hybrid memory (one value=all devices; 0=min)" << endln;
     opserr << "  -hybridExecuteMode <0|1>        Hybrid host/device execute mode (default: 0)" << endln;
-    opserr << "  -multiThreadingMode <0|1>       OpenMP multi-threading mode (default: 0; requires OpenMP at build time)" << endln;
-    opserr << "  -threadingLibPath <path|NULL>   Path to threading layer (when multiThreadingMode is enabled)" << endln;
+    opserr << "  -multiThreadingMode <0|1>       cuDSS MT mode via cudssSetThreadingLayer (default: 0)" << endln;
+    opserr << "  -threadingLibPath <path|NULL>   Path to cuDSS mtlayer shim (when multiThreadingMode is enabled)" << endln;
+#ifdef _WIN32
+    opserr << "                                  (default: cudss_mtlayer_vcomp14064_0.dll in CUDSS_DIR\\bin\\12," << endln;
+#else
     opserr << "                                  (default: /usr/lib/x86_64-linux-gnu/libcudss_mtlayer_gomp.so," << endln;
+#endif
     opserr << "                                   use 'NULL' to let cuDSS use CUDSS_THREADING_LIB env var)" << endln;
     opserr << "  -matrixType <full|symmetric|spd> Matrix type: full (default), symmetric, or spd" << endln;
     opserr << "                                  (symmetric and spd use lower storage; halves matrix memory)" << endln;
@@ -563,7 +597,7 @@ void CuDSSParameterParser::printUsageInfo() {
     opserr << "Notes:" << endln;
     opserr << "  - hybridMemoryMode and hybridExecuteMode are mutually exclusive; hybridExecute mode is not allowed with parallelMode MGMN" << endln;
     opserr << "  - MGMN is only valid in OpenSeesMP (getNP > 1); multiGPU is only valid for single process" << endln;
-    opserr << "  - When multiThreadingMode is enabled: export OMP_NUM_THREADS=<n> to control thread count" << endln;
+    opserr << "  - When multiThreadingMode is enabled: set OMP_NUM_THREADS or CUDSS_THREADING_LIB as needed" << endln;
 }
 
 // Factory function to create CuDSS solver from parsed config

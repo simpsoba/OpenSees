@@ -108,7 +108,6 @@ void CuDSSBackend::initHandle()
     }
     cuDSSCheckError(cudssSetStream(m_Handle, m_cudaStream), "set CUDA stream");
 
-#ifdef CUDSS_USE_OPENMP
     if (m_config.multiThreadingMode) {
         const char *threadingLib =
             (m_config.threadingLibPath == "NULL") ? nullptr : m_config.threadingLibPath.c_str();
@@ -117,7 +116,6 @@ void CuDSSBackend::initHandle()
             opserr << "WARNING CuDSSBackend::initHandle() - cudssSetThreadingLayer failed\n";
         }
     }
-#endif
 
     cuDSSCheckError(cudssConfigCreate(&m_Config), "create cuDSS solver configuration");
     cuDSSCheckError(cudssDataCreate(m_Handle, &m_Data), "create cuDSS solver data");

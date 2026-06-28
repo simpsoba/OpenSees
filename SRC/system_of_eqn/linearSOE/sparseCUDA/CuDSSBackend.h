@@ -64,7 +64,11 @@ public:
               hybridMemoryMode(false),
               hybridExecuteMode(false),
               multiThreadingMode(false),
+#ifdef _WIN32
+              threadingLibPath("cudss_mtlayer_vcomp14064_0.dll"),
+#else
               threadingLibPath("/usr/lib/x86_64-linux-gnu/libcudss_mtlayer_gomp.so"),
+#endif
               matType(CuDSSMatrixType::FULL),
               useMultiGPU(false),
               irNSteps(0),

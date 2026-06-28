@@ -333,6 +333,7 @@ include_directories(
   ${OPS_SRC_DIR}/modelbuilder
   ${OPS_SRC_DIR}/system_of_eqn
   ${OPS_SRC_DIR}/system_of_eqn/linearSOE
+  ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA
   ${OPS_SRC_DIR}/system_of_eqn/eigenSOE
   ${OPS_SRC_DIR}/actor/actor
   ${OPS_SRC_DIR}/actor/channel
@@ -515,6 +516,11 @@ if(CMAKE_CUDA_COMPILER)
     set(CMAKE_CUDA_COMPILER_WORKS TRUE)
   endif()
   enable_language(CUDA)
+  if(WIN32)
+    # Shared cudart avoids static device registration at process start.
+    set(CMAKE_CUDA_RUNTIME_LIBRARY Shared CACHE STRING
+        "Shared CUDA runtime" FORCE)
+  endif()
   # IMPORTED targets CUDA::cusparse, etc. — must run after enable_language(CUDA).
   # A prior find_package(CUDAToolkit) before enable_language can skip this pass and
   # leave CUDA:: targets undefined on a fresh configure.
@@ -535,9 +541,15 @@ if(HAVE_CUDA)
 
   get_filename_component(CMAKE_CXX_COMPILER_NAME "${CMAKE_CXX_COMPILER}" NAME)
   if(CMAKE_CXX_COMPILER_NAME MATCHES cl AND NOT CMAKE_CXX_COMPILER_NAME MATCHES clang)
-    set(CUDA_LIBRARIES CUDA::cusparse CUDA::cusolver CUDA::cudart CUDA::cublas)
+    set(CUDA_RUNTIME_LIBS CUDA::cudart)
+    set(CUDA_SPARSE_LIBS CUDA::cusparse CUDA::cusolver)
+    set(CUDA_BLAS_LIBS CUDA::cublas)
+    set(CUDA_LIBRARIES ${CUDA_RUNTIME_LIBS} ${CUDA_SPARSE_LIBS} ${CUDA_BLAS_LIBS})
   else()
-    set(CUDA_LIBRARIES CUDA::cusparse CUDA::cusolver CUDA::cudart CUDA::cublas m pthread rt dl)
+    set(CUDA_RUNTIME_LIBS CUDA::cudart)
+    set(CUDA_SPARSE_LIBS CUDA::cusparse CUDA::cusolver)
+    set(CUDA_BLAS_LIBS CUDA::cublas)
+    set(CUDA_LIBRARIES ${CUDA_RUNTIME_LIBS} ${CUDA_SPARSE_LIBS} ${CUDA_BLAS_LIBS} m pthread rt dl)
   endif()
 
   set(CUDA_FLAG -D_CUDA)
@@ -576,6 +588,9 @@ if(HAVE_CUDA)
   
   # CuDSS configuration using CMake config package
   set(CUDSS_HINTS)
+  if(DEFINED CUDSS_DIR AND NOT DEFINED CUDSS_ROOT)
+    set(CUDSS_ROOT "${CUDSS_DIR}")
+  endif()
   if(DEFINED CUDSS_ROOT)
     list(APPEND CUDSS_HINTS
       "${CUDSS_ROOT}/lib/${CUDAToolkit_VERSION_MAJOR}/cmake/cudss"
@@ -608,58 +623,12 @@ if(HAVE_CUDA)
       set(CUDSS_FLAG -D_CUDSS)
       set(HAVE_CUDSS TRUE)
       message(STATUS "cuDSS support enabled.")
-
-      # Check for OpenMP for cuDSS multi-threading support
-      message(STATUS "Checking for OpenMP support...")
-      find_package(OpenMP)
-
-      # Try standard CMake detection first
-      if(OpenMP_CXX_FOUND OR OpenMP_C_FOUND)
-          set(CUDSS_OPENMP_FLAG -DCUDSS_USE_OPENMP)
-          set(HAVE_CUDSS_OPENMP TRUE)
-          message(STATUS "  OpenMP found - cuDSS multi-threading support enabled")
-          if(OpenMP_CXX_VERSION)
-              message(STATUS "  OpenMP version: ${OpenMP_CXX_VERSION}")
-          endif()
-      else()
-          # CMake's FindOpenMP failed (often due to pthread detection issues)
-          # Try manual test compilation for GCC
-          if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-              message(STATUS "  CMake OpenMP detection failed, trying manual test for GCC...")
-              include(CheckCXXSourceCompiles)
-              set(CMAKE_REQUIRED_FLAGS "-fopenmp")
-              set(CMAKE_REQUIRED_LINK_OPTIONS "-fopenmp")
-              check_cxx_source_compiles("
-                  #include <omp.h>
-                  int main() { 
-                      int n = omp_get_max_threads();
-                      return 0;
-                  }
-              " OPENMP_MANUAL_TEST_WORKS)
-
-              if(OPENMP_MANUAL_TEST_WORKS)
-                  set(CUDSS_OPENMP_FLAG -DCUDSS_USE_OPENMP)
-                  set(HAVE_CUDSS_OPENMP TRUE)
-                  set(OpenMP_CXX_FLAGS "-fopenmp")
-                  set(OpenMP_CXX_FOUND TRUE)
-                  message(STATUS "  OpenMP manually verified - cuDSS multi-threading support enabled")
-              else()
-                  set(CUDSS_OPENMP_FLAG "")
-                  set(HAVE_CUDSS_OPENMP FALSE)
-                  message(WARNING "OpenMP not found - cuDSS will run without multi-threading support")
-                  message(STATUS "  To enable OpenMP on Linux, install: sudo apt-get install libgomp1")
-              endif()
-          else()
-              set(CUDSS_OPENMP_FLAG "")
-              set(HAVE_CUDSS_OPENMP FALSE)
-              message(WARNING "OpenMP not found - cuDSS will run without multi-threading support")
-          endif()
-      endif()
+      message(STATUS "  cuDSS MT mode: -multiThreadingMode 1 with mtlayer shim on PATH (no exe OpenMP link)")
   else()
       message(STATUS "cuDSS not found (CUDA major ${CUDAToolkit_VERSION_MAJOR}). To enable cuDSS:")
       if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
           message(STATUS "  - Install NVIDIA cuDSS for Windows, or")
-          message(STATUS "  - Set CUDSS_ROOT / CUDSS_DIR / OPENSEES_CUDSS_DIR, or")
+          message(STATUS "  - Set CUDSS_ROOT / CUDSS_DIR (runtime), or")
           message(STATUS "  - Set CMAKE_PREFIX_PATH to .../lib/${CUDAToolkit_VERSION_MAJOR}/cmake/cudss")
       else()
           message(STATUS "  - Ensure libcudss-dev is installed, or")
@@ -667,8 +636,6 @@ if(HAVE_CUDA)
       endif()
       set(CUDSS_FLAG -D_NOCUDSS)
       set(HAVE_CUDSS FALSE)
-      set(CUDSS_OPENMP_FLAG "")
-      set(HAVE_CUDSS_OPENMP FALSE)
   endif()
 else()
   message(STATUS "CUDAToolkit was NOT found.")
@@ -687,31 +654,53 @@ message(STATUS "SCALAPACK_LIBRARIES=${SCALAPACK_LIBRARIES}")
 # Executables link OPS_Cuda plus whichever backends were built. OpenSeesSP/MP also link
 # OPS_Cuda_Parallel when that target exists.
 
+function(ops_cuda_is_windows_executable target_name out_var)
+  if(${target_name} STREQUAL "OpenSees" OR ${target_name} STREQUAL "OpenSeesMP"
+      OR ${target_name} STREQUAL "OpenSeesSP" OR ${target_name} STREQUAL "OpenSeesPy")
+    set(${out_var} TRUE PARENT_SCOPE)
+  else()
+    set(${out_var} FALSE PARENT_SCOPE)
+  endif()
+endfunction()
+
+function(ops_cuda_target_hosts_gpu_runtime target_name out_var)
+  set(${out_var} FALSE PARENT_SCOPE)
+  if(HAVE_CUDA)
+    set(${out_var} TRUE PARENT_SCOPE)
+  endif()
+endfunction()
+
 macro(ops_cuda_apply_base_toolchain target_name)
-  target_compile_definitions(${target_name} PUBLIC ${CUDA_FLAG})
-  target_link_libraries(${target_name} PRIVATE ${CUDA_LIBRARIES})
+  target_compile_definitions(${target_name} PRIVATE ${CUDA_FLAG})
+  ops_cuda_target_hosts_gpu_runtime(${target_name} _ops_cuda_gpu_runtime)
+  if(_ops_cuda_gpu_runtime)
+    target_link_libraries(${target_name} PRIVATE ${CUDA_LIBRARIES})
+  endif()
+  if(WIN32)
+    set_target_properties(${target_name} PROPERTIES CUDA_RUNTIME_LIBRARY Shared)
+  endif()
 endmacro()
 
 macro(ops_cuda_apply_amgx_toolchain target_name)
   if(HAVE_AMGX)
-    target_include_directories(${target_name} PUBLIC ${AMGX_INCLUDE_DIR})
-    target_compile_definitions(${target_name} PUBLIC ${AMGX_FLAG})
-    target_link_libraries(${target_name} PRIVATE ${AMGX_LIBRARIES})
+    target_include_directories(${target_name} PRIVATE ${AMGX_INCLUDE_DIR})
+    target_compile_definitions(${target_name} PRIVATE ${AMGX_FLAG})
+    ops_cuda_target_hosts_gpu_runtime(${target_name} _ops_cuda_gpu_runtime)
+    if(_ops_cuda_gpu_runtime)
+      target_link_libraries(${target_name} PRIVATE ${AMGX_LIBRARIES})
+    endif()
   endif()
 endmacro()
 
 macro(ops_cuda_apply_cudss_toolchain target_name)
   if(HAVE_CUDSS)
-    target_compile_definitions(${target_name} PUBLIC ${CUDSS_FLAG})
-    target_link_libraries(${target_name} PRIVATE cudss)
-
-    if(HAVE_CUDSS_OPENMP)
-      target_compile_definitions(${target_name} PUBLIC ${CUDSS_OPENMP_FLAG})
-      if(TARGET OpenMP::OpenMP_CXX)
-        target_link_libraries(${target_name} PRIVATE OpenMP::OpenMP_CXX)
-      elseif(TARGET OpenMP::OpenMP_C)
-        target_link_libraries(${target_name} PRIVATE OpenMP::OpenMP_C)
-      endif()
+    target_compile_definitions(${target_name} PRIVATE ${CUDSS_FLAG})
+    if(cudss_INCLUDE_DIR)
+      target_include_directories(${target_name} SYSTEM PRIVATE ${cudss_INCLUDE_DIR})
+    endif()
+    ops_cuda_target_hosts_gpu_runtime(${target_name} _ops_cuda_gpu_runtime)
+    if(_ops_cuda_gpu_runtime)
+      target_link_libraries(${target_name} PRIVATE cudss)
     endif()
   endif()
 endmacro()
@@ -746,41 +735,69 @@ function(configure_cuda_for_target target_name)
     return()
   endif()
 
-  ops_cuda_apply_base_toolchain(${target_name})
-
   if(${target_name} STREQUAL "OPS_Cuda")
+    ops_cuda_apply_base_toolchain(${target_name})
     return()
   endif()
 
   if(${target_name} STREQUAL "OPS_Cuda_AmgX")
+    ops_cuda_apply_base_toolchain(${target_name})
     ops_cuda_apply_amgx_toolchain(${target_name})
-    target_link_libraries(${target_name} PUBLIC OPS_Cuda)
-    return()
-  endif()
-
-  if(${target_name} STREQUAL "OPS_Cuda_CuDSS")
-    ops_cuda_apply_cudss_toolchain(${target_name})
-    target_link_libraries(${target_name} PUBLIC OPS_Cuda)
-    return()
-  endif()
-
-  if(${target_name} STREQUAL "OPS_Cuda_Parallel")
-    target_link_libraries(${target_name} PUBLIC OPS_Cuda)
-    return()
-  endif()
-
-  if(${target_name} STREQUAL "OPS_INTERPRETER" OR ${target_name} STREQUAL "OPS_InterpTcl")
-    # Command sources use #ifdef _AMGX / _CUDSS; symbols resolve at final executable link.
-    ops_cuda_apply_backend_defs(${target_name})
     target_link_libraries(${target_name} PRIVATE OPS_Cuda)
     return()
   endif()
 
+  if(${target_name} STREQUAL "OPS_Cuda_CuDSS")
+    ops_cuda_apply_base_toolchain(${target_name})
+    ops_cuda_apply_cudss_toolchain(${target_name})
+    target_link_libraries(${target_name} PRIVATE OPS_Cuda)
+    return()
+  endif()
+
+  if(${target_name} STREQUAL "OPS_Cuda_Parallel")
+    target_link_libraries(${target_name} PRIVATE OPS_Cuda)
+    return()
+  endif()
+
+  if(${target_name} STREQUAL "OPS_INTERPRETER" OR ${target_name} STREQUAL "OPS_InterpTcl")
+    return()
+  endif()
+
+  ops_cuda_is_windows_executable(${target_name} _ops_cuda_exe)
+  if(NOT _ops_cuda_exe)
+    return()
+  endif()
+
+  ops_cuda_apply_base_toolchain(${target_name})
   ops_cuda_apply_backend_defs(${target_name})
   ops_cuda_link_backends(${target_name})
 
   if(${target_name} STREQUAL "OpenSeesSP" OR ${target_name} STREQUAL "OpenSeesMP")
     ops_cuda_link_parallel_backend(${target_name})
+  endif()
+
+  ops_cuda_finalize_executable_link(${target_name})
+endfunction()
+
+# Windows: link CUDA/cuDSS runtime DLLs normally; GPU code is in the exe via object libs.
+function(ops_cuda_finalize_executable_link target_name)
+  if(NOT HAVE_CUDA OR NOT WIN32)
+    return()
+  endif()
+
+  set_target_properties(${target_name} PROPERTIES CUDA_RUNTIME_LIBRARY Shared)
+  target_link_options(${target_name} PRIVATE "LINKER:/NODEFAULTLIB:cudart_static.lib")
+
+  if(LAPACK_FOUND AND LAPACK_LIBRARIES)
+    target_link_libraries(${target_name} PRIVATE ${LAPACK_LIBRARIES})
+  endif()
+
+  target_link_libraries(${target_name} PRIVATE ${CUDA_LIBRARIES})
+  if(HAVE_AMGX)
+    target_link_libraries(${target_name} PRIVATE ${AMGX_LIBRARIES})
+  endif()
+  if(HAVE_CUDSS)
+    target_link_libraries(${target_name} PRIVATE cudss)
   endif()
 endfunction()
 
@@ -944,7 +961,7 @@ target_link_libraries(OpenSeesLIB
     OPS_Utilities
 )
 
-# CUDA support as OPS_ sublibrary
+# CUDA support as OPS_ object libraries; executables link GPU backends directly.
 if(HAVE_CUDA)
   add_library(OPS_Cuda OBJECT
     ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuSparseBackend.cu
@@ -971,16 +988,6 @@ if(HAVE_CUDA)
     )
     configure_cuda_for_target(OPS_Cuda_CuDSS)
   endif()
-
-  # Parallel assembly CUDA SOEs for OpenSeesSP / OpenSeesMP.
-  # Add sources here when distributed GPU assembly is implemented, e.g.:
-  # add_library(OPS_Cuda_Parallel OBJECT
-  #   ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaParallelBcsrLinSOE.cu
-  # )
-  # configure_cuda_for_target(OPS_Cuda_Parallel)
-
-  configure_cuda_for_target(OPS_INTERPRETER)
-  configure_cuda_for_target(OPS_InterpTcl)
 endif()
 
 # ########################################################################
@@ -1001,9 +1008,6 @@ add_executable(OpenSees EXCLUDE_FROM_ALL
   ${OPS_SRC_DIR}/tcl/commands.cpp
   ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerAllClasses.cpp
 )
-
-# Configure CUDA for OpenSees
-configure_cuda_for_target(OpenSees)
 
 if(TARGET TCL::TCL)
     # --- CONAN 2 LOGIC ---
@@ -1051,6 +1055,9 @@ target_link_libraries(OpenSees PRIVATE
   ZLIB::ZLIB
   Eigen3::Eigen
 )
+
+# Link CUDA after MKL/numerics.
+configure_cuda_for_target(OpenSees)
 
 #
 # OpenSeesSP Tcl Parallel Interpreter
@@ -1199,8 +1206,6 @@ set_target_properties(OpenSeesPy PROPERTIES PREFIX "")
 
 target_include_directories(OpenSeesPy PUBLIC ${Python_INCLUDE_DIRS})
 
-# Configure CUDA for OpenSeesPy
-configure_cuda_for_target(OpenSeesPy)
 target_link_libraries(OpenSeesPy PRIVATE
    OpenSeesLIB
    OPS_SysOfEqnPython   
@@ -1212,6 +1217,8 @@ target_link_libraries(OpenSeesPy PRIVATE
    Eigen3::Eigen	
    ${Python_LIBRARIES}
 )
+
+configure_cuda_for_target(OpenSeesPy)
 
 #
 # INSTALL

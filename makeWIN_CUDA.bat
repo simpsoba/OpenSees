@@ -31,9 +31,9 @@ REM if not defined BUILD_SP_DIR set "BUILD_SP_DIR=build-sp-cuda"
 if not defined MUMPS_DIR for %%I in ("%~dp0..\mumps\build") do set "MUMPS_DIR=%%~fI"
 if not defined CUDAToolkit_ROOT set "CUDAToolkit_ROOT=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9"
 REM Runtime PATH only (cuDSS DLLs). CMake discovers cuDSS via default install hints.
-if not defined OPENSEES_CUDSS_DIR set "OPENSEES_CUDSS_DIR=C:\Program Files\NVIDIA cuDSS\v0.8"
+if not defined CUDSS_DIR set "CUDSS_DIR=C:\Program Files\NVIDIA cuDSS\v0.8"
 
-set "PATH=%OPENSEES_CUDSS_DIR%\bin\12;%CUDAToolkit_ROOT%\bin;%PATH%"
+set "PATH=%CUDSS_DIR%\bin\12;%CUDAToolkit_ROOT%\bin;%PATH%"
 
 if not exist "%MUMPS_DIR%\dmumps.lib" (
   echo ERROR: MUMPS not found at MUMPS_DIR=%MUMPS_DIR%
@@ -49,7 +49,7 @@ if not exist "%CMAKE_EXE%" (
 
 echo CUDAToolkit_ROOT=%CUDAToolkit_ROOT%
 echo MUMPS_DIR=%MUMPS_DIR%
-echo OPENSEES_CUDSS_DIR=%OPENSEES_CUDSS_DIR%
+echo CUDSS_DIR=%CUDSS_DIR%
 echo Build tree: %BUILD_DIR% (OpenSees, OpenSeesMP, OpenSeesPy^)
 REM echo Build tree: %BUILD_SP_DIR% (OpenSeesSP^)
 echo devel/non-CUDA trees: build/ and build-sp/ via makeWIN_VS.bat

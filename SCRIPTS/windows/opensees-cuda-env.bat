@@ -17,8 +17,8 @@ call conda activate opensees-cuda >nul 2>&1
 call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 mod >nul
 
 if not defined CUDAToolkit_ROOT set "CUDAToolkit_ROOT=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9"
-if not defined OPENSEES_CUDSS_DIR set "OPENSEES_CUDSS_DIR=C:\Program Files\NVIDIA cuDSS\v0.8"
-set "PATH=%OPENSEES_CUDSS_DIR%\bin\12;%CUDAToolkit_ROOT%\bin;%PATH%"
+if not defined CUDSS_DIR set "CUDSS_DIR=C:\Program Files\NVIDIA cuDSS\v0.8"
+set "PATH=%CUDSS_DIR%\bin\12;%CUDAToolkit_ROOT%\bin;%PATH%"
 if not defined OPENSEES_BUILD_DIR set "OPENSEES_BUILD_DIR=build-cuda"
 if not defined OPENSEES_BUILD_SP_DIR set "OPENSEES_BUILD_SP_DIR=build-sp-cuda"
 set "PYTHONPATH=%REPO_ROOT%\%OPENSEES_BUILD_DIR%\Release"

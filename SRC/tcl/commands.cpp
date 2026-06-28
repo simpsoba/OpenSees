@@ -252,7 +252,7 @@ extern void *OPS_MKRAlphaExplicitMultiSOE(void);
 extern void *OPS_ExplicitAlphaMultiSOE_TP(void);
 extern void *OPS_KRAlphaExplicitMultiSOE_TP(void);
 extern void *OPS_MKRAlphaExplicitMultiSOE_TP(void);
-#ifdef _CUDSS
+#if defined(_CUDSS)
 extern void *OPS_CudaExplicitAlpha(void);
 extern void *OPS_CudaKRAlpha(void);
 extern void *OPS_CudaMKRAlpha(void);
@@ -370,8 +370,12 @@ extern void OPS_SetReliabilityDomain(ReliabilityDomain *);
 #endif
 
 // Cuda Solvers
+#ifdef _AMGX
 extern void *OPS_AmgXLinSolver(void);
+#endif
+#if defined(_CUDSS)
 extern void *OPS_CudaDirectSparseSolver(void);
+#endif
 #ifdef _CUDA
 #ifdef _AMGX
 #include <AmgXLinSolver.h>
@@ -3105,7 +3109,7 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
 #endif
   } 
 
-#ifdef _CUDA
+#if defined(_CUDA)
   // else if ((strcmp(argv[1],"BandGeneral_Single") == 0) || (strcmp(argv[1],"BandGEN_Single") == 0)
   //     || (strcmp(argv[1],"BandGen_Single") == 0)){
   //   BandGenLinLapackSolver_Single    *theSolver = new BandGenLinLapackSolver_Single();
@@ -3120,7 +3124,7 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
   theSOE = (LinearSOE*)OPS_AmgXLinSolver();
   }
 #endif // _AMGX
-#ifdef _CUDSS
+#if defined(_CUDSS)
   else if (strcmp(argv[1],"CuDSS") == 0 || strcmp(argv[1],"cuDSS") == 0 
     || strcmp(argv[1],"CUDSS") == 0 || strcmp(argv[1],"cudss") == 0) {
 
@@ -5164,7 +5168,7 @@ specifyIntegrator(ClientData clientData, Tcl_Interp *interp, int argc,
       theTransientAnalysis->setIntegrator(*theTransientIntegrator);
   }
   
-#ifdef _CUDSS
+#if defined(_CUDSS)
   else if (strcmp(argv[1],"CudaExplicitAlpha") == 0) {
     theTransientIntegrator = (TransientIntegrator *)OPS_CudaExplicitAlpha();
     

@@ -33,10 +33,7 @@ def _runtime_dll_dirs(repo_root: str) -> list[str]:
         "CUDAToolkit_ROOT",
         r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9",
     )
-    cudss_root = os.environ.get(
-        "OPENSEES_CUDSS_DIR",
-        r"C:\Program Files\NVIDIA cuDSS\v0.8",
-    )
+    cudss_root = os.environ.get("CUDSS_DIR", r"C:\Program Files\NVIDIA cuDSS\v0.8")
     oneapi_bin = os.environ.get(
         "ONEAPI_COMPILER_BIN",
         r"C:\Program Files (x86)\Intel\oneAPI\compiler\latest\bin",
