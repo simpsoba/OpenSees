@@ -64,9 +64,37 @@ if ! command -v conan >/dev/null 2>&1; then
   exit 1
 fi
 
+find_conan_toolchain() {
+  local search_root="$1"
+  local candidate
+
+  # Conan 2 (Ninja + Release profile): <of>/build/Release/generators
+  # Conan 2 (Visual Studio):           <of>/build/generators
+  # Legacy layouts:                    <of>/generators
+  for candidate in \
+    "${search_root}/build/Release/generators/conan_toolchain.cmake" \
+    "${search_root}/build/generators/conan_toolchain.cmake" \
+    "${search_root}/generators/conan_toolchain.cmake"; do
+    if [[ -f "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
+  candidate="$(find "${search_root}" -maxdepth 6 -path '*/generators/conan_toolchain.cmake' -print -quit 2>/dev/null || true)"
+  if [[ -n "${candidate}" && -f "${candidate}" ]]; then
+    printf '%s\n' "${candidate}"
+    return 0
+  fi
+
+  return 1
+}
+
 configure_cuda_tree() {
   local cfg_build_dir="$1"
   local parallel_processing="$2"
+  local cfg_build_root
+  cfg_build_root="$(dirname "${cfg_build_dir}")"
   local parallel_flag="-DPARALLEL_PROCESSING=OFF"
   if [[ "${parallel_processing}" == "ON" ]]; then
     parallel_flag="-DPARALLEL_PROCESSING=ON"
@@ -75,17 +103,17 @@ configure_cuda_tree() {
   echo
   echo "=== Configuring ${cfg_build_dir} (PARALLEL_PROCESSING=${parallel_processing}) ==="
 
-  conan install . -of "${cfg_build_dir}" --build=missing \
+  # Conan output folder must be the build-tree root (e.g. build/), not build/Release.
+  # Using -of build/Release nests generators under build/Release/build/Release/generators.
+  conan install . -of "${cfg_build_root}" --build=missing \
     -c tools.cmake.cmaketoolchain:generator=Ninja
 
-  local cfg_toolchain="${cfg_build_dir}/build/generators/conan_toolchain.cmake"
-  if [[ ! -f "${cfg_toolchain}" ]]; then
-    cfg_toolchain="${cfg_build_dir}/generators/conan_toolchain.cmake"
-  fi
-  if [[ ! -f "${cfg_toolchain}" ]]; then
-    echo "ERROR: Conan toolchain not found under ${cfg_build_dir}/build/generators or ${cfg_build_dir}/generators" >&2
+  local cfg_toolchain
+  if ! cfg_toolchain="$(find_conan_toolchain "${cfg_build_root}")"; then
+    echo "ERROR: Conan toolchain not found under ${cfg_build_root}" >&2
     exit 1
   fi
+  echo "Using Conan toolchain: ${cfg_toolchain}"
 
   cmake -S . -B "${cfg_build_dir}" \
     -G Ninja \

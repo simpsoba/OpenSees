@@ -5331,3 +5331,4 @@ Workshops/SimWorkshop/SmallMP/ReadRecord.tcl -text
 Workshops/SimWorkshop/SmallMP/analysis.tcl -text
 Workshops/SimWorkshop/SmallMP/model.tcl -text
 Workshops/SimWorkshop/SmallSP/Example.tcl -text
+makeUbuntu_CUDA.sh text eol=lf
