@@ -724,16 +724,18 @@ int CudaExplicitAlpha::validateCudaSOE(CudaBcsrLinSOE *&cudaSOE) const
 {
     LinearSOE *soe = this->getLinearSOE();
     if (soe == nullptr) {
+        opserr << "ERROR CudaExplicitAlpha - no LinearSOE linked; use `system CuDSS`.\n";
         return -1;
     }
     cudaSOE = dynamic_cast<CudaBcsrLinSOE *>(soe);
     if (cudaSOE == nullptr || cudaSOE->getBlockSize() != 1 || cudaSOE->getCudaBcsrLinSolver() == nullptr) {
+        opserr << "ERROR CudaExplicitAlpha (CudaKRAlpha/CudaMKRAlpha) requires `system CuDSS`.\n";
         return -2;
     }
     if (!isUniformPrecision(cudaSOE->getPrecision())) {
-        opserr << "ERROR CudaExplicitAlpha::validateCudaSOE() - unsupported SOE precision "
+        opserr << "ERROR CudaExplicitAlpha - unsupported CuDSS precision "
                << cudaPrecisionToString(cudaSOE->getPrecision())
-               << "; only uniform dDDI and dFFI are supported\n";
+               << "; only uniform dDDI and dFFI are supported.\n";
         return -3;
     }
     return 0;
@@ -847,7 +849,8 @@ int CudaExplicitAlpha::newStep(double _deltaT)
         return -1;
     }
     AnalysisModel *theModel = this->getAnalysisModel();
-    if (theModel == nullptr || m_impl == nullptr) {
+    if (theModel == nullptr) {
+        opserr << "WARNING CudaExplicitAlpha::newStep() - no AnalysisModel set\n";
         return -2;
     }
     CudaBcsrLinSOE *cudaSOE = nullptr;
@@ -855,6 +858,11 @@ int CudaExplicitAlpha::newStep(double _deltaT)
         return -3;
     }
     ensureDeviceImpl(cudaSOE);
+    if (m_impl == nullptr) {
+        opserr << "ERROR CudaExplicitAlpha::newStep() - GPU state not initialized; "
+               << "rebuild analysis with `system CuDSS`.\n";
+        return -2;
+    }
     cudaSOE->setXSyncMode(false);
 
     *Ut = *U;
