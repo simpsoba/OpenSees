@@ -1,4 +1,5 @@
 * text=auto !eol
+makeUbuntu.sh text eol=lf
 /COPYRIGHT -text
 DEVELOPER/Makefile -text
 DEVELOPER/Makefile.def -text
