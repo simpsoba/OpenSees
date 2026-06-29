@@ -1,5 +1,5 @@
-#rd /s /q build-prof
-#rd /s /q build-sp-prof
+REM rd /s /q build-prof
+REM rd /s /q build-sp-prof
 
 REM Same as makeWIN_VS.bat, but RelWithDebInfo (Release-like + PDBs) in separate trees.
 
