@@ -121,6 +121,12 @@ else()
     include(OpenSeesFunctions) # Your custom logic
 endif()
 
+# Conan MSVC packages ship Release import libs only; map other optimized configs.
+if(CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO Release)
+  set(CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL Release)
+endif()
+
 find_package(ZLIB REQUIRED)
 find_package(HDF5 REQUIRED)
 find_package(TCL REQUIRED)
