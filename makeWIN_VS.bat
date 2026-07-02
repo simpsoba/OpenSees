@@ -43,14 +43,18 @@ conan install . -of %BUILD_SP_DIR% -s arch=x86_64 -s compiler.runtime=static --b
 "%CMAKE%" --build %BUILD_SP_DIR% --config Release --target OpenSeesSP --parallel 10
 
 REM Tcl runtimes: OpenSees*.exe looks for lib\tcl8.6 next to the build tree root.
+REM Must match conanfile.py tcl/8.6.11 (not an older cached tcl/8.6.10 package).
+set TCL_VERSION=8.6.11
 set TCL_PKG_LIB=
 for /d %%d in ("%USERPROFILE%\.conan2\p\b\tcl*") do (
   if exist "%%d\p\lib\tcl8.6\init.tcl" (
-    set "TCL_PKG_LIB=%%d\p\lib"
-    goto tcl_found
+    findstr /C:"package require -exact Tcl %TCL_VERSION%" "%%d\p\lib\tcl8.6\init.tcl" >nul 2>&1 && (
+      set "TCL_PKG_LIB=%%d\p\lib"
+      goto tcl_found
+    )
   )
 )
-echo ERROR: Conan Tcl not found under %USERPROFILE%\.conan2\p\b
+echo ERROR: Conan Tcl %TCL_VERSION% not found under %USERPROFILE%\.conan2\p\b
 exit /b 1
 
 :tcl_found
