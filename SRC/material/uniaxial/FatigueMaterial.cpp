@@ -55,6 +55,11 @@
 #include <OPS_Stream.h>
 #include <elementAPI.h>
 
+// added 9/2024 by Seki
+#include <Domain.h>
+#include <Node.h>
+#include <Vector.h>
+
 void* OPS_FatigueMaterial()
 {
     int numdata = OPS_GetNumRemainingInputArgs();
@@ -63,6 +68,7 @@ void* OPS_FatigueMaterial()
 	opserr << "Want: uniaxialMaterial Fatigue tag? matTag?";
 	opserr << " <-D_max dmax?> <-e0 e0?> <-m m?>" << endln;
 	opserr << " <-min min?> <-max max?>" << endln;
+  opserr << "<-level level? (material (default), node)>" << endln;
 	return 0;
     }
 
@@ -73,64 +79,99 @@ void* OPS_FatigueMaterial()
 	return 0;
     }
 
-    double Dmax      =  1.0;
-    double E0        =  0.191;
-    double m         = -0.458;
-    double epsmin    = NEG_INF_STRAIN;
-    double epsmax    = POS_INF_STRAIN;
+    double Dmax       =  1.0;
+    double E0         =  0.191;
+    double m          = -0.458;
+    double epsmin     = NEG_INF_STRAIN;
+    double epsmax     = POS_INF_STRAIN;
+
+    // added 9/2024 by Seki
+    int levelid       = 0;
+    int n1            = 0;
+    int n2            = 0;
+    double k_end      = 1.0;
     numdata = 1;
 
-    while(OPS_GetNumRemainingInputArgs() > 1) {
-	const char* type = OPS_GetString();
+  while(OPS_GetNumRemainingInputArgs() > 1) {
+	const char *type = OPS_GetString();
 	if (strcmp(type,"-Dmax")==0) {
-	    if (OPS_GetDouble(&numdata,&Dmax)<0) {
-		opserr<<"WARNING invalid double inputs\n";
-		return 0;
-	    }
+	  if (OPS_GetDouble(&numdata,&Dmax)<0) {
+		  opserr<<"WARNING invalid double inputs\n";
+		  return 0;
+	  }
 	} else if (strcmp(type,"-E0")==0) {
-	    if (OPS_GetDouble(&numdata,&E0)<0) {
-		opserr<<"WARNING invalid double inputs\n";
-		return 0;
-	    }
+	  if (OPS_GetDouble(&numdata,&E0)<0) {
+		  opserr<<"WARNING invalid double inputs\n";
+		  return 0;
+	  }
 	} else if (strcmp(type,"-m")==0) {
-	    if (OPS_GetDouble(&numdata,&m)<0) {
-		opserr<<"WARNING invalid double inputs\n";
-		return 0;
-	    }
+	  if (OPS_GetDouble(&numdata,&m)<0) {
+		  opserr<<"WARNING invalid double inputs\n";
+		  return 0;
+	  }
 	} else if (strcmp(type,"-min")==0) {
-	    if (OPS_GetDouble(&numdata,&epsmin)<0) {
-		opserr<<"WARNING invalid double inputs\n";
-		return 0;
-	    }
+	  if (OPS_GetDouble(&numdata,&epsmin)<0) {
+		  opserr<<"WARNING invalid double inputs\n";
+		  return 0;
+	  }
 	} else if (strcmp(type,"-max")==0) {
-	    if (OPS_GetDouble(&numdata,&epsmax)<0) {
-		opserr<<"WARNING invalid double inputs\n";
-		return 0;
+	  if (OPS_GetDouble(&numdata,&epsmax)<0) {
+		  opserr<<"WARNING invalid double inputs\n";
+		  return 0;
+	  }
+	} else if (strcmp(type,"-level")==0) {
+    const char *level = OPS_GetString();
+    if (strcmp(level,"material") == 0 || strcmp(level,"Material") == 0) {
+      levelid = 0;
+    } else if (strcmp(level,"node") == 0 || strcmp(level,"Node") == 0) {
+      levelid = 1;
+      while(OPS_GetNumRemainingInputArgs() > 1){
+        const char *type = OPS_GetString();
+        if (strcmp(type,"-node1")==0) {
+	      if (OPS_GetInt(&numdata,&n1)<0) {
+		      return 0;
+	      }
+	    } else if (strcmp(type,"-node2")==0) {
+	      if (OPS_GetInt(&numdata,&n2)<0) {
+		      opserr<<"WARNING invalid int inputs\n";
+		      return 0;
+	      }
+	    } else if (strcmp(type,"-k")==0) {
+	      if (OPS_GetDouble(&numdata,&k_end)<0) {
+		      opserr<<"WARNING invalid double inputs\n";
+		      return 0;
+	      }
 	    }
+
+      }
+      
+    } else {
+      opserr<<"WARNING invalid string inputs\n";
+      return 0;
+    }
 	}
-    }
+  }
 
-    UniaxialMaterial* mat = OPS_getUniaxialMaterial(idata[1]);
-    if (mat == 0) {
-	opserr << "WARNING component material does not exist\n";
-	opserr << "Component material: " << idata[1]; 
-	opserr << "\nuniaxialMaterial Fatigue: " << idata[0] << endln;
-	return 0;
-    }
-
-    UniaxialMaterial* theMat = new FatigueMaterial(idata[0],*mat,
-						   Dmax,E0,m,epsmin,epsmax);
-    if (theMat == 0) {
-	opserr << "WARNING: failed to create FatigueMaterial material\n";
-	return 0;
-    }
+  UniaxialMaterial* mat = OPS_getUniaxialMaterial(idata[1]);
+  if (mat == 0) {
+	  opserr << "WARNING component material does not exist\n";
+	  opserr << "Component material: " << idata[1]; 
+	  opserr << "\nuniaxialMaterial Fatigue: " << idata[0] << endln;
+	  return 0;
+  }
+  
+  UniaxialMaterial* theMat = new FatigueMaterial(idata[0],*mat,Dmax,E0,m,epsmin,epsmax,levelid,n1,n2,k_end);
+  if (theMat == 0) {
+	  opserr << "WARNING: failed to create FatigueMaterial material\n";
+	  return 0;
+  }
 
     return theMat;
 }
 
 FatigueMaterial::FatigueMaterial(int tag, UniaxialMaterial &material,
 				 double dmax, double E_0, double slope_m, 
-				 double epsmin, double epsmax )
+				 double epsmin, double epsmax, int levelid, int n1, int n2, double k_end)
   :UniaxialMaterial(tag,MAT_TAG_Fatigue), theMaterial(0), 
    Cfailed(false), trialStrain(0)
 {
@@ -160,7 +201,6 @@ FatigueMaterial::FatigueMaterial(int tag, UniaxialMaterial &material,
   SR3 = 0;
   NC3 = 0;
   
-  
   if ( dmax > 1.0 || dmax < 0.0 ) {
     opserr << "FatigueMaterial::FatigueMaterial " <<
       "- Dmax must be between 0 and 1, assuming Dmax = 1\n" ;
@@ -172,6 +212,36 @@ FatigueMaterial::FatigueMaterial(int tag, UniaxialMaterial &material,
   m         = slope_m;
   minStrain = epsmin;
   maxStrain = epsmax;
+
+  // added 9/2024 by Seki
+  levelID = levelid;
+  node1   = n1;
+  node2   = n2;
+  k = k_end;
+  // if ( k_end > 1.0 || k_end < 0.5 ) {
+  //   opserr << "FatigueMaterial::FatigueMaterial " <<
+  //     "- k must be between 0.5 and 1.0, assuming k = 1\n" ;
+  //   k    = 1;
+  // } else {
+  //   k       = k_end;
+  // }
+  
+
+  // calculate the initial chord length for node level fatigue
+  if (levelID == 1) {
+    Domain *theDomain = OPS_GetDomain();
+    // opserr << "OPS_GetDomain() = " << *theDomain << endln; 
+    theNodes[0] = theDomain->getNode(node1);
+    theNodes[1] = theDomain->getNode(node2);
+    const Vector &coords1 = theNodes[0]->getCrds();
+    const Vector &coords2 = theNodes[1]-> getCrds();
+    initL = sqrt(pow((coords2(0) - coords1(0)), 2) + pow((coords2(1) - coords1(1)), 2));
+    initKL = k*initL;
+  }
+  
+
+  
+
   
   theMaterial = material.getCopy();
   
@@ -225,6 +295,16 @@ FatigueMaterial::FatigueMaterial()
   //added by SAJalali
   energy = 0;
   CStress = 0;
+
+  // added 9/2024 by Seki
+  levelID   = 0;
+  node1     = 0;
+  node2     = 0; 
+  k         = 0;
+  theNodes[0] = 0;
+  theNodes[1] = 0;
+  initL     = 0;
+  initKL    = 0;
 }
 
 FatigueMaterial::~FatigueMaterial()
@@ -349,6 +429,20 @@ FatigueMaterial::commitState(void)
   SR1 = 0;
   NC1 = 0;
 
+  double fatigueStrain;
+  if (levelID == 0){
+    fatigueStrain = trialStrain;
+  } else if (levelID == 1){
+    // Calculate normalized deformation between two nodes
+    const Vector &coords1 = theNodes[0]->getCrds();
+    const Vector &coords2 = theNodes[1]->getCrds();
+    const Vector &disp1 = theNodes[0]->getDisp();
+    const Vector &disp2 = theNodes[1]->getDisp();
+    double Lcurr = sqrt(pow(((coords2(0)+disp2(0)) - (coords1(0)+disp1(0))), 2) + pow(((coords2(1)+disp2(1)) - (coords1(1)+disp1(1))), 2));
+    fatigueStrain = (Lcurr - initL)/initKL; 
+  }
+  
+
 
   // No need to continue if the uniaxial material copy 
   // has already failed.
@@ -357,9 +451,14 @@ FatigueMaterial::commitState(void)
   }
 
   //Simple check to see if we reached max strain capacities
-  if (trialStrain >= maxStrain || trialStrain <= minStrain) { 
+  if (fatigueStrain >= maxStrain || fatigueStrain <= minStrain) { 
       Cfailed = true;
-      opserr << "FatigueMaterial: material tag " << this->getTag() << " failed from excessive strain\n";
+      if (levelID == 0) {
+        opserr << "FatigueMaterial: material tag " << this->getTag() << " failed from excessive strain\n";
+      } else if (levelID == 1){
+        opserr << "FatigueMaterial: material tag " << this->getTag() << " failed from excessive strain based on node level deformation\n";
+      }
+      
       DI = Dmax;
       DL = Dmax;
       return 0;
@@ -368,15 +467,14 @@ FatigueMaterial::commitState(void)
   //Initialize the fatigue parameters if they have 
   // not been initialized yet
   if (SF == 0) {
-
-    A   = trialStrain;
-    SF  = 1  ;
-    EP  = trialStrain;
+      A   = fatigueStrain;
+      SF  = 1  ;
+      EP  = fatigueStrain;
     // Initialize other params if not done so already
-    PCC = 0;
-    B   = 0;
-    C   = 0;
-    D   = 0;
+      PCC = 0;
+      B   = 0;
+      C   = 0;
+      D   = 0;
 
   }
 
@@ -388,10 +486,10 @@ FatigueMaterial::commitState(void)
   */
 
   // Determine the slope of the strain hysteresis
-  if ( EP == trialStrain ) {
+  if ( EP == fatigueStrain ) {
     cSlope = PS;         // No real slope here....
   } else {
-    cSlope = trialStrain - EP;   // Determine Current Slope
+    cSlope = fatigueStrain - EP;   // Determine Current Slope
   }
 
 
@@ -489,7 +587,11 @@ FatigueMaterial::commitState(void)
       // likely at the pseudo peak. But this step is
       // is important for accumulating damage
       Cfailed = true;
-      opserr << "FatigueMaterial: material tag " << this->getTag() << " failed at peak\n";
+      if (levelID == 0) {
+        opserr << "FatigueMaterial: material tag " << this->getTag() << " failed at peak\n";
+      } else if (levelID == 1){
+        opserr << "FatigueMaterial: material tag " << this->getTag() << " failed at peak based on node level deformation\n";
+      }
       DL=DI;
     } else {
       Cfailed = false;
@@ -507,7 +609,7 @@ FatigueMaterial::commitState(void)
     if (B == 0 && C == 0 &&  D == 0) {
       
       // If we have not yet found the second peak
-      X = fabs(trialStrain - A);
+      X = fabs(fatigueStrain - A);
 
       if (fabs(X) < 1e-10) {
 	DL = DI ;
@@ -530,7 +632,7 @@ FatigueMaterial::commitState(void)
     } else if (B != 0 && C == 0 &&  D == 0) {
       
       // On our way to find point C. Range Y defined, no X yet
-      X = fabs(trialStrain - B);
+      X = fabs(fatigueStrain - B);
       
       if (fabs(X) < 1e-10) {
 	DL = DI;
@@ -569,10 +671,10 @@ FatigueMaterial::commitState(void)
       //
       // 2.)  One full cylce at |D-C|, 1/2 cycle at |A-B|
 
-      if (fabs(A-trialStrain)> fabs(A-B)) {
+      if (fabs(A-fatigueStrain)> fabs(A-B)) {
 	
 	//   count 1/2 cycle at |D-A|, and one full cycle at |B-C|.
-	X = fabs(trialStrain-A);
+	X = fabs(fatigueStrain-A);
 	
 	if (fabs(Y) < 1e-10) {
 	  DL = DI;
@@ -606,17 +708,17 @@ FatigueMaterial::commitState(void)
 	
 	// One full cycle of |C-D| and 1/2 cycle of |A-B|
 	
-	if (fabs(C-trialStrain) < 1e-10) {
+	if (fabs(C-fatigueStrain) < 1e-10) {
 	  DL = DI;
 	  // added 6/9/2006
 	  //values for recorder
 	  SR3 = 0.0;
 	  NC3 = 0.0;
 	} else {
-	  DL = DI +  1.0 / fabs(pow( ( fabs(C-trialStrain)/E0 ) , 1/m ));
+	  DL = DI +  1.0 / fabs(pow( ( fabs(C-fatigueStrain)/E0 ) , 1/m ));
 	  // added 6/9/2006
 	  //values for recorder
-	  SR3 = fabs(C-trialStrain);
+	  SR3 = fabs(C-fatigueStrain);
 	  NC3 = 1.0;
 	} 
       
@@ -641,7 +743,13 @@ FatigueMaterial::commitState(void)
     if (DL > Dmax && mStress > 0.0 ) {
       DI = DL;
       Cfailed = true;
-      opserr << "FatigueMaterial: material tag " << this->getTag() << " failed at pseudo peak\n";
+      
+      if (levelID == 0) {
+        opserr << "FatigueMaterial: material tag " << this->getTag() << " failed at pseudo peak\n";
+      } else if (levelID == 1){
+        opserr << "FatigueMaterial: material tag " << this->getTag() << " failed at pseudo peak based on node level deformation\n";
+
+      }
     } else {
       Cfailed = false;
     }
@@ -652,12 +760,12 @@ FatigueMaterial::commitState(void)
   if (!Cfailed)
   {
 	  double TStress = getStress();
-	  energy += 0.5*(trialStrain - PS)*(TStress + CStress);
+	  energy += 0.5*(fatigueStrain - PS)*(TStress + CStress);
 	  CStress = TStress;
   }
 
   PS = cSlope;            // Previous Slope
-  EP = trialStrain;   // Keep track of previous strain
+  EP = fatigueStrain;   // Keep track of previous strain
   
   // Check if failed at current step
   if (Cfailed) {
@@ -721,7 +829,7 @@ UniaxialMaterial *
 FatigueMaterial::getCopy(void)
 {
   FatigueMaterial *theCopy = 
-    new FatigueMaterial(this->getTag(), *theMaterial, Dmax, E0, m ,minStrain, maxStrain);
+    new FatigueMaterial(this->getTag(), *theMaterial, Dmax, E0, m ,minStrain, maxStrain, levelID, node1, node2, k);
 
   theCopy->Cfailed = Cfailed;
   theCopy->trialStrain = trialStrain;
@@ -748,7 +856,7 @@ FatigueMaterial::sendSelf(int cTag, Channel &theChannel)
     return -1;
   }
 
-  static Vector dataVec(21);
+  static Vector dataVec(27);
   dataVec(0)  = DI;
   dataVec(1)  = X;
   dataVec(2)  = Y;
@@ -774,6 +882,15 @@ FatigueMaterial::sendSelf(int cTag, Channel &theChannel)
     dataVec(20) = 1.0;
   else
     dataVec(20) = 0.0;
+
+  // added 9/2024 by Seki
+  dataVec(21) = levelID;
+  dataVec(22) = node1;
+  dataVec(23) = node2;
+  dataVec(24) = initL;
+  dataVec(25) = initKL;
+  dataVec(26) = k;
+
 
   if (theChannel.sendVector(dbTag, cTag, dataVec) < 0) {
     opserr << "FatigueMaterial::sendSelf() - failed to send the Vector\n";
@@ -813,7 +930,7 @@ FatigueMaterial::recvSelf(int cTag, Channel &theChannel,
   }
   theMaterial->setDbTag(dataID(2));
 
-  static Vector dataVec(21);
+  static Vector dataVec(27);
   if (theChannel.recvVector(dbTag, cTag, dataVec) < 0) {
     opserr << "FatigueMaterial::recvSelf() - failed to get the Vector\n";
     return -3;
@@ -844,6 +961,22 @@ FatigueMaterial::recvSelf(int cTag, Channel &theChannel,
     Cfailed = true;
   else
     Cfailed = false;
+
+  // added 9/2024 by Seki
+  levelID = dataVec(21);
+  node1 = dataVec(22);
+  node2 = dataVec(23);
+  initL = dataVec(24);
+  initKL = dataVec(25);
+  k = dataVec(26);
+
+  if (levelID == 1) {
+    Domain *theDomain = OPS_GetDomain();
+    if (theDomain != 0) {
+      theNodes[0] = theDomain->getNode(node1);
+      theNodes[1] = theDomain->getNode(node2);
+    }
+  }
 
   if (theMaterial->recvSelf(cTag, theChannel, theBroker) < 0) {
     opserr << "FatigueMaterial::recvSelf() - failed to get the Material\n";
@@ -941,7 +1074,7 @@ FatigueMaterial::setResponse(const char **argv, int argc, OPS_Stream &theOutput)
   }
 
   else if (strcmp(argv[0],"failure") == 0) {
-    int res;
+    int res = 0;
     theResponse =  new MaterialResponse(this, 7, res);
     theOutput.tag("ResponseType", "Failure");
   }

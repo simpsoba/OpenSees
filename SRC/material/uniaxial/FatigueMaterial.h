@@ -44,6 +44,10 @@
 
 #include <UniaxialMaterial.h>
 
+// added 9/2024 by Seki
+#include <Node.h>
+// #include <Domain.h>
+
 class FatigueMaterial : public UniaxialMaterial
 {
  public:
@@ -55,9 +59,13 @@ class FatigueMaterial : public UniaxialMaterial
 		  double E0      =  0.191,
 		  double m       = -0.458,
 		  double minStrain = -1.0e16,
-		  double maxStrain =  1.0e16 );
-  
-  FatigueMaterial();
+		  double maxStrain =  1.0e16,
+      int levelID = 0,
+      int node1 = 0,
+      int node2 = 0,
+      double k = 1.0);
+      
+    FatigueMaterial();
   ~FatigueMaterial();
 
   const char *getClassType(void) const {return "FatigueMaterial";};
@@ -88,10 +96,11 @@ class FatigueMaterial : public UniaxialMaterial
 
   //by SAJalali
   virtual double getEnergy(void) { return energy; }
+
 protected:
   
  private:
-	 double energy, CStress; //SAJalali
+	double energy, CStress; //SAJalali
 
   UniaxialMaterial *theMaterial;
   
@@ -123,6 +132,7 @@ protected:
   bool Cfailed;
   double trialStrain;
 
+
   // added 6/9/2006
   // For recording strain ranges (SRXX) and Number of Cycles (NCXX)
   double SR1;  // Committed strain range at peak
@@ -132,6 +142,16 @@ protected:
   double SR3;  // Committed strain range 3 at PSEUDO peak - there are potentially two ranges
   double NC3;  // Committed number of cycles at SR2 3 (at PSEUDO peak) - there are potentially two ranges
   
+  // added 9/2024 by Seki
+  int levelID;        // 0 = material, 1 = node
+  int node1;
+  int node2;
+  double k;
+  Node *theNodes[2];  // Nodes
+  double initL;       // initial cord length bf two nodes
+  double initKL;
+
+
 };
 
 
