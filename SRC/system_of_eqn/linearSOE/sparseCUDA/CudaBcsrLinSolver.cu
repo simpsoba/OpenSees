@@ -43,7 +43,11 @@ CudaBcsrLinSolver::CudaBcsrLinSolver(int theClassTag, CudaPrecision precision)
 CudaBcsrLinSolver::~CudaBcsrLinSolver()    
 {
 
-}    
+}
+
+void CudaBcsrLinSolver::releaseDeviceResources(void)
+{
+}
 
 int CudaBcsrLinSolver::setLinearSOE(CudaBcsrLinSOE &theCudaBcsrLinSOE)
 {

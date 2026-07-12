@@ -39,7 +39,12 @@ CudaCsrMatrix::CudaCsrMatrix(const SolverConfig &solver, SpmvConfig spmv, Execut
     }
 }
 
-CudaCsrMatrix::~CudaCsrMatrix() { reset(); }
+CudaCsrMatrix::~CudaCsrMatrix()
+{
+    // Destroy only — do not call reset(), which recreates an SpMV backend.
+    destroySpmvBackend();
+    destroyCuDSS();
+}
 
 std::size_t CudaCsrMatrix::valueSize() const
 {
@@ -70,6 +75,7 @@ void CudaCsrMatrix::reset()
     m_ownsStructure = false;
     m_ownsValues = false;
 
+    // Recreate SpMV backend for continued use after an explicit reset().
     if (m_spmv.sharedPattern == nullptr) {
         CuSparseBackend::Config cfg;
         cfg.precision = m_solver.precision;

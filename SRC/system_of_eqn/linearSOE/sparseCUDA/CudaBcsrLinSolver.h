@@ -52,6 +52,10 @@ public:
     // Get solver precision
     CudaPrecision getPrecision(void) const { return m_precision; }
 
+    // Drop GPU objects that reference the SOE CUDA stream. Called from
+    // ~CudaBcsrLinSOE before the stream is destroyed; default is a no-op.
+    virtual void releaseDeviceResources(void);
+
     // Abstract methods that must be implemented by subclasses
     int solve(void) override = 0;
     virtual int setSize(void) override;

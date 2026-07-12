@@ -185,14 +185,21 @@ bool CudaBcsrLinSOE::isSymmetricStorage(void) const
 
 CudaBcsrLinSOE::~CudaBcsrLinSOE() 
 {
+    // Solver and SpMV backend may hold cuDSS/cuSPARSE state bound to
+    // m_cudaStream as an external stream. Release those before destroying the
+    // stream; ~LinearSOE deletes the solver object afterward.
+    if (CudaBcsrLinSolver *solver = getCudaBcsrLinSolver()) {
+        solver->releaseDeviceResources();
+    }
+    delete m_spmvBackend;
+    m_spmvBackend = nullptr;
+
     if (m_cudaStream != nullptr) {
         cudaStreamSynchronize(m_cudaStream);
         cudaStreamDestroy(m_cudaStream);
         m_cudaStream = nullptr;
     }
     cudaDeviceSynchronize();
-    delete m_spmvBackend;
-    m_spmvBackend = nullptr;
 }
 
 // Validation methods

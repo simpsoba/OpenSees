@@ -214,11 +214,16 @@ int CudaDirectSparseSolver::ensureMatrix(CudaBcsrLinSOE *theSOE)
     return 0;
 }
 
-CudaDirectSparseSolver::~CudaDirectSparseSolver()
+void CudaDirectSparseSolver::releaseDeviceResources(void)
 {
+    // CudaCsrMatrix / CuDSSBackend hold the SOE stream as externalStream.
     delete m_matrix;
     m_matrix = nullptr;
-    return;
+}
+
+CudaDirectSparseSolver::~CudaDirectSparseSolver()
+{
+    releaseDeviceResources();
 }
 
 int CudaDirectSparseSolver::setLinearSOE(CudaBcsrLinSOE &theSOE) {

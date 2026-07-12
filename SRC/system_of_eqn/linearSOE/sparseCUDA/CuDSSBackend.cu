@@ -56,24 +56,30 @@ CuDSSBackend::CuDSSBackend(const Config &config)
 
 CuDSSBackend::~CuDSSBackend()
 {
-    if (m_cudaStream != nullptr) {
+    // Sync only streams we own. An external stream may already have been
+    // destroyed by its owner; cudaDeviceSynchronize still drains device work.
+    if (m_cudaStream != nullptr && m_ownsStream) {
         cudaStreamSynchronize(m_cudaStream);
     }
     cudaDeviceSynchronize();
     destroyMatrixObjects();
     if (m_Data != nullptr) {
         cuDSSCheckError(cudssDataDestroy(m_Handle, m_Data), "destroy cuDSS solver data", false);
+        m_Data = nullptr;
     }
     if (m_Config != nullptr) {
         cuDSSCheckError(cudssConfigDestroy(m_Config), "destroy cuDSS config", false);
+        m_Config = nullptr;
     }
     if (m_Handle != nullptr) {
         cuDSSCheckError(cudssDestroy(m_Handle), "destroy cuDSS handle", false);
+        m_Handle = nullptr;
     }
     if (m_cudaStream != nullptr && m_ownsStream) {
         cudaStreamSynchronize(m_cudaStream);
         cudaStreamDestroy(m_cudaStream);
     }
+    m_cudaStream = nullptr;
 }
 
 void CuDSSBackend::initHandle()

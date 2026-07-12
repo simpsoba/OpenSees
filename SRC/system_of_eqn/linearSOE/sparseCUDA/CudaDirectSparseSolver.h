@@ -79,6 +79,7 @@ public:
     int setSize(void) override;
     int setLinearSOE(CudaBcsrLinSOE &theSOE) override;
     LinearSOESolver *getCopy(void) const override;
+    void releaseDeviceResources(void) override;
 
 protected:
 
