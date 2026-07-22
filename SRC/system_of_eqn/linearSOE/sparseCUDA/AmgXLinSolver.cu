@@ -927,3 +927,20 @@ void* OPS_AmgXLinSolver()
             return nullptr;
     }
 }
+
+#include <DistributedCudaBcsrLinSOE.h>
+
+void *OPS_DistributedAmgXLinSolver(void)
+{
+    void *serial = OPS_AmgXLinSolver();
+    if (serial == nullptr)
+        return nullptr;
+
+    CudaBcsrLinSOE *cudaSOE = dynamic_cast<CudaBcsrLinSOE *>(static_cast<LinearSOE *>(serial));
+    if (cudaSOE == nullptr) {
+        delete static_cast<LinearSOE *>(serial);
+        opserr << "ERROR: OPS_DistributedAmgXLinSolver() - expected CudaBcsrLinSOE\n";
+        return nullptr;
+    }
+    return new DistributedCudaBcsrLinSOE(cudaSOE);
+}

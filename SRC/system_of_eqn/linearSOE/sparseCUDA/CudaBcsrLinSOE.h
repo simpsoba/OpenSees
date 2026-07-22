@@ -181,8 +181,28 @@ public:
         STRUCTURE_CHANGED // Both the size and coefficients of the matrix have changed
     };
     MatrixStatus getMatrixStatus(void) const;
+    void setMatrixStatus(MatrixStatus status);
     /** Shared CUDA stream for SOE device work, solver, and integrators (lazy-created). */
     void *getCudaStream(void);
+
+    // Host CSR accessors used by DistributedCudaBcsrLinSOE gather/merge
+    int getPaddedVectorSize(void) const;
+    int getNumCsrIndices(void) const;
+    const int *getHostCsrIndicesData(void) const;
+    int *getHostCsrIndicesData(void);
+    double *getHostAValuesData(void);
+    const double *getHostAValuesData(void) const;
+    Vector &getHostBVector(void);
+    Vector &getHostXVector(void);
+
+    /** Install a pre-built host CSR/BCSR structure (distributed setSize on workers). */
+    int installHostStructure(int numEqn,
+                             int blockSize,
+                             int paddedSize,
+                             const int *csrIndices,
+                             int numIndices,
+                             int numValues,
+                             bool invokeSolverSetSize);
 
     // Host/device authority tracking for lazy synchronization
     enum class DataLocation {
@@ -221,6 +241,7 @@ public:
 
     // Friend declarations
     friend class CudaBcsrLinSolver;
+    friend class DistributedCudaBcsrLinSOE;
     
     // Required methods for subclasses
     // These are pure virtual methods that provide type-erased access to device data without exposing the template nature.

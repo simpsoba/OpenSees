@@ -183,6 +183,101 @@ bool CudaBcsrLinSOE::isSymmetricStorage(void) const
     return m_storageMode == MatrixStorageMode::SYMMETRIC_LOWER;
 }
 
+void CudaBcsrLinSOE::setMatrixStatus(MatrixStatus status)
+{
+    m_matrixStatus = status;
+}
+
+int CudaBcsrLinSOE::getPaddedVectorSize(void) const
+{
+    return static_cast<int>(m_hostB.size());
+}
+
+int CudaBcsrLinSOE::getNumCsrIndices(void) const
+{
+    return static_cast<int>(m_hostCsrIndices.size());
+}
+
+const int *CudaBcsrLinSOE::getHostCsrIndicesData(void) const
+{
+    return m_hostCsrIndices.empty() ? nullptr : raw_pointer_cast(m_hostCsrIndices.data());
+}
+
+int *CudaBcsrLinSOE::getHostCsrIndicesData(void)
+{
+    return m_hostCsrIndices.empty() ? nullptr : raw_pointer_cast(m_hostCsrIndices.data());
+}
+
+double *CudaBcsrLinSOE::getHostAValuesData(void)
+{
+    return m_hostAValues.empty() ? nullptr : raw_pointer_cast(m_hostAValues.data());
+}
+
+const double *CudaBcsrLinSOE::getHostAValuesData(void) const
+{
+    return m_hostAValues.empty() ? nullptr : raw_pointer_cast(m_hostAValues.data());
+}
+
+Vector &CudaBcsrLinSOE::getHostBVector(void)
+{
+    return m_B;
+}
+
+Vector &CudaBcsrLinSOE::getHostXVector(void)
+{
+    return m_X;
+}
+
+int CudaBcsrLinSOE::installHostStructure(int numEqn,
+                                         int blockSize,
+                                         int paddedSize,
+                                         const int *csrIndices,
+                                         int numIndices,
+                                         int numValues,
+                                         bool invokeSolverSetSize)
+{
+    if (numEqn < 0 || blockSize < 1 || paddedSize < numEqn ||
+        csrIndices == nullptr || numIndices < 0 || numValues < 0) {
+        opserr << "WARNING: CudaBcsrLinSOE::installHostStructure() - invalid arguments\n";
+        return -1;
+    }
+
+    m_blockSize = blockSize;
+    m_hostCsrIndices.resize(numIndices);
+    if (numIndices > 0) {
+        std::copy_n(csrIndices, numIndices, raw_pointer_cast(m_hostCsrIndices.data()));
+    }
+    m_hostAValues.assign(numValues, 0.0);
+    m_hostB.assign(paddedSize, 0.0);
+    m_hostX.assign(paddedSize, 0.0);
+
+    m_B.setData(raw_pointer_cast(m_hostB.data()), numEqn);
+    m_X.setData(raw_pointer_cast(m_hostX.data()), numEqn);
+
+    m_matrixStatus = MatrixStatus::STRUCTURE_CHANGED;
+    setBPrimaryLocation(DataLocation::Host);
+    setXPrimaryLocation(DataLocation::Host);
+    setAValuesPrimaryLocation(DataLocation::Host);
+    setAIndicesPrimaryLocation(DataLocation::Host);
+
+    if (!invokeSolverSetSize) {
+        return 0;
+    }
+
+    LinearSOESolver *the_Solver = this->getSolver();
+    if (the_Solver == nullptr) {
+        opserr << "WARNING: CudaBcsrLinSOE::installHostStructure() - no solver set\n";
+        return -1;
+    }
+
+    int solverOK = the_Solver->setSize();
+    if (solverOK < 0) {
+        opserr << "WARNING: CudaBcsrLinSOE::installHostStructure() - solver setSize failed\n";
+        return solverOK;
+    }
+    return 0;
+}
+
 CudaBcsrLinSOE::~CudaBcsrLinSOE() 
 {
     // Solver and SpMV backend may hold cuDSS/cuSPARSE state bound to

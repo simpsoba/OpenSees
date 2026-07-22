@@ -372,9 +372,15 @@ extern void OPS_SetReliabilityDomain(ReliabilityDomain *);
 // Cuda Solvers
 #ifdef _AMGX
 extern void *OPS_AmgXLinSolver(void);
+#ifdef _PARALLEL_INTERPRETERS
+extern void *OPS_DistributedAmgXLinSolver(void);
+#endif
 #endif
 #if defined(_CUDSS)
 extern void *OPS_CudaDirectSparseSolver(void);
+#ifdef _PARALLEL_INTERPRETERS
+extern void *OPS_DistributedCudaDirectSparseSolver(void);
+#endif
 #endif
 #ifdef _CUDA
 #ifdef _AMGX
@@ -382,6 +388,9 @@ extern void *OPS_CudaDirectSparseSolver(void);
 #endif
 #ifdef _CUDSS
 #include <CudaDirectSparseSolver.h>
+#endif
+#ifdef _PARALLEL_INTERPRETERS
+#include <DistributedCudaBcsrLinSOE.h>
 #endif
 #endif
 
@@ -3123,6 +3132,20 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
   OPS_ResetInputNoBuilder(clientData, interp, 2, argc, argv, &theDomain);
   theSOE = (LinearSOE*)OPS_AmgXLinSolver();
   }
+#ifdef _PARALLEL_INTERPRETERS
+  else if (strcmp(argv[1],"DistributedAmgX") == 0 || strcmp(argv[1],"distributedAmgX") == 0
+    || strcmp(argv[1],"DistributedAMGX") == 0) {
+
+  OPS_ResetInputNoBuilder(clientData, interp, 2, argc, argv, &theDomain);
+  DistributedCudaBcsrLinSOE *theParallelSOE =
+      (DistributedCudaBcsrLinSOE *)OPS_DistributedAmgXLinSolver();
+  theSOE = theParallelSOE;
+  if (theParallelSOE != 0) {
+    theParallelSOE->setProcessID(OPS_rank);
+    theParallelSOE->setChannels(numChannels, theChannels);
+  }
+  }
+#endif // _PARALLEL_INTERPRETERS
 #endif // _AMGX
 #if defined(_CUDSS)
   else if (strcmp(argv[1],"CuDSS") == 0 || strcmp(argv[1],"cuDSS") == 0 
@@ -3131,6 +3154,20 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
   OPS_ResetInputNoBuilder(clientData, interp, 2, argc, argv, &theDomain);
   theSOE = (LinearSOE*)OPS_CudaDirectSparseSolver();
   }
+#ifdef _PARALLEL_INTERPRETERS
+  else if (strcmp(argv[1],"DistributedCuDSS") == 0 || strcmp(argv[1],"distributedCuDSS") == 0
+    || strcmp(argv[1],"DistributedCUDSS") == 0) {
+
+  OPS_ResetInputNoBuilder(clientData, interp, 2, argc, argv, &theDomain);
+  DistributedCudaBcsrLinSOE *theParallelSOE =
+      (DistributedCudaBcsrLinSOE *)OPS_DistributedCudaDirectSparseSolver();
+  theSOE = theParallelSOE;
+  if (theParallelSOE != 0) {
+    theParallelSOE->setProcessID(OPS_rank);
+    theParallelSOE->setChannels(numChannels, theChannels);
+  }
+  }
+#endif // _PARALLEL_INTERPRETERS
 #endif // _CUDSS
 #endif // _CUDA
 

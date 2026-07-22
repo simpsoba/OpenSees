@@ -511,9 +511,15 @@ void* OPS_FullGenLinLapackSolver();
 // CUDA Solvers
 #ifdef _AMGX
 void* OPS_AmgXLinSolver();
+#ifdef _PARALLEL_INTERPRETERS
+void* OPS_DistributedAmgXLinSolver();
+#endif
 #endif // _AMGX
 #ifdef _CUDSS
 void* OPS_CudaDirectSparseSolver();
+#ifdef _PARALLEL_INTERPRETERS
+void* OPS_DistributedCudaDirectSparseSolver();
+#endif
 #endif // _CUDSS
 
 void* OPS_PlainNumberer();

@@ -135,6 +135,9 @@ bool setMPIDSOEFlag = false;
 #define MPIPP_H
 #include <DistributedSuperLU.h>
 #include <DistributedProfileSPDLinSOE.h>
+#ifdef _CUDA
+#include <DistributedCudaBcsrLinSOE.h>
+#endif
 #ifdef _MUMPS
 #include <MumpsParallelSOE.h>
 #include <MumpsParallelSolver.h>
@@ -1550,11 +1553,41 @@ int OPS_System()
     } else if (strcmp(type,"AmgX") == 0 || strcmp(type,"amgx") == 0 
                 || strcmp(type,"AMGX") == 0 || strcmp(type,"Amgx") == 0) {
         theSOE = (LinearSOE*)OPS_AmgXLinSolver();
+#ifdef _PARALLEL_INTERPRETERS
+    } else if (strcmp(type,"DistributedAmgX") == 0 || strcmp(type,"distributedAmgX") == 0
+                || strcmp(type,"DistributedAMGX") == 0) {
+        DistributedCudaBcsrLinSOE *theParallelSOE =
+            (DistributedCudaBcsrLinSOE *)OPS_DistributedAmgXLinSolver();
+        theSOE = theParallelSOE;
+        if (theParallelSOE != nullptr && cmds != nullptr) {
+            auto theMachineBroker = cmds->getMachineBroker();
+            auto rank = theMachineBroker->getPID();
+            auto numChannels = cmds->getNumChannels();
+            auto theChannels = cmds->getChannels();
+            theParallelSOE->setProcessID(rank);
+            theParallelSOE->setChannels(numChannels, theChannels);
+        }
+#endif // _PARALLEL_INTERPRETERS
 #endif // _AMGX
 #ifdef _CUDSS
     } else if (strcmp(type,"CuDSS") == 0 || strcmp(type,"cudss") == 0 
                 || strcmp(type,"CUDSS") == 0 || strcmp(type,"cuDSS") == 0) {
         theSOE = (LinearSOE*)OPS_CudaDirectSparseSolver();
+#ifdef _PARALLEL_INTERPRETERS
+    } else if (strcmp(type,"DistributedCuDSS") == 0 || strcmp(type,"distributedCuDSS") == 0
+                || strcmp(type,"DistributedCUDSS") == 0) {
+        DistributedCudaBcsrLinSOE *theParallelSOE =
+            (DistributedCudaBcsrLinSOE *)OPS_DistributedCudaDirectSparseSolver();
+        theSOE = theParallelSOE;
+        if (theParallelSOE != nullptr && cmds != nullptr) {
+            auto theMachineBroker = cmds->getMachineBroker();
+            auto rank = theMachineBroker->getPID();
+            auto numChannels = cmds->getNumChannels();
+            auto theChannels = cmds->getChannels();
+            theParallelSOE->setProcessID(rank);
+            theParallelSOE->setChannels(numChannels, theChannels);
+        }
+#endif // _PARALLEL_INTERPRETERS
 #endif // _CUDSS
 #endif // _CUDA
 

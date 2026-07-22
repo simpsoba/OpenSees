@@ -987,6 +987,7 @@ if(HAVE_CUDA)
     ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CuSparseBackend.cu
     ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaBcsrLinSOE.cu
     ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/CudaBcsrLinSolver.cu
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCUDA/DistributedCudaBcsrLinSOE.cu
   )
   configure_cuda_for_target(OPS_Cuda)
 

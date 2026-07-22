@@ -708,6 +708,7 @@
 #include "DomainSolver.h"
 #ifdef _CUDA
 #include "sparseCUDA/CudaBcsrLinSOE.h"
+#include "sparseCUDA/DistributedCudaBcsrLinSOE.h"
 #endif
 #include "fullGEN/FullGenLinSOE.h"
 #include "bandGEN/BandGenLinSOE.h"
@@ -3237,6 +3238,9 @@ FEM_ObjectBrokerAllClasses::getNewLinearSOE(int classTagSOE)
         theSOE = CudaBcsrLinSOE::createCudaLinearSOE(classTagSOE);
         if (theSOE != nullptr) return theSOE;
         break;
+    case LinSOE_TAGS_DistributedCudaBcsrLinSOE:
+        theSOE = new DistributedCudaBcsrLinSOE();
+        return theSOE;
 #endif // _CUDA
 
 #ifdef _PARALLEL_PROCESSING
