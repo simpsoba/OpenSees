@@ -5790,7 +5790,21 @@ eigenAnalysis(ClientData clientData, Tcl_Interp *interp, int argc,
 
       } else {
 
-	theEigenSOE = new ArpackSOE(shift);    
+	theEigenSOE = new ArpackSOE(shift);
+
+#ifdef _PARALLEL_INTERPRETERS
+	// OpenSeesMP: same pattern as MumpsParallelSOE
+	if (theSOE != 0) {
+	  int soeTag = theSOE->getClassTag();
+	  if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
+	      soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+	      soeTag == LinSOE_TAGS_DistributedCudaBcsrLinSOE) {
+	    ArpackSOE *theArpackSOE = (ArpackSOE *)theEigenSOE;
+	    theArpackSOE->setProcessID(OPS_rank);
+	    theArpackSOE->setChannels(numChannels, theChannels);
+	  }
+	}
+#endif
 
       }
       
