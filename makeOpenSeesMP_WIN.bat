@@ -2,14 +2,18 @@
 setlocal EnableDelayedExpansion
 
 REM ---------------------------------------------------------------------------
-REM OpenSeesMP Windows build (Ninja + Conan + Intel oneAPI).
-REM Edit these paths for your machine.
+REM OpenSeesMP Windows build (Ninja + Conan + Intel oneAPI) with METIS 5 + CUDA.
+REM Edit these paths for your machine, or set them before calling this script.
+REM
+REM CPU-only (no CUDA): set OPS_SKIP_CUDA=1
 REM ---------------------------------------------------------------------------
-set "BUILD_DIR=build-mp"
-set "MUMPS_DIR=%~dp0..\mumps\build"
-set "METIS5_DIR=%~dp0..\metis-5.1.0\install"
-set "ONEAPI_SETVARS=C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-set "JOBS=10"
+if not defined BUILD_DIR set "BUILD_DIR=build-mp"
+if not defined MUMPS_DIR set "MUMPS_DIR=%~dp0..\mumps\build"
+if not defined METIS5_DIR set "METIS5_DIR=%~dp0..\metis-5.1.0\install"
+if not defined ONEAPI_SETVARS set "ONEAPI_SETVARS=C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+if not defined CUDAToolkit_ROOT set "CUDAToolkit_ROOT=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9"
+if not defined OPS_SKIP_CUDA set "OPS_SKIP_CUDA=0"
+if not defined JOBS set "JOBS=10"
 
 cd /d "%~dp0"
 
@@ -29,8 +33,26 @@ if not exist "!METIS5_DIR!\include\metis.h" (
   exit /b 1
 )
 
+set "WITH_CUDA=0"
+if /I not "!OPS_SKIP_CUDA!"=="1" (
+  if not exist "!CUDAToolkit_ROOT!\bin\nvcc.exe" (
+    echo ERROR: CUDA not found at CUDAToolkit_ROOT=!CUDAToolkit_ROOT!
+    echo Set CUDAToolkit_ROOT, or OPS_SKIP_CUDA=1 for a CPU-only OpenSeesMP.
+    exit /b 1
+  )
+  set "WITH_CUDA=1"
+  set "PATH=!CUDAToolkit_ROOT!\bin;!PATH!"
+)
+
 call "!ONEAPI_SETVARS!" intel64 mod
 if errorlevel 1 exit /b 1
+
+echo BUILD_DIR=!BUILD_DIR!
+echo MUMPS_DIR=!MUMPS_DIR!
+echo METIS5_DIR=!METIS5_DIR!
+echo WITH_CUDA=!WITH_CUDA!
+if "!WITH_CUDA!"=="1" echo CUDAToolkit_ROOT=!CUDAToolkit_ROOT!
+echo JOBS=!JOBS!
 
 REM Conan provides Tcl, HDF5, Eigen and zlib.
 conan install . -of "!BUILD_DIR!" ^
@@ -49,6 +71,11 @@ if not exist "!TOOLCHAIN!" (
   exit /b 1
 )
 
+set "CUDA_CMAKE_ARGS="
+if "!WITH_CUDA!"=="1" (
+  set "CUDA_CMAKE_ARGS=-DCUDAToolkit_ROOT=!CUDAToolkit_ROOT! -Ucudss_DIR -Ucudss_INCLUDE_DIR -Ucudss_LIBRARY_DIR -Ucudss_BINARY_DIR -UAMGX_NO_MPI_DIR"
+)
+
 cmake -S . -B "!BUILD_DIR!\Release" -G Ninja ^
   -DCMAKE_TOOLCHAIN_FILE="!TOOLCHAIN!" ^
   -DCMAKE_BUILD_TYPE=Release ^
@@ -64,6 +91,7 @@ cmake -S . -B "!BUILD_DIR!\Release" -G Ninja ^
   -UOPENSEES_METIS5_LIBRARY ^
   -UOPENMPI ^
   -DPARALLEL_PROCESSING=OFF ^
+  !CUDA_CMAKE_ARGS! ^
   -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON ^
   -DCMAKE_C_USE_RESPONSE_FILE_FOR_OBJECTS=ON ^
   -DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=ON
@@ -98,4 +126,5 @@ echo Tcl !TCL_VERSION! copied to !BUILD_DIR!\lib\
 echo.
 echo OpenSeesMP built successfully:
 echo   %CD%\!BUILD_DIR!\Release\OpenSeesMP.exe
+if "!WITH_CUDA!"=="1" echo   CUDA enabled (CuDSS / DistributedCuDSS when cuDSS is found).
 endlocal

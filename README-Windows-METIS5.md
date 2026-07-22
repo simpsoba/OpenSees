@@ -15,11 +15,15 @@ sudo apt install libmetis-dev
 ```
 
 The default `makeOpenSeesMP_Ubuntu.sh` configuration uses `/usr` as the METIS
-prefix. For a nonstandard installation, set `METIS5_DIR`:
+prefix and enables CUDA when `nvcc` is found. For a nonstandard installation:
 
 ```bash
-METIS5_DIR=/path/to/metis/install ./makeOpenSeesMP_Ubuntu.sh
+METIS5_DIR=/path/to/metis/install \
+CUDAToolkit_ROOT=/usr/local/cuda-12.4 \
+./makeOpenSeesMP_Ubuntu.sh
 ```
+
+CPU-only OpenSeesMP (no CUDA): `OPS_SKIP_CUDA=1 ./makeOpenSeesMP_Ubuntu.sh`.
 
 The prefix must contain:
 
