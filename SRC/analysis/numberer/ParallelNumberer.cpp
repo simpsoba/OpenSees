@@ -117,7 +117,6 @@ int
 ParallelNumberer::numberDOF(int lastDOF)
 {
   int result = 0;
-  int globalNumEqn = 0;
 
   // get a pointer to the model & check its not null
   AnalysisModel *theModel = this->getAnalysisModelPtr();
@@ -261,7 +260,6 @@ ParallelNumberer::numberDOF(int lastDOF)
       vertexPtr->setTmp(count);
       count += numDOF;
     }
-    globalNumEqn = count;
 
     if (theNumberer == 0)
       delete theOrderedRefs;
@@ -358,20 +356,6 @@ ParallelNumberer::numberDOF(int lastDOF)
     elePtr->setID();
 
   theModel->clearDOFGroupGraph();
-
-  // AnalysisModel kept PlainHandler's *local* countDOF; gather SOEs / Arpack
-  // need the global equation count after ParallelNumberer assigns IDs.
-  static ID numEqnData(1);
-  if (processID != 0) {
-    Channel *theChannel = theChannels[0];
-    theChannel->recvID(0, 0, numEqnData);
-    globalNumEqn = numEqnData(0);
-  } else {
-    numEqnData(0) = globalNumEqn;
-    for (int j = 0; j < numChannels; ++j)
-      theChannels[j]->sendID(0, 0, numEqnData);
-  }
-  theModel->setNumEqn(globalNumEqn);
   
   return result;
 }
