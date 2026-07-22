@@ -258,8 +258,13 @@ DistributedCudaBcsrLinSOE::setB(const Vector &v, double fact)
         return 0;
 
     if (v.Size() != myBsize) {
+        // Gather-to-root SOEs keep a *global* RHS after graph merge. Callers that
+        // pass AnalysisModel/Arpack local size (processID unset, ParallelNumberer
+        // without setNumEqn) hit this path — see ArpackSOE::setProcessID wiring.
         opserr << "WARNING DistributedCudaBcsrLinSOE::setB() - incompatible sizes "
-               << myBsize << " and " << v.Size() << "\n";
+               << "SOE(global)=" << myBsize << " vector=" << v.Size()
+               << " (expected global eqn count; check ParallelNumberer setNumEqn "
+               << "and ArpackSOE setProcessID for OpenSeesMP)\n";
         return -1;
     }
 

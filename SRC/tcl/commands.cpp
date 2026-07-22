@@ -5805,7 +5805,8 @@ eigenAnalysis(ClientData clientData, Tcl_Interp *interp, int argc,
 	if (theSOE != 0) {
 	  int soeTag = theSOE->getClassTag();
 	  if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
-	      soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE) {
+	      soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+	      soeTag == LinSOE_TAGS_DistributedCudaBcsrLinSOE) {
 	    ArpackSOE *theArpackSOE = (ArpackSOE *)theEigenSOE;
 	    theArpackSOE->setProcessID(OPS_rank);
 	    theArpackSOE->setChannels(numChannels, theChannels);
