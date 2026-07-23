@@ -1,4 +1,4 @@
-# OpenSeesMP smoke: gather-to-root DistributedCuDSS vs Mumps on a 2-subdomain truss.
+# OpenSeesMP smoke: gather-to-root DistributedCuDSS (worker triplets) vs Mumps on a 2-subdomain truss.
 # Run: mpirun -np 2 OpenSeesMP tests/distributed_cudss_mp_smoke.tcl
 
 wipe

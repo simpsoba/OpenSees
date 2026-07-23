@@ -204,6 +204,9 @@ public:
                              int numValues,
                              bool invokeSolverSetSize);
 
+    /** Worker-only: size host X/B without installing global CSR/A (triplet gather). */
+    int resizeHostVectors(int numEqn, int blockSize, int paddedSize);
+
     // Host/device authority tracking for lazy synchronization
     enum class DataLocation {
         Host,   // Host buffer is authoritative; device may be stale
