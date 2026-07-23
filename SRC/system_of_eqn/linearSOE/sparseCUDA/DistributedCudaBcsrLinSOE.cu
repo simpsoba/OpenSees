@@ -7,7 +7,7 @@
 // Written: gaaraujo
 // Created: 07/2026
 //
-// DistributedCudaBcsrLinSOE: SparseGen-style gather-to-root around CudaBcsrLinSOE.
+// DistributedCudaBcsrLinSOE: gather-to-root with worker-side triplets.
 
 #include <DistributedCudaBcsrLinSOE.h>
 #include <CudaBcsrLinSOE.h>
@@ -24,6 +24,14 @@
 
 #include <algorithm>
 #include <cstring>
+#include <vector>
+
+uint64_t
+DistributedCudaBcsrLinSOE::packRC(int row, int col)
+{
+    return (static_cast<uint64_t>(static_cast<uint32_t>(row)) << 32) |
+           static_cast<uint64_t>(static_cast<uint32_t>(col));
+}
 
 DistributedCudaBcsrLinSOE::DistributedCudaBcsrLinSOE(CudaBcsrLinSOE *theSOE)
     : LinearSOE(LinSOE_TAGS_DistributedCudaBcsrLinSOE),
@@ -101,6 +109,167 @@ DistributedCudaBcsrLinSOE::ensureWorkArea(int size)
     sizeWork = size;
 }
 
+void
+DistributedCudaBcsrLinSOE::clearTriplets(void)
+{
+    tripletMap.clear();
+}
+
+int
+DistributedCudaBcsrLinSOE::accumulateTriplet(int row, int col, double value)
+{
+    if (row < 0 || col < 0 || row >= myBsize || col >= myBsize)
+        return 0;
+
+    if (theCudaSOE != nullptr &&
+        theCudaSOE->getMatrixStorageMode() == CudaBcsrLinSOE::MatrixStorageMode::SYMMETRIC_LOWER &&
+        row < col) {
+        return 0;
+    }
+
+    tripletMap[packRC(row, col)] += value;
+
+    if (theCudaSOE != nullptr &&
+        theCudaSOE->getMatrixStatus() == CudaBcsrLinSOE::MatrixStatus::UNCHANGED) {
+        theCudaSOE->setMatrixStatus(CudaBcsrLinSOE::MatrixStatus::COEFFICIENTS_CHANGED);
+    }
+    return 0;
+}
+
+int
+DistributedCudaBcsrLinSOE::addAWorker(const Matrix &m, const ID &id, double fact)
+{
+    if (fact == 0.0)
+        return 0;
+
+    const int idSize = id.Size();
+    if (idSize != m.noRows() && idSize != m.noCols()) {
+        opserr << "WARNING DistributedCudaBcsrLinSOE::addA() - "
+               << "Matrix and ID not of similar sizes\n";
+        return -1;
+    }
+
+    if (fact == 1.0) {
+        for (int i = 0; i < idSize; ++i) {
+            const int globalRow = id(i);
+            if (globalRow < 0 || globalRow >= myBsize)
+                continue;
+            for (int j = 0; j < idSize; ++j) {
+                const int globalCol = id(j);
+                if (globalCol < 0 || globalCol >= myBsize)
+                    continue;
+                if (accumulateTriplet(globalRow, globalCol, m(i, j)) != 0)
+                    return -1;
+            }
+        }
+    } else if (fact == -1.0) {
+        for (int i = 0; i < idSize; ++i) {
+            const int globalRow = id(i);
+            if (globalRow < 0 || globalRow >= myBsize)
+                continue;
+            for (int j = 0; j < idSize; ++j) {
+                const int globalCol = id(j);
+                if (globalCol < 0 || globalCol >= myBsize)
+                    continue;
+                if (accumulateTriplet(globalRow, globalCol, -m(i, j)) != 0)
+                    return -1;
+            }
+        }
+    } else {
+        for (int i = 0; i < idSize; ++i) {
+            const int globalRow = id(i);
+            if (globalRow < 0 || globalRow >= myBsize)
+                continue;
+            for (int j = 0; j < idSize; ++j) {
+                const int globalCol = id(j);
+                if (globalCol < 0 || globalCol >= myBsize)
+                    continue;
+                if (accumulateTriplet(globalRow, globalCol, fact * m(i, j)) != 0)
+                    return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+int
+DistributedCudaBcsrLinSOE::buildMergeIndexMap(void)
+{
+    mergeIndexMap.clear();
+    if (theCudaSOE == nullptr)
+        return -1;
+
+    const int *csr = theCudaSOE->getHostCsrIndicesData();
+    if (csr == nullptr)
+        return -1;
+
+    const int blockSize = theCudaSOE->getBlockSize();
+    const int numEqn = theCudaSOE->getNumEqn();
+
+    if (blockSize <= 1) {
+        const int *rowPtr = csr;
+        const int *colIdx = csr + numEqn + 1;
+        for (int row = 0; row < numEqn; ++row) {
+            for (int k = rowPtr[row]; k < rowPtr[row + 1]; ++k) {
+                mergeIndexMap[packRC(row, colIdx[k])] = k;
+            }
+        }
+        return 0;
+    }
+
+    const int numBlockRows = theCudaSOE->getNumRowBlocks();
+    const int *rowPtr = csr;
+    const int *colIdx = csr + numBlockRows + 1;
+    const int bs2 = blockSize * blockSize;
+    for (int blockRow = 0; blockRow < numBlockRows; ++blockRow) {
+        for (int k = rowPtr[blockRow]; k < rowPtr[blockRow + 1]; ++k) {
+            const int blockCol = colIdx[k];
+            const int blockOffset = k * bs2;
+            for (int lr = 0; lr < blockSize; ++lr) {
+                const int globalRow = blockRow * blockSize + lr;
+                if (globalRow >= numEqn)
+                    continue;
+                for (int lc = 0; lc < blockSize; ++lc) {
+                    const int globalCol = blockCol * blockSize + lc;
+                    if (globalCol >= numEqn)
+                        continue;
+                    mergeIndexMap[packRC(globalRow, globalCol)] =
+                        blockOffset + lr * blockSize + lc;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+int
+DistributedCudaBcsrLinSOE::mergeTripletsIntoA(const int *rows, const int *cols,
+                                              const double *vals, int nTrip)
+{
+    if (nTrip <= 0)
+        return 0;
+    if (theCudaSOE == nullptr || rows == nullptr || cols == nullptr || vals == nullptr)
+        return -1;
+
+    double *A = theCudaSOE->getHostAValuesData();
+    if (A == nullptr) {
+        opserr << "WARNING DistributedCudaBcsrLinSOE::mergeTripletsIntoA() - no host A\n";
+        return -1;
+    }
+
+    for (int i = 0; i < nTrip; ++i) {
+        const auto it = mergeIndexMap.find(packRC(rows[i], cols[i]));
+        if (it == mergeIndexMap.end()) {
+            opserr << "WARNING DistributedCudaBcsrLinSOE::mergeTripletsIntoA() - "
+                   << "no CSR entry for (" << rows[i] << ", " << cols[i] << ")\n";
+            return -1;
+        }
+        A[it->second] += vals[i];
+    }
+    theCudaSOE->setAValuesPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
+    return 0;
+}
+
 int
 DistributedCudaBcsrLinSOE::getNumEqn(void) const
 {
@@ -115,9 +284,12 @@ DistributedCudaBcsrLinSOE::setSize(Graph &theGraph)
         return -1;
     }
 
+    clearTriplets();
+    mergeIndexMap.clear();
+
     int result = 0;
 
-    // Worker: send local graph, receive global CSR structure
+    // Worker: send local graph, receive metadata only (no global CSR)
     if (processID != 0) {
         if (numChannels < 1 || theChannels == 0 || theChannels[0] == 0) {
             opserr << "WARNING DistributedCudaBcsrLinSOE::setSize() - worker has no channel\n";
@@ -127,27 +299,19 @@ DistributedCudaBcsrLinSOE::setSize(Graph &theGraph)
         Channel *theChannel = theChannels[0];
         theGraph.sendSelf(0, *theChannel);
 
-        static ID data(6);
+        static ID data(4);
         theChannel->recvID(0, 0, data);
         const int numEqn = data(0);
-        const int numValues = data(1);
-        const int numIndices = data(2);
-        const int blockSize = data(3);
-        const int paddedSize = data(4);
-        result = data(5);
+        const int blockSize = data(1);
+        const int paddedSize = data(2);
+        result = data(3);
 
         if (result < 0) {
             opserr << "WARNING DistributedCudaBcsrLinSOE::setSize() - rank 0 reported failure\n";
             return result;
         }
 
-        ID indexData(numIndices);
-        theChannel->recvID(0, 0, indexData);
-
-        result = theCudaSOE->installHostStructure(
-            numEqn, blockSize, paddedSize,
-            &indexData(0), numIndices, numValues,
-            /*invokeSolverSetSize=*/false);
+        result = theCudaSOE->resizeHostVectors(numEqn, blockSize, paddedSize);
         if (result < 0)
             return result;
 
@@ -155,7 +319,7 @@ DistributedCudaBcsrLinSOE::setSize(Graph &theGraph)
         return 0;
     }
 
-    // Rank 0: merge remote graphs, build structure, broadcast to workers
+    // Rank 0: merge remote graphs, build structure, send metadata to workers
     FEM_ObjectBroker theBroker;
     for (int j = 0; j < numChannels; ++j) {
         Channel *theChannel = theChannels[j];
@@ -167,36 +331,30 @@ DistributedCudaBcsrLinSOE::setSize(Graph &theGraph)
     result = theCudaSOE->setSize(theGraph);
 
     const int numEqn = theCudaSOE->getNumEqn();
-    const int numValues = theCudaSOE->getNumNonZeroValues();
-    const int numIndices = theCudaSOE->getNumCsrIndices();
     const int blockSize = theCudaSOE->getBlockSize();
     const int paddedSize = theCudaSOE->getPaddedVectorSize();
 
-    static ID data(6);
+    static ID data(4);
     data(0) = numEqn;
-    data(1) = numValues;
-    data(2) = numIndices;
-    data(3) = blockSize;
-    data(4) = paddedSize;
-    data(5) = result;
-
-    ID indexData(numIndices);
-    if (numIndices > 0 && theCudaSOE->getHostCsrIndicesData() != nullptr) {
-        std::copy_n(theCudaSOE->getHostCsrIndicesData(), numIndices, &indexData(0));
-    }
+    data(1) = blockSize;
+    data(2) = paddedSize;
+    data(3) = result;
 
     for (int j = 0; j < numChannels; ++j) {
         Channel *theChannel = theChannels[j];
         theChannel->sendID(0, 0, data);
-        if (result >= 0)
-            theChannel->sendID(0, 0, indexData);
     }
 
     if (result < 0)
         return result;
 
+    if (buildMergeIndexMap() < 0) {
+        opserr << "WARNING DistributedCudaBcsrLinSOE::setSize() - failed to build merge index map\n";
+        return -1;
+    }
+
     ensureMyBSize(numEqn);
-    ensureWorkArea(std::max(numValues, numEqn));
+    ensureWorkArea(numEqn);
     return 0;
 }
 
@@ -205,6 +363,8 @@ DistributedCudaBcsrLinSOE::addA(const Matrix &m, const ID &id, double fact)
 {
     if (theCudaSOE == nullptr)
         return -1;
+    if (processID != 0)
+        return addAWorker(m, id, fact);
     return theCudaSOE->addA(m, id, fact);
 }
 
@@ -213,6 +373,17 @@ DistributedCudaBcsrLinSOE::addA(const Matrix &m)
 {
     if (theCudaSOE == nullptr)
         return -1;
+    if (processID != 0) {
+        const int n = m.noRows();
+        if (n != m.noCols()) {
+            opserr << "WARNING DistributedCudaBcsrLinSOE::addA() - matrix not square\n";
+            return -1;
+        }
+        ID id(n);
+        for (int i = 0; i < n; ++i)
+            id(i) = i;
+        return addAWorker(m, id, 1.0);
+    }
     return theCudaSOE->addA(m);
 }
 
@@ -284,6 +455,7 @@ DistributedCudaBcsrLinSOE::setB(const Vector &v, double fact)
 void
 DistributedCudaBcsrLinSOE::zeroA(void)
 {
+    clearTriplets();
     if (theCudaSOE != nullptr)
         theCudaSOE->zeroA();
 }
@@ -361,7 +533,6 @@ DistributedCudaBcsrLinSOE::solve(void)
     }
 
     const bool sendA = needsMatrixTransfer();
-    const int numValues = theCudaSOE->getNumNonZeroValues();
     Vector &vectX = theCudaSOE->getHostXVector();
     Vector &vectB = theCudaSOE->getHostBVector();
 
@@ -370,8 +541,26 @@ DistributedCudaBcsrLinSOE::solve(void)
         theChannel->sendVector(0, 0, *myVectB);
 
         if (sendA) {
-            Vector vectA(theCudaSOE->getHostAValuesData(), numValues);
-            theChannel->sendVector(0, 0, vectA);
+            const int nTrip = static_cast<int>(tripletMap.size());
+            ID nTripID(1);
+            nTripID(0) = nTrip;
+            theChannel->sendID(0, 0, nTripID);
+
+            if (nTrip > 0) {
+                ID rows(nTrip);
+                ID cols(nTrip);
+                Vector vals(nTrip);
+                int k = 0;
+                for (const auto &entry : tripletMap) {
+                    rows(k) = static_cast<int>(entry.first >> 32);
+                    cols(k) = static_cast<int>(entry.first & 0xffffffffu);
+                    vals(k) = entry.second;
+                    ++k;
+                }
+                theChannel->sendID(0, 0, rows);
+                theChannel->sendID(0, 0, cols);
+                theChannel->sendVector(0, 0, vals);
+            }
         }
 
         theChannel->recvVector(0, 0, vectX);
@@ -386,11 +575,12 @@ DistributedCudaBcsrLinSOE::solve(void)
         return result(0);
     }
 
-    // Rank 0: merge RHS and (if needed) A, then GPU solve
+    // Rank 0: merge RHS and (if needed) triplets, then GPU solve
     vectB = *myVectB;
     theCudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
+    result(0) = 0;
 
-    ensureWorkArea(std::max(numValues, myBsize));
+    ensureWorkArea(myBsize);
     Vector remoteB(myBsize);
 
     for (int j = 0; j < numChannels; ++j) {
@@ -399,16 +589,31 @@ DistributedCudaBcsrLinSOE::solve(void)
         vectB += remoteB;
 
         if (sendA) {
-            Vector remoteA(numValues);
-            theChannel->recvVector(0, 0, remoteA);
-            double *A = theCudaSOE->getHostAValuesData();
-            for (int i = 0; i < numValues; ++i)
-                A[i] += remoteA(i);
-            theCudaSOE->setAValuesPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
+            ID nTripID(1);
+            theChannel->recvID(0, 0, nTripID);
+            const int nTrip = nTripID(0);
+            if (nTrip < 0) {
+                opserr << "WARNING DistributedCudaBcsrLinSOE::solve() - invalid nTrip\n";
+                result(0) = -1;
+                continue;
+            }
+            if (nTrip > 0) {
+                ID rows(nTrip);
+                ID cols(nTrip);
+                Vector vals(nTrip);
+                theChannel->recvID(0, 0, rows);
+                theChannel->recvID(0, 0, cols);
+                theChannel->recvVector(0, 0, vals);
+                if (result(0) == 0 &&
+                    mergeTripletsIntoA(&rows(0), &cols(0), &vals(0), nTrip) < 0) {
+                    result(0) = -1;
+                }
+            }
         }
     }
 
-    result(0) = theCudaSOE->solve();
+    if (result(0) == 0)
+        result(0) = theCudaSOE->solve();
 
     // Ensure host X is current before broadcast
     (void)theCudaSOE->getX();

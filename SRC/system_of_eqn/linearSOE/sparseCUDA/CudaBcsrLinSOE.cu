@@ -278,6 +278,32 @@ int CudaBcsrLinSOE::installHostStructure(int numEqn,
     return 0;
 }
 
+int CudaBcsrLinSOE::resizeHostVectors(int numEqn, int blockSize, int paddedSize)
+{
+    if (numEqn < 0 || blockSize < 1 || paddedSize < numEqn) {
+        opserr << "WARNING: CudaBcsrLinSOE::resizeHostVectors() - invalid arguments\n";
+        return -1;
+    }
+
+    m_blockSize = blockSize;
+    m_hostCsrIndices.clear();
+    m_hostCsrIndices.shrink_to_fit();
+    m_hostAValues.clear();
+    m_hostAValues.shrink_to_fit();
+    m_hostB.assign(paddedSize, 0.0);
+    m_hostX.assign(paddedSize, 0.0);
+
+    m_B.setData(raw_pointer_cast(m_hostB.data()), numEqn);
+    m_X.setData(raw_pointer_cast(m_hostX.data()), numEqn);
+
+    m_matrixStatus = MatrixStatus::STRUCTURE_CHANGED;
+    setBPrimaryLocation(DataLocation::Host);
+    setXPrimaryLocation(DataLocation::Host);
+    setAValuesPrimaryLocation(DataLocation::Host);
+    setAIndicesPrimaryLocation(DataLocation::Host);
+    return 0;
+}
+
 CudaBcsrLinSOE::~CudaBcsrLinSOE() 
 {
     // Solver and SpMV backend may hold cuDSS/cuSPARSE state bound to

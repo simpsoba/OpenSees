@@ -8,15 +8,19 @@
 // Created: 07/2026
 //
 // Description: Gather-to-root distributed wrapper around CudaBcsrLinSOE for
-// OpenSeesMP. All ranks assemble host CSR/BCSR and local RHS; rank 0 merges
-// A and B, solves with the attached CudaBcsrLinSolver (cuDSS/AmgX/...), and
-// broadcasts X, merged B, and status. Workers never invoke the GPU solver.
+// OpenSeesMP. Workers assemble sparse (row,col,val) triplets and a local RHS;
+// rank 0 holds the global CSR/A, merges B and triplets, solves with the
+// attached CudaBcsrLinSolver (cuDSS/AmgX/...), and broadcasts X, merged B,
+// and status. Workers never invoke the GPU solver.
 
 #ifndef DistributedCudaBcsrLinSOE_h
 #define DistributedCudaBcsrLinSOE_h
 
 #include <LinearSOE.h>
 #include <Vector.h>
+
+#include <cstdint>
+#include <unordered_map>
 
 #ifndef _CUDA
 #error "DistributedCudaBcsrLinSOE requires a CUDA build"
@@ -25,6 +29,8 @@
 class CudaBcsrLinSOE;
 class Channel;
 class FEM_ObjectBroker;
+class Matrix;
+class ID;
 
 class DistributedCudaBcsrLinSOE : public LinearSOE
 {
@@ -63,9 +69,15 @@ public:
 protected:
 
 private:
+    static uint64_t packRC(int row, int col);
     bool needsMatrixTransfer(void) const;
     void ensureMyBSize(int size);
     void ensureWorkArea(int size);
+    void clearTriplets(void);
+    int accumulateTriplet(int row, int col, double value);
+    int addAWorker(const Matrix &m, const ID &id, double fact);
+    int buildMergeIndexMap(void);
+    int mergeTripletsIntoA(const int *rows, const int *cols, const double *vals, int nTrip);
 
     CudaBcsrLinSOE *theCudaSOE;
 
@@ -79,6 +91,12 @@ private:
     double *myB;
     Vector *myVectB;
     int myBsize;
+
+    /** Worker: assembled sparse contributions keyed by (row,col). */
+    std::unordered_map<uint64_t, double> tripletMap;
+
+    /** Rank 0: (row,col) -> flat offset into host A values; rebuilt in setSize. */
+    std::unordered_map<uint64_t, int> mergeIndexMap;
 };
 
 #endif
