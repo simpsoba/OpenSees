@@ -50,6 +50,7 @@ public:
         CuDSSMatrixType matType;
         bool useMultiGPU;
         std::vector<int> deviceIndices;
+        int deviceId; // preferred CUDA device for single-GPU (-1 = driver default)
         int irNSteps;
         double irTol;
         // When set, cuDSS work is enqueued on this caller-owned stream and the
@@ -71,6 +72,7 @@ public:
 #endif
               matType(CuDSSMatrixType::FULL),
               useMultiGPU(false),
+              deviceId(-1),
               irNSteps(0),
               irTol(0.0),
               externalStream(nullptr),

@@ -68,7 +68,8 @@ public:
         bool useMultiGPU = false,
         const std::vector<int>& deviceIndices = {},
         int irNSteps = 0,
-        double irTol = 0.0
+        double irTol = 0.0,
+        int deviceId = -1
     );
     
     // Destructor
@@ -102,6 +103,7 @@ private:
     // Multi-GPU (MG) mode: when true, use cudssCreateMg; otherwise cudssCreate
     bool m_useMultiGPU;
     std::vector<int> m_deviceIndices;
+    int m_deviceId; // single-GPU preferred device (-1 = default)
 
     // Iterative refinement (CUDSS_CONFIG_IR_N_STEPS / CUDSS_CONFIG_IR_TOL); 0 steps = disabled
     int m_irNSteps;

@@ -502,6 +502,7 @@ struct AmgXGeneralConfig {
     std::string callbackFilename;  // Store the filename for FileStream creation
     int blockSize = 1;
     bool paddingEnabled = true;
+    int deviceId = -1;
 };
 
 struct AmgXSimpleConfig {
@@ -516,6 +517,7 @@ struct AmgXSimpleConfig {
     bool verbose = false;
     int blockSize = 1;
     bool paddingEnabled = true;
+    int deviceId = -1;
 };
 
 // Parameter parser class
@@ -580,6 +582,14 @@ AmgXParameterParser::generalConfigParsers = {
         if (OPS_GetIntInput(&numData, &bs) == 0) {
             if (bs < 0) throw std::invalid_argument("blockSize cannot be negative");
             config.blockSize = bs;
+        }
+    }},
+    {"device", [](AmgXGeneralConfig& config) {
+        int numData = 1;
+        int id = 0;
+        if (OPS_GetIntInput(&numData, &id) == 0) {
+            if (id < 0) throw std::invalid_argument("device must be >= 0");
+            config.deviceId = id;
         }
     }},
     {"callback", [](AmgXGeneralConfig& config) { 
@@ -677,6 +687,14 @@ AmgXParameterParser::simpleConfigParsers = {
             if (bs < 0) throw std::invalid_argument("blockSize cannot be negative");
             config.blockSize = bs;
         }
+    }},
+    {"device", [](AmgXSimpleConfig& config) {
+        int numData = 1;
+        int id = 0;
+        if (OPS_GetIntInput(&numData, &id) == 0) {
+            if (id < 0) throw std::invalid_argument("device must be >= 0");
+            config.deviceId = id;
+        }
     }}
 };
 
@@ -743,6 +761,7 @@ void AmgXParameterParser::printGeneralUsageInfo() {
     opserr << "  -configOptions <string>         AmgX config string" << endln;
     opserr << "  -precision <dDDI|dFFI>          Precision mode (default: dDDI)" << endln;
     opserr << "  -blockSize <int>                Block size (default: 1)" << endln;
+    opserr << "  -device <id>                    Preferred CUDA device (default: current)" << endln;
     opserr << "  -verbose <0|1>                  Enable verbose output (default: 0)" << endln;
     opserr << "  -callback <stream|file>         Callback output (default|opserr|none|filename)" << endln;
 }
@@ -760,11 +779,28 @@ void AmgXParameterParser::printSimpleUsageInfo() {
     opserr << "  -monitorResidual <0|1>          Monitor residual (default: 1)" << endln;
     opserr << "  -precision <dDDI|dFFI>          Precision mode (default: dDDI)" << endln;
     opserr << "  -blockSize <int>                Block size (default: 1)" << endln;
+    opserr << "  -device <id>                    Preferred CUDA device (default: current)" << endln;
     opserr << "  -verbose <0|1>                  Enable verbose output (default: 0)" << endln;
 }
 
 // Factory functions for creating solvers and SOEs
+static bool amgXSetPreferredDevice(int deviceId)
+{
+    if (deviceId < 0)
+        return true;
+    const cudaError_t err = cudaSetDevice(deviceId);
+    if (err != cudaSuccess) {
+        opserr << "ERROR: AmgX - cudaSetDevice(" << deviceId << ") failed: "
+               << cudaGetErrorString(err) << endln;
+        return false;
+    }
+    return true;
+}
+
 CudaBcsrLinSolver* createAmgXSolver(const AmgXGeneralConfig& config) {
+    if (!amgXSetPreferredDevice(config.deviceId))
+        return nullptr;
+
     // Convert string precision to enum
     CudaPrecision precision;
     if (!cudaPrecisionFromString(config.precision.c_str(), precision)) {
@@ -788,6 +824,9 @@ CudaBcsrLinSolver* createAmgXSolver(const AmgXGeneralConfig& config) {
 }
 
 CudaBcsrLinSolver* createAmgXSolver(const AmgXSimpleConfig& config) {
+    if (!amgXSetPreferredDevice(config.deviceId))
+        return nullptr;
+
     return new AmgXLinSolver(
         config.solver.c_str(), 
         config.preconditioner.c_str(), 
