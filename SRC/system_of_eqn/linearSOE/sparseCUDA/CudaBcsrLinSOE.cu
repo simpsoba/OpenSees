@@ -290,11 +290,27 @@ int CudaBcsrLinSOE::resizeHostVectors(int numEqn, int blockSize, int paddedSize)
     m_hostCsrIndices.shrink_to_fit();
     m_hostAValues.clear();
     m_hostAValues.shrink_to_fit();
-    m_hostB.assign(paddedSize, 0.0);
-    m_hostX.assign(paddedSize, 0.0);
 
-    m_B.setData(raw_pointer_cast(m_hostB.data()), numEqn);
-    m_X.setData(raw_pointer_cast(m_hostX.data()), numEqn);
+    if (!m_cudaDeviceEnabled) {
+        // Pageable host storage: workers must not allocate CUDA pinned memory.
+        m_hostX.clear();
+        m_hostX.shrink_to_fit();
+        m_hostB.clear();
+        m_hostB.shrink_to_fit();
+        m_pageableX.assign(static_cast<std::size_t>(paddedSize), 0.0);
+        m_pageableB.assign(static_cast<std::size_t>(paddedSize), 0.0);
+        m_B.setData(m_pageableB.data(), numEqn);
+        m_X.setData(m_pageableX.data(), numEqn);
+    } else {
+        m_pageableX.clear();
+        m_pageableX.shrink_to_fit();
+        m_pageableB.clear();
+        m_pageableB.shrink_to_fit();
+        m_hostB.assign(paddedSize, 0.0);
+        m_hostX.assign(paddedSize, 0.0);
+        m_B.setData(raw_pointer_cast(m_hostB.data()), numEqn);
+        m_X.setData(raw_pointer_cast(m_hostX.data()), numEqn);
+    }
 
     m_matrixStatus = MatrixStatus::STRUCTURE_CHANGED;
     setBPrimaryLocation(DataLocation::Host);
@@ -302,6 +318,14 @@ int CudaBcsrLinSOE::resizeHostVectors(int numEqn, int blockSize, int paddedSize)
     setAValuesPrimaryLocation(DataLocation::Host);
     setAIndicesPrimaryLocation(DataLocation::Host);
     return 0;
+}
+
+void CudaBcsrLinSOE::setCudaDeviceEnabled(bool enabled)
+{
+    m_cudaDeviceEnabled = enabled;
+    if (!enabled) {
+        m_xSyncMode = false;
+    }
 }
 
 CudaBcsrLinSOE::~CudaBcsrLinSOE() 
@@ -314,6 +338,11 @@ CudaBcsrLinSOE::~CudaBcsrLinSOE()
     }
     delete m_spmvBackend;
     m_spmvBackend = nullptr;
+
+    if (!m_cudaDeviceEnabled) {
+        // Worker / host-only SOE: never created a CUDA context on purpose.
+        return;
+    }
 
     if (m_cudaStream != nullptr) {
         cudaStreamSynchronize(m_cudaStream);
@@ -1276,6 +1305,11 @@ CudaBcsrLinSOE::MatrixStatus CudaBcsrLinSOE::getMatrixStatus(void) const
 
 void *CudaBcsrLinSOE::getCudaStream(void)
 {
+    if (!m_cudaDeviceEnabled) {
+        opserr << "ERROR: CudaBcsrLinSOE::getCudaStream() - CUDA disabled on this SOE "
+               << "(DistributedCuDSS worker ranks must not create device streams)\n";
+        return nullptr;
+    }
     if (m_cudaStream == nullptr) {
         cudaCheckError(cudaStreamCreate(&m_cudaStream), "create SOE CUDA stream");
     }
@@ -1317,6 +1351,11 @@ CudaBcsrLinSolver* CudaBcsrLinSOE::getCudaBcsrLinSolver(void)
 int
 CudaBcsrLinSOE::ensureSpMVOperator(void)
 {
+    if (!m_cudaDeviceEnabled) {
+        opserr << "WARNING: CudaBcsrLinSOE::ensureSpMVOperator() - CUDA disabled on this SOE\n";
+        return -1;
+    }
+
     const int numRows = getNumRowBlocks();
     if (numRows <= 0) {
         return -1;
@@ -1436,7 +1475,9 @@ CudaBcsrLinSOE::getCopy(void) const
 
     if (out == nullptr) {
         delete newSolver;
+        return nullptr;
     }
+    out->setCudaDeviceEnabled(m_cudaDeviceEnabled);
     return out;
 }
 

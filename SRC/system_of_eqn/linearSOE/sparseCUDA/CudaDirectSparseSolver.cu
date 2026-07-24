@@ -143,7 +143,8 @@ CudaDirectSparseSolver::CudaDirectSparseSolver(CudaPrecision precision, bool ver
                                bool useMultiGPU,
                                const std::vector<int>& deviceIndices,
                                int irNSteps,
-                               double irTol)
+                               double irTol,
+                               int deviceId)
     :CudaBcsrLinSolver(SOLVER_TAGS_CudaDirectSparseSolver, precision), 
     m_verbose(verbose),
     m_hybridMemoryMode(hybridMemoryMode),
@@ -154,6 +155,7 @@ CudaDirectSparseSolver::CudaDirectSparseSolver(CudaPrecision precision, bool ver
     m_cudssMatType(cudssMatType),
     m_useMultiGPU(useMultiGPU),
     m_deviceIndices(deviceIndices),
+    m_deviceId(deviceId),
     m_irNSteps(irNSteps),
     m_irTol(irTol),
     m_matrix(nullptr)
@@ -186,6 +188,7 @@ CudaCsrMatrix::SolverConfig CudaDirectSparseSolver::makeSolverConfig(CudaPrecisi
     solver.matType = m_cudssMatType;
     solver.useMultiGPU = m_useMultiGPU;
     solver.deviceIndices = m_deviceIndices;
+    solver.deviceId = m_deviceId;
     solver.irNSteps = m_irNSteps;
     solver.irTol = m_irTol;
     return solver;
@@ -321,7 +324,8 @@ CudaDirectSparseSolver::getCopy(void) const
         m_useMultiGPU,
         m_deviceIndices,
         m_irNSteps,
-        m_irTol);
+        m_irTol,
+        m_deviceId);
 }
 
 int CudaDirectSparseSolver::setupMatrices() {
@@ -391,6 +395,8 @@ struct CuDSSConfig {
     std::string parallelMode = "single";  // single | multiGPU | MGMN (parallelism across processes/GPUs)
     int distributed = 0;                  // For MGMN: 0 = root-only (gather-scatter), 1 = row-wise distributed
     std::vector<int> deviceIndices;       // For multiGPU: empty = use all devices; else list of device IDs
+    int deviceId = -1;                    // Preferred single-GPU device (-1 = driver current/default)
+    bool verifyRuntime = false;           // Optional early cuda/cuDSS smoke test at system time
     int irNSteps = 0;                     // Iterative refinement steps (0 = disabled)
     double irTol = 0.0;                   // IR tolerance (0 = fixed-step, no convergence check)
 };
@@ -507,6 +513,22 @@ CuDSSParameterParser::configParsers = {
             config.deviceIndices.push_back(next);
         }
     }},
+    {"device", [](CuDSSConfig& config) {
+        int numData = 1;
+        int id = 0;
+        if (OPS_GetIntInput(&numData, &id) == 0) {
+            if (id < 0) throw std::invalid_argument("device must be >= 0");
+            config.deviceId = id;
+        }
+    }},
+    {"verifyRuntime", [](CuDSSConfig& config) {
+        int numData = 1;
+        int flag = 0;
+        if (OPS_GetIntInput(&numData, &flag) == 0) {
+            if (flag != 0 && flag != 1) throw std::invalid_argument("verifyRuntime must be 0 or 1");
+            config.verifyRuntime = (flag == 1);
+        }
+    }},
     {"irNSteps", [](CuDSSConfig& config) {
         int numData = 1;
         int steps = 0;
@@ -582,6 +604,8 @@ void CuDSSParameterParser::printUsageInfo() {
     opserr << "                                  MGMN: OpenSeesMP, multi-GPU multi-node (requires getNP > 1)" << endln;
     opserr << "  -distributed <0|1>               For MGMN only: 0 = root-only gather-scatter (default), 1 = row-wise distributed" << endln;
     opserr << "  -devices <all|id1 [id2 ...]>     For multiGPU only: GPU IDs to use (default: all)" << endln;
+    opserr << "  -device <id>                    Preferred CUDA device for single-GPU CuDSS/DistributedCuDSS (default: current)" << endln;
+    opserr << "  -verifyRuntime <0|1>            Early cudaGetDeviceCount/cudssCreate check at system time (default: 0)" << endln;
     opserr << "  -hybridMemoryMode <0|1>         Hybrid host/device memory mode (default: 0)" << endln;
     opserr << "  -hybridDeviceMemoryLimit <bytes1 [bytes2 ...]> Per-device limit for hybrid memory (one value=all devices; 0=min)" << endln;
     opserr << "  -hybridExecuteMode <0|1>        Hybrid host/device execute mode (default: 0)" << endln;
@@ -632,7 +656,8 @@ CudaBcsrLinSolver* createCuDSSSolverFromConfig(const CuDSSConfig& config) {
         useMultiGPU,
         config.deviceIndices,
         config.irNSteps,
-        config.irTol
+        config.irTol,
+        config.deviceId
     );
 }
 
@@ -666,84 +691,172 @@ CudaBcsrLinSolver* createCuDSSSolverFromParser() {
     return createCuDSSSolverFromConfig(config);
 }
 
-void* OPS_CudaDirectSparseSolver()
-{
-    CuDSSConfig config;
+#include <DistributedCudaBcsrLinSOE.h>
+#include <classTags.h>
 
-    // Expand dict to CLI args if present ({"key": val} -> "-key", val)
+#ifdef _PARALLEL_INTERPRETERS
+#include <mpi.h>
+#endif
+
+namespace {
+
+/** Host-only placeholder for DistributedCuDSS worker ranks (no CUDA/cuDSS). */
+class CudaHostWorkerSolver : public CudaBcsrLinSolver {
+public:
+    CudaHostWorkerSolver()
+        : CudaBcsrLinSolver(SOLVER_TAGS_CudaHostWorkerSolver, CudaPrecision::dDDI)
+    {
+    }
+
+    int solve(void) override
+    {
+        opserr << "ERROR: CudaHostWorkerSolver::solve() - GPU solve is rank-0 only "
+               << "for DistributedCuDSS\n";
+        return -1;
+    }
+
+    int setSize(void) override { return 0; }
+
+    void releaseDeviceResources(void) override {}
+
+    LinearSOESolver *getCopy(void) const override
+    {
+        return new CudaHostWorkerSolver();
+    }
+};
+
+bool validateCuDSSConfig(const CuDSSConfig &config)
+{
+    if (config.hybridMemoryMode && config.hybridExecuteMode) {
+        opserr << "ERROR: CuDSS - hybridMemoryMode and hybridExecuteMode are mutually exclusive. "
+               << "Only one can be enabled at a time." << endln;
+        return false;
+    }
+    if (!config.hybridDeviceMemoryLimits.empty() && !config.hybridMemoryMode) {
+        opserr << "WARNING: CuDSS - hybridDeviceMemoryLimit is only valid with hybridMemoryMode enabled. "
+               << "Ignoring hybridDeviceMemoryLimit." << endln;
+    }
+    return true;
+}
+
+bool parseCuDSSConfigFromOPS(CuDSSConfig &config)
+{
     if (OPS_GetNumRemainingInputArgs() == 1) {
         (void)OPS_ExpandDictArgs();
     }
 
-    // Parse CLI-style parameters (after any normalization).
     if (!CuDSSParameterParser::parseParameters(config)) {
-        opserr << "WARNING: OPS_CudaDirectSparseSolver() - "
-               << "Failed to parse parameters, using defaults" << endln;
+        opserr << "WARNING: CuDSS - failed to parse parameters, using defaults" << endln;
         opserr << "For valid parameters, use:" << endln;
         CuDSSParameterParser::printUsageInfo();
     }
+    return validateCuDSSConfig(config);
+}
 
-    // Validate that hybrid modes are mutually exclusive
-    if (config.hybridMemoryMode && config.hybridExecuteMode) {
-        opserr << "ERROR: OPS_CudaDirectSparseSolver() - "
-               << "hybridMemoryMode and hybridExecuteMode are mutually exclusive. "
-               << "Only one can be enabled at a time." << endln;
+/**
+ * Build a CudaBcsrLinSOE for CuDSS.
+ * hostOnly: DistributedCuDSS workers — no verifyCuDSSRuntime, no cuDSS/CUDA device use.
+ * Rank-0 / serial: optional verifyRuntime, then full CudaDirectSparseSolver.
+ */
+CudaBcsrLinSOE *createCudaBcsrSOEFromCuDSSConfig(const CuDSSConfig &config, bool hostOnly)
+{
+    if (hostOnly) {
+        CudaBcsrLinSolver *workerSolver = new CudaHostWorkerSolver();
+        CudaBcsrLinSOE *soe =
+            CudaBcsrLinSOE::createDouble(*workerSolver, /*blockSize=*/1,
+                                         /*paddingEnabled=*/false,
+                                         config.verbose,
+                                         /*symmetricStorage=*/false);
+        if (soe == nullptr) {
+            delete workerSolver;
+            opserr << "ERROR: CuDSS - failed to create host-only worker SOE\n";
+            return nullptr;
+        }
+        soe->setCudaDeviceEnabled(false);
+        return soe;
+    }
+
+    if (config.verifyRuntime && !verifyCuDSSRuntime()) {
+        opserr << "ERROR: CuDSS - cuDSS/CUDA runtime verification failed" << endln;
         return nullptr;
     }
 
-    // Validate that hybridDeviceMemoryLimits is only used with hybridMemoryMode
-    if (!config.hybridDeviceMemoryLimits.empty() && !config.hybridMemoryMode) {
-        opserr << "WARNING: OPS_CudaDirectSparseSolver() - "
-               << "hybridDeviceMemoryLimit is only valid with hybridMemoryMode enabled. "
-               << "Ignoring hybridDeviceMemoryLimit." << endln;
+    // Select device early so subsequent stream/cuDSS create use it.
+    if (config.deviceId >= 0) {
+        const cudaError_t err = cudaSetDevice(config.deviceId);
+        if (err != cudaSuccess) {
+            opserr << "ERROR: CuDSS - cudaSetDevice(" << config.deviceId << ") failed: "
+                   << cudaGetErrorString(err) << endln;
+            return nullptr;
+        }
     }
 
-    if (!verifyCuDSSRuntime()) {
-        opserr << "ERROR: OPS_CudaDirectSparseSolver() - cuDSS/CUDA runtime verification failed"
-               << endln;
-        return nullptr;
-    }
-
-    CudaBcsrLinSolver* solver = nullptr;
+    CudaBcsrLinSolver *solver = nullptr;
     try {
         solver = createCuDSSSolverFromConfig(config);
-    } catch (const std::exception& e) {
-        opserr << "ERROR: OPS_CudaDirectSparseSolver() - "
-               << "Failed to create solver: " << e.what() << endln;
+    } catch (const std::exception &e) {
+        opserr << "ERROR: CuDSS - failed to create solver: " << e.what() << endln;
         return nullptr;
     }
-    if (solver == nullptr) return nullptr;
+    if (solver == nullptr)
+        return nullptr;
 
     const int blockSize = 1;
     const bool paddingEnabled = false;
-    CudaPrecision precision = solver->getPrecision();
-    const bool symmetricStorage = (config.cudssMatTypeStr == "symmetric" || config.cudssMatTypeStr == "spd");
+    const CudaPrecision precision = solver->getPrecision();
+    const bool symmetricStorage =
+        (config.cudssMatTypeStr == "symmetric" || config.cudssMatTypeStr == "spd");
+
+    CudaBcsrLinSOE *soe = nullptr;
     switch (precision) {
         case CudaPrecision::dDDI:
-            return CudaBcsrLinSOE::createDouble(*solver, blockSize, paddingEnabled, config.verbose, symmetricStorage);
+            soe = CudaBcsrLinSOE::createDouble(*solver, blockSize, paddingEnabled, config.verbose,
+                                               symmetricStorage);
+            break;
         case CudaPrecision::dFFI:
-            return CudaBcsrLinSOE::createFloat(*solver, blockSize, paddingEnabled, config.verbose, symmetricStorage);
+            soe = CudaBcsrLinSOE::createFloat(*solver, blockSize, paddingEnabled, config.verbose,
+                                              symmetricStorage);
+            break;
         default:
-            opserr << "ERROR: OPS_CudaDirectSparseSolver() - Unexpected precision mode" << endln;
+            opserr << "ERROR: CuDSS - unexpected precision mode" << endln;
             delete solver;
             return nullptr;
     }
+    if (soe == nullptr)
+        delete solver;
+    return soe;
 }
 
-#include <DistributedCudaBcsrLinSOE.h>
+} // namespace
+
+void* OPS_CudaDirectSparseSolver()
+{
+    CuDSSConfig config;
+    if (!parseCuDSSConfigFromOPS(config))
+        return nullptr;
+
+    // Serial CuDSS: every process that requests it gets a full CUDA/cuDSS SOE.
+    return createCudaBcsrSOEFromCuDSSConfig(config, /*hostOnly=*/false);
+}
 
 void *OPS_DistributedCudaDirectSparseSolver(void)
 {
-    void *serial = OPS_CudaDirectSparseSolver();
-    if (serial == nullptr)
+    CuDSSConfig config;
+    // All ranks must parse the same argv (OpenSeesMP runs the command on each process).
+    if (!parseCuDSSConfigFromOPS(config))
         return nullptr;
 
-    CudaBcsrLinSOE *cudaSOE = dynamic_cast<CudaBcsrLinSOE *>(static_cast<LinearSOE *>(serial));
-    if (cudaSOE == nullptr) {
-        delete static_cast<LinearSOE *>(serial);
-        opserr << "ERROR: OPS_DistributedCudaDirectSparseSolver() - expected CudaBcsrLinSOE\n";
+    int rank = 0;
+#ifdef _PARALLEL_INTERPRETERS
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+#endif
+
+    // Only rank 0 verifies (if requested) and owns cuDSS/CUDA.
+    CudaBcsrLinSOE *cudaSOE =
+        createCudaBcsrSOEFromCuDSSConfig(config, /*hostOnly=*/(rank != 0));
+    if (cudaSOE == nullptr)
         return nullptr;
-    }
+
     return new DistributedCudaBcsrLinSOE(cudaSOE);
 }
 

@@ -110,6 +110,11 @@ void CuDSSBackend::initHandle()
             cudssCreateMg(&m_Handle, static_cast<int>(m_deviceIndices.size()), m_deviceIndices.data()),
             "create cuDSS MG handle");
     } else {
+        if (m_config.deviceId >= 0) {
+            cudaCheckError(cudaSetDevice(m_config.deviceId), "set preferred CUDA device");
+        } else if (!m_config.deviceIndices.empty()) {
+            cudaCheckError(cudaSetDevice(m_config.deviceIndices.front()), "set CUDA device from -devices");
+        }
         cuDSSCheckError(cudssCreate(&m_Handle), "create cuDSS handle");
     }
     cuDSSCheckError(cudssSetStream(m_Handle, m_cudaStream), "set CUDA stream");

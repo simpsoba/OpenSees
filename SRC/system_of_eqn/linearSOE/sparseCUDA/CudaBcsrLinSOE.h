@@ -46,6 +46,7 @@
 #include <LinearSOE.h>
 #include <LinearSOESolver.h>
 #include <Vector.h>
+#include <vector>
 #include "CudaUtils.h"
 
 #ifndef _CUDA
@@ -207,6 +208,13 @@ public:
     /** Worker-only: size host X/B without installing global CSR/A (triplet gather). */
     int resizeHostVectors(int numEqn, int blockSize, int paddedSize);
 
+    /**
+     * When false, this SOE must not create CUDA streams, call cudaDeviceSynchronize,
+     * allocate pinned host memory, or touch the device. Used by DistributedCuDSS workers.
+     */
+    void setCudaDeviceEnabled(bool enabled);
+    bool isCudaDeviceEnabled(void) const { return m_cudaDeviceEnabled; }
+
     // Host/device authority tracking for lazy synchronization
     enum class DataLocation {
         Host,   // Host buffer is authoritative; device may be stale
@@ -308,6 +316,13 @@ protected:
     // Single CUDA stream for async GPU work (solver, integrator kernels, cuSPARSE).
     // Thrust host/device sync helpers block the CPU and do not use this stream.
     cudaStream_t m_cudaStream = nullptr;
+
+    // Rank-0 DistributedCuDSS / serial CuDSS: true. Worker ranks: false (pageable X/B only).
+    bool m_cudaDeviceEnabled = true;
+
+    // Used only when m_cudaDeviceEnabled is false (avoids CUDA pinned alloc on workers).
+    std::vector<double> m_pageableX;
+    std::vector<double> m_pageableB;
 
     // Set size helper methods
     int buildStandardCSR(Graph &theGraph);
