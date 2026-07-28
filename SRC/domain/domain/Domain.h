@@ -254,15 +254,18 @@ class Domain
     virtual int activateElements(const ID& elementList);
     virtual int deactivateElements(const ID& elementList);
 
-    // OpenSeesMP: when true, Domain status methods Allreduce failure across ranks
-    // (set when a collective LinearSOE is installed; see setMPIStatusSync).
-    void setMPIStatusSync(bool flag);
-    bool needsMPIStatusSync(void) const;
+    // OpenSeesMP: when true, barrierCheck() syncs failure across ranks
+    // (set when a collective LinearSOE is installed; see setBarrierCheck).
+    void setBarrierCheck(bool flag);
+    bool needsBarrierCheck(void) const;
 
-    // Optional MPI Allreduce of local status (registered by OpenSeesMP / parallel
-    // OpenSeesPy). Domain stays free of mpi.h so OPS_Domain can be shared with serial.
-    typedef int (*MPIStatusSyncFn)(Domain *domain, int localOk);
-    void setMPIStatusSyncFn(MPIStatusSyncFn fn);
+    // Optional cross-rank barrier (registered by OpenSeesMP / parallel OpenSeesPy).
+    // Same role as PartitionedDomain::barrierCheck in OpenSeesSP; Domain stays free
+    // of mpi.h so OPS_Domain can be shared with serial builds. Non-virtual so it
+    // does not override PartitionedDomain's SP channel barrierCheck.
+    typedef int (*BarrierCheckFn)(Domain *domain, int localOk);
+    void setBarrierCheckFn(BarrierCheckFn fn);
+    int barrierCheck(int localResult);
 
   protected:    
 
@@ -324,8 +327,8 @@ class Domain
 
     int lastChannel;
 
-    bool needsMPIStatusSyncFlag;
-    MPIStatusSyncFn mpiStatusSyncFn;
+    bool needsBarrierCheckFlag;
+    BarrierCheckFn barrierCheckFn;
 
     // Integer array: index[i] = tag of component i
     // Should put these in another class eventually -- MHS
