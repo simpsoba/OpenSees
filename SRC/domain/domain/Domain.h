@@ -259,6 +259,11 @@ class Domain
     void setMPIStatusSync(bool flag);
     bool needsMPIStatusSync(void) const;
 
+    // Optional MPI Allreduce of local status (registered by OpenSeesMP / parallel
+    // OpenSeesPy). Domain stays free of mpi.h so OPS_Domain can be shared with serial.
+    typedef int (*MPIStatusSyncFn)(Domain *domain, int localOk);
+    void setMPIStatusSyncFn(MPIStatusSyncFn fn);
+
   protected:    
 
     virtual int buildEleGraph(Graph *theEleGraph);
@@ -320,6 +325,7 @@ class Domain
     int lastChannel;
 
     bool needsMPIStatusSyncFlag;
+    MPIStatusSyncFn mpiStatusSyncFn;
 
     // Integer array: index[i] = tag of component i
     // Should put these in another class eventually -- MHS
