@@ -104,7 +104,7 @@ Domain::Domain()
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
  theModalDampingFactors(0), inclModalMatrix(false),
- lastChannel(0), needsMPIStatusSyncFlag(false), mpiStatusSyncFn(0),
+ lastChannel(0), needsBarrierCheckFlag(false), barrierCheckFn(0),
  paramIndex(0), paramSize(0), numParameters(0)
 {
   
@@ -162,7 +162,7 @@ Domain::Domain(int numNodes, int numElements, int numSPs, int numMPs, int numEQs
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
  theModalDampingFactors(0), inclModalMatrix(false),
- lastChannel(0), needsMPIStatusSyncFlag(false), mpiStatusSyncFn(0),
+ lastChannel(0), needsBarrierCheckFlag(false), barrierCheckFn(0),
  paramIndex(0), paramSize(0), numParameters(0)
 {
     // init the arrays for storing the domain components
@@ -228,7 +228,7 @@ Domain::Domain(TaggedObjectStorage &theNodesStorage,
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
  theModalDampingFactors(0), inclModalMatrix(false),
- lastChannel(0), needsMPIStatusSyncFlag(false), mpiStatusSyncFn(0),
+ lastChannel(0), needsBarrierCheckFlag(false), barrierCheckFn(0),
  paramIndex(0), paramSize(0), numParameters(0)
 {
     // init the arrays for storing the domain components
@@ -290,7 +290,7 @@ Domain::Domain(TaggedObjectStorage &theStorage)
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
  theModalDampingFactors(0), inclModalMatrix(false),
- lastChannel(0), needsMPIStatusSyncFlag(false), mpiStatusSyncFn(0),
+ lastChannel(0), needsBarrierCheckFlag(false), barrierCheckFn(0),
  paramIndex(0), paramSize(0), numParameters(0)
 {
     // init the arrays for storing the domain components
@@ -1109,7 +1109,7 @@ Domain::clearAll(void) {
   lastGeoSendTag = -1;
   lastChannel = 0;
 
-  needsMPIStatusSyncFlag = false;
+  needsBarrierCheckFlag = false;
 
   // rest the flag to be as initial
   hasDomainChangedFlag = false;
@@ -2152,9 +2152,7 @@ Domain::record(bool fromAnalysis)
   // update the commitTag
   commitTag++;
 
-  if (mpiStatusSyncFn != 0)
-    return (*mpiStatusSyncFn)(this, res);
-  return res;
+  return Domain::barrierCheck(res);
 }
 
 int
@@ -2189,9 +2187,7 @@ Domain::commit(void)
     // update the commitTag
     commitTag++;
 
-    if (mpiStatusSyncFn != 0)
-      return (*mpiStatusSyncFn)(this, ok);
-    return ok;
+    return Domain::barrierCheck(ok);
 }
 
 int
@@ -2224,9 +2220,7 @@ Domain::revertToLastCommit(void)
     if (ok == 0)
       ok = u;
 
-    if (mpiStatusSyncFn != 0)
-      return (*mpiStatusSyncFn)(this, ok);
-    return ok;
+    return Domain::barrierCheck(ok);
 }
 
 int
@@ -2267,9 +2261,7 @@ Domain::revertToStart(void)
     if (ok == 0)
       ok = u;
 
-    if (mpiStatusSyncFn != 0)
-      return (*mpiStatusSyncFn)(this, ok);
-    return ok;
+    return Domain::barrierCheck(ok);
 }
 
 int
@@ -2293,28 +2285,34 @@ Domain::update(void)
   if (ok != 0)
     opserr << "Domain::update - domain failed in update\n";
 
-  if (mpiStatusSyncFn != 0)
-    return (*mpiStatusSyncFn)(this, ok);
-  return ok;
+  return Domain::barrierCheck(ok);
 }
 
 
 void
-Domain::setMPIStatusSync(bool flag)
+Domain::setBarrierCheck(bool flag)
 {
-  needsMPIStatusSyncFlag = flag;
+  needsBarrierCheckFlag = flag;
 }
 
 void
-Domain::setMPIStatusSyncFn(MPIStatusSyncFn fn)
+Domain::setBarrierCheckFn(BarrierCheckFn fn)
 {
-  mpiStatusSyncFn = fn;
+  barrierCheckFn = fn;
 }
 
 bool
-Domain::needsMPIStatusSync(void) const
+Domain::needsBarrierCheck(void) const
 {
-  return needsMPIStatusSyncFlag;
+  return needsBarrierCheckFlag;
+}
+
+int
+Domain::barrierCheck(int localResult)
+{
+  if (barrierCheckFn != 0)
+    return (*barrierCheckFn)(this, localResult);
+  return localResult;
 }
 
 

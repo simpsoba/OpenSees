@@ -507,7 +507,7 @@ Domain theDomain;
 #endif
 
 #ifdef _PARALLEL_INTERPRETERS
-static int ops_mpiStatusSync(Domain *domain, int localOk);
+static int ops_barrierCheck(Domain *domain, int localOk);
 #endif
 
 #include <MachineBroker.h>
@@ -812,7 +812,7 @@ int OpenSeesAppInit(Tcl_Interp *interp) {
   ops_TheActiveDomain = &theDomain;
 
 #ifdef _PARALLEL_INTERPRETERS
-  theDomain.setMPIStatusSyncFn(ops_mpiStatusSync);
+  theDomain.setBarrierCheckFn(ops_barrierCheck);
 #endif
 
   //
@@ -1549,7 +1549,7 @@ wipeAnalysis(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **arg
   theTest = 0;
 
 #ifdef _PARALLEL_INTERPRETERS
-  theDomain.setMPIStatusSync(false);
+  theDomain.setBarrierCheck(false);
 #endif
 
 // AddingSensitivity:BEGIN /////////////////////////////////////////////////
@@ -3082,7 +3082,7 @@ static ExternalClassFunction *theExternalAlgorithmCommands = NULL;
 
 #ifdef _PARALLEL_INTERPRETERS
 static bool
-ops_soeNeedsMPIStatusSync(LinearSOE *soe)
+ops_soeNeedsBarrierCheck(LinearSOE *soe)
 {
   if (soe == 0)
     return false;
@@ -3097,18 +3097,18 @@ ops_soeNeedsMPIStatusSync(LinearSOE *soe)
           t == LinSOE_TAGS_DistributedSparseGenRowLinSOE);
 }
 
-// Channel barrier for Domain local status when needsMPIStatusSync (collective SOE).
+// Channel barrier for Domain local status when needsBarrierCheck (collective SOE).
 // Lives here (not Domain.cpp): OPS_Domain is built without _PARALLEL_INTERPRETERS.
 // Uses OpenSeesMP hub-and-spoke channels (same fabric as MumpsParallelSOE), not
 // MPI_COMM_WORLD Allreduce — avoids cross-mechanism deadlock with getB/solve.
 // Tags distinct from MumpsParallelSOE's hardcoded (0, 0) vector traffic.
-static const int OPS_STATUS_SYNC_DBTAG     = 77;
-static const int OPS_STATUS_SYNC_COMMITTAG = 77;
+static const int OPS_BARRIER_CHECK_DBTAG     = 77;
+static const int OPS_BARRIER_CHECK_COMMITTAG = 77;
 
 static int
-ops_mpiStatusSync(Domain *domain, int localOk)
+ops_barrierCheck(Domain *domain, int localOk)
 {
-  if (domain == 0 || !domain->needsMPIStatusSync())
+  if (domain == 0 || !domain->needsBarrierCheck())
     return localOk;
   if (OPS_np <= 1 || theChannels == 0 || numChannels <= 0)
     return localOk;
@@ -3120,24 +3120,24 @@ ops_mpiStatusSync(Domain *domain, int localOk)
     int globalFailed = data(0);
     for (int i = 0; i < numChannels; i++) {
       ID remote(1);
-      if (theChannels[i]->recvID(OPS_STATUS_SYNC_DBTAG,
-                                 OPS_STATUS_SYNC_COMMITTAG, remote) < 0)
+      if (theChannels[i]->recvID(OPS_BARRIER_CHECK_DBTAG,
+                                 OPS_BARRIER_CHECK_COMMITTAG, remote) < 0)
         return -1;
       if (remote(0) != 0)
         globalFailed = 1;
     }
     data(0) = globalFailed;
     for (int i = 0; i < numChannels; i++) {
-      if (theChannels[i]->sendID(OPS_STATUS_SYNC_DBTAG,
-                                 OPS_STATUS_SYNC_COMMITTAG, data) < 0)
+      if (theChannels[i]->sendID(OPS_BARRIER_CHECK_DBTAG,
+                                 OPS_BARRIER_CHECK_COMMITTAG, data) < 0)
         return -1;
     }
   } else {
-    if (theChannels[0]->sendID(OPS_STATUS_SYNC_DBTAG,
-                               OPS_STATUS_SYNC_COMMITTAG, data) < 0)
+    if (theChannels[0]->sendID(OPS_BARRIER_CHECK_DBTAG,
+                               OPS_BARRIER_CHECK_COMMITTAG, data) < 0)
       return -1;
-    if (theChannels[0]->recvID(OPS_STATUS_SYNC_DBTAG,
-                               OPS_STATUS_SYNC_COMMITTAG, data) < 0)
+    if (theChannels[0]->recvID(OPS_BARRIER_CHECK_DBTAG,
+                               OPS_BARRIER_CHECK_COMMITTAG, data) < 0)
       return -1;
   }
 
@@ -3837,7 +3837,7 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
 #endif
 
 #ifdef _PARALLEL_INTERPRETERS
-    theDomain.setMPIStatusSync(ops_soeNeedsMPIStatusSync(theSOE));
+    theDomain.setBarrierCheck(ops_soeNeedsBarrierCheck(theSOE));
 #endif
     
     return TCL_OK;
