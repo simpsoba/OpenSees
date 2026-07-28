@@ -1539,6 +1539,10 @@ wipeAnalysis(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **arg
   thePFEMAnalysis = 0;
   theTest = 0;
 
+#ifdef _PARALLEL_INTERPRETERS
+  theDomain.setMPIStatusSync(false);
+#endif
+
 // AddingSensitivity:BEGIN /////////////////////////////////////////////////
 #ifdef _RELIABILITY
   theSensitivityAlgorithm =0;
@@ -3067,6 +3071,24 @@ static ExternalClassFunction *theExternalStaticIntegratorCommands = NULL;
 static ExternalClassFunction *theExternalTransientIntegratorCommands = NULL;
 static ExternalClassFunction *theExternalAlgorithmCommands = NULL;
 
+#ifdef _PARALLEL_INTERPRETERS
+static bool
+ops_soeNeedsMPIStatusSync(LinearSOE *soe)
+{
+  if (soe == 0)
+    return false;
+  int t = soe->getClassTag();
+  return (t == LinSOE_TAGS_MumpsParallelSOE ||
+          t == LinSOE_TAGS_MPIDiagonalSOE ||
+          t == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+          t == LinSOE_TAGS_DistributedBandGenLinSOE ||
+          t == LinSOE_TAGS_DistributedBandSPDLinSOE ||
+          t == LinSOE_TAGS_DistributedDiagonalSOE ||
+          t == LinSOE_TAGS_DistributedSparseGenColLinSOE ||
+          t == LinSOE_TAGS_DistributedSparseGenRowLinSOE);
+}
+#endif
+
 int 
 specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
 {
@@ -3756,6 +3778,10 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
 	theSub->setAnalysisLinearSOE(*theSOE);
       }
     }
+#endif
+
+#ifdef _PARALLEL_INTERPRETERS
+    theDomain.setMPIStatusSync(ops_soeNeedsMPIStatusSync(theSOE));
 #endif
     
     return TCL_OK;
