@@ -3123,7 +3123,8 @@ ops_soeNeedsMPIStatusSync(LinearSOE *soe)
           t == LinSOE_TAGS_DistributedBandSPDLinSOE ||
           t == LinSOE_TAGS_DistributedDiagonalSOE ||
           t == LinSOE_TAGS_DistributedSparseGenColLinSOE ||
-          t == LinSOE_TAGS_DistributedSparseGenRowLinSOE);
+          t == LinSOE_TAGS_DistributedSparseGenRowLinSOE ||
+          t == LinSOE_TAGS_DistributedCudaBcsrLinSOE);
 }
 #endif
 
