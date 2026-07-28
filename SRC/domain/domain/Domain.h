@@ -254,6 +254,11 @@ class Domain
     virtual int activateElements(const ID& elementList);
     virtual int deactivateElements(const ID& elementList);
 
+    // OpenSeesMP: when true, Domain status methods Allreduce failure across ranks
+    // (set when a collective LinearSOE is installed; see setMPIStatusSync).
+    void setMPIStatusSync(bool flag);
+    bool needsMPIStatusSync(void) const;
+
   protected:    
 
     virtual int buildEleGraph(Graph *theEleGraph);
@@ -313,6 +318,8 @@ class Domain
     bool inclModalMatrix;
 
     int lastChannel;
+
+    bool needsMPIStatusSyncFlag;
 
     // Integer array: index[i] = tag of component i
     // Should put these in another class eventually -- MHS

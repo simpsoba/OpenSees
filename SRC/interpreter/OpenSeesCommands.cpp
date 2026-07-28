@@ -111,6 +111,7 @@ UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 #include <MumpsSOE.h>
 #endif
 #include <BackgroundMesh.h>
+#include <classTags.h>
 
 #ifdef _ITPACK
 #include <ItpackLinSOE.h>
@@ -119,6 +120,22 @@ UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 
 #ifdef _PARALLEL_INTERPRETERS
 bool setMPIDSOEFlag = false;
+
+static bool
+ops_soeNeedsMPIStatusSync(LinearSOE *soe)
+{
+  if (soe == 0)
+    return false;
+  int t = soe->getClassTag();
+  return (t == LinSOE_TAGS_MumpsParallelSOE ||
+          t == LinSOE_TAGS_MPIDiagonalSOE ||
+          t == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+          t == LinSOE_TAGS_DistributedBandGenLinSOE ||
+          t == LinSOE_TAGS_DistributedBandSPDLinSOE ||
+          t == LinSOE_TAGS_DistributedDiagonalSOE ||
+          t == LinSOE_TAGS_DistributedSparseGenColLinSOE ||
+          t == LinSOE_TAGS_DistributedSparseGenRowLinSOE);
+}
 
 #include <mpi.h>
 #include <MPI_MachineBroker.h>
@@ -250,6 +267,12 @@ OpenSeesCommands::setSOE(LinearSOE* soe)
 
     // set new one
     theSOE = soe;
+
+#ifdef _PARALLEL_INTERPRETERS
+    if (theDomain != 0)
+      theDomain->setMPIStatusSync(ops_soeNeedsMPIStatusSync(soe));
+#endif
+
     if (soe == 0) return;
 
     // set in analysis object
@@ -979,6 +1002,11 @@ OpenSeesCommands::wipeAnalysis()
     theVariableTimeStepTransientAnalysis = 0;
     thePFEMAnalysis = 0;
     theTest = 0;
+
+#ifdef _PARALLEL_INTERPRETERS
+    if (theDomain != 0)
+      theDomain->setMPIStatusSync(false);
+#endif
 
 }
 
