@@ -94,6 +94,9 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
  set(CMAKE_FIND_LIBRARY_SUFFIXES ".lib")
  set(BUILD_SHARED_LIBS OFF)
  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
+ # Intel Fortran runtime (libmmt) duplicates UCRT math symbols with /MT (see Win64 sln)
+ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /FORCE:MULTIPLE")
+ set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /FORCE:MULTIPLE")
 else()
   MESSAGE("COMPILER: UKNOWN COMPILER ${CMAKE_CXX_COMPILER_ID}")
 endif()
@@ -173,6 +176,32 @@ if(TARGET tcl::tcl)
 endif()
 
 message(STATUS "3 TCL_INIT_FILE at ${TCL_INIT_FILE}")
+
+# Prefer Windows dynamic tcl86t.dll so OpenFresco loadPackage shares the host Tcl
+# runtime. On this branch the standard OpenSees/SP/MP targets use it when present.
+set(OPS_TCL_TARGET tcl::tcl)
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  include(OpenSeesWindowsDynamicTcl)
+  ops_configure_windows_dynamic_tcl()
+  if(DEFINED OPS_WINDOWS_DYNAMIC_TCL_LIBRARY)
+    add_library(ops_windows_dynamic_tcl UNKNOWN IMPORTED)
+    set_target_properties(ops_windows_dynamic_tcl PROPERTIES
+      IMPORTED_LOCATION "${OPS_WINDOWS_DYNAMIC_TCL_LIBRARY}"
+      INTERFACE_INCLUDE_DIRECTORIES "${OPS_WINDOWS_DYNAMIC_TCL_INCLUDE}"
+      INTERFACE_LINK_LIBRARIES "ws2_32;netapi32;userenv"
+    )
+    set(OPS_TCL_TARGET ops_windows_dynamic_tcl)
+    set(TCL_INCLUDE_PATH "${OPS_WINDOWS_DYNAMIC_TCL_INCLUDE}")
+    set(TCL_INCLUDE_DIR "${OPS_WINDOWS_DYNAMIC_TCL_INCLUDE}")
+    set(TCL_LIBRARY "${OPS_WINDOWS_DYNAMIC_TCL_LIBRARY}")
+    set(TCL_LIBRARIES ops_windows_dynamic_tcl)
+    if(EXISTS "${OPS_WINDOWS_DYNAMIC_TCL_SCRIPT_DIR}/init.tcl")
+      set(TCL_INIT_FILE "${OPS_WINDOWS_DYNAMIC_TCL_SCRIPT_DIR}/init.tcl")
+    endif()
+    include_directories(${OPS_WINDOWS_DYNAMIC_TCL_INCLUDE})
+    message(STATUS "Using Windows dynamic Tcl (tcl86t) for OpenSees/SP/MP")
+  endif()
+endif()
 
 
 find_package(Eigen3 REQUIRED)
@@ -795,10 +824,14 @@ target_link_libraries(OpenSees
   OPS_Recorder
   ${CMAKE_DL_LIBS}
   HDF5::HDF5
-  tcl::tcl
+  ${OPS_TCL_TARGET}
   ZLIB::ZLIB
   Eigen3::Eigen
 )
+
+if(COMMAND ops_add_windows_dynamic_tcl_runtime)
+  ops_add_windows_dynamic_tcl_runtime(OpenSees)
+endif()
 
 
 #
@@ -854,7 +887,7 @@ if(MPI_FOUND)
        ${MUMPS_LIBRARIES}
        ${CMAKE_DL_LIBS}
        HDF5::HDF5
-       tcl::tcl
+       ${OPS_TCL_TARGET}
        ZLIB::ZLIB
        Eigen3::Eigen
        ${MPI_CXX_LIBRARIES}
@@ -862,6 +895,10 @@ if(MPI_FOUND)
        ${MPI_Fortran_LIBRARIES}
        ${MPI_CXX_LINK_FLAGS}
     )
+
+    if(COMMAND ops_add_windows_dynamic_tcl_runtime)
+      ops_add_windows_dynamic_tcl_runtime(OpenSeesSP)
+    endif()
 
 endif()
 
@@ -931,14 +968,18 @@ if(MPI_FOUND)
        ${MUMPS_LIBRARIES}
        ${CMAKE_DL_LIBS}
        HDF5::HDF5
-       tcl::tcl	
-       ZLIB::ZLIB		
+       ${OPS_TCL_TARGET}
+       ZLIB::ZLIB
        Eigen3::Eigen
        ${MPI_CXX_LIBRARIES}
        ${SCALAPACK_LIBRARIES}
        ${MPI_Fortran_LIBRARIES}
        ${MPI_CXX_LINK_FLAGS}
     )
+
+    if(COMMAND ops_add_windows_dynamic_tcl_runtime)
+      ops_add_windows_dynamic_tcl_runtime(OpenSeesMP)
+    endif()
 
 endif()
 
