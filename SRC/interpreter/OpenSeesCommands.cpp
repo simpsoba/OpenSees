@@ -1364,6 +1364,18 @@ int OPS_Error(char *errorMessage, int length)
     return 0;
 }
 
+int OPS_ResetCommandLine(int nArgs, int cArg, const char** argv)
+{
+    if (cArg == 0) {
+	opserr << "WARNING can't reset to argv[0]\n";
+	return -1;
+    }
+    if (cmds == 0) return 0;
+    DL_Interpreter* interp = cmds->getInterpreter();
+    interp->resetInput(nArgs, cArg, argv);
+    return 0;
+}
+
 int OPS_ResetCurrentInputArg(int cArg)
 {
     if (cArg == 0) {
@@ -1374,6 +1386,12 @@ int OPS_ResetCurrentInputArg(int cArg)
     DL_Interpreter* interp = cmds->getInterpreter();
     interp->resetInput(cArg);
     return 0;
+}
+
+SimulationInformation* OPS_GetSimulationInfo(void)
+{
+    if (cmds == 0) return 0;
+    return cmds->getSimulationInformation();
 }
 
 UniaxialMaterial *OPS_GetUniaxialMaterial(int matTag)

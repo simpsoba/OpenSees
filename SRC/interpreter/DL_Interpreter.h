@@ -74,6 +74,7 @@ class DL_Interpreter
     virtual int getStringCopy(char **stringPtr);
     virtual void* getVoidPtr();
     virtual int evalDoubleStringExpression(const char* theExpression, double& current_val);
+    virtual void resetInput(int nArgs, int cArg, const char** argv);
     virtual void resetInput(int cArg);
 
     // methods for interpreters to output results
