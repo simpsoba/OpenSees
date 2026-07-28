@@ -504,6 +504,10 @@ Domain theDomain;
 
 #endif
 
+#ifdef _PARALLEL_INTERPRETERS
+static int ops_mpiStatusSync(Domain *domain, int localOk);
+#endif
+
 #include <MachineBroker.h>
 
 MachineBroker *theMachineBroker =0;
@@ -804,6 +808,10 @@ int Tcl_InterpOpenSeesObjCmd(ClientData clientData,  Tcl_Interp *interp, int obj
 int OpenSeesAppInit(Tcl_Interp *interp) {
 
   ops_TheActiveDomain = &theDomain;
+
+#ifdef _PARALLEL_INTERPRETERS
+  theDomain.setMPIStatusSyncFn(ops_mpiStatusSync);
+#endif
 
   //
   // redo puts command so we can capture puts into std:cerr
@@ -3078,6 +3086,25 @@ ops_soeNeedsMPIStatusSync(LinearSOE *soe)
           t == LinSOE_TAGS_DistributedDiagonalSOE ||
           t == LinSOE_TAGS_DistributedSparseGenColLinSOE ||
           t == LinSOE_TAGS_DistributedSparseGenRowLinSOE);
+}
+
+// Allreduce Domain local status when needsMPIStatusSync (collective SOE).
+// Lives here (not Domain.cpp): OPS_Domain is built without _PARALLEL_INTERPRETERS.
+static int
+ops_mpiStatusSync(Domain *domain, int localOk)
+{
+  if (domain == 0 || !domain->needsMPIStatusSync())
+    return localOk;
+
+  int np = 1;
+  MPI_Comm_size(MPI_COMM_WORLD, &np);
+  if (np <= 1)
+    return localOk;
+
+  int localFailed = (localOk != 0) ? 1 : 0;
+  int globalFailed = 0;
+  MPI_Allreduce(&localFailed, &globalFailed, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+  return globalFailed ? -1 : 0;
 }
 #endif
 
