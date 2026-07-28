@@ -1481,3 +1481,71 @@ OPS_numIter()
 {
     return 0;
 }
+
+// Unique loadPackage host bindings. OpenSeesCommands.cpp also defines the
+// OPS_* / ops_* symbols for the DL_Interpreter path; with MSVC /FORCE:MULTIPLE
+// the wrong definition can be injected into OpenFresco setGlobalPointers.
+// These OPS_Pkg_* names exist only here so packages.cpp can bind the Tcl impl.
+extern "C" int OPS_Pkg_GetNDM(void) { return OPS_GetNDM(); }
+extern "C" int OPS_Pkg_GetNDF(void) { return OPS_GetNDF(); }
+extern "C" int OPS_Pkg_Error(char* errorMessage, int length) { return OPS_Error(errorMessage, length); }
+extern "C" int OPS_Pkg_GetNumRemainingInputArgs(void) { return OPS_GetNumRemainingInputArgs(); }
+extern "C" int OPS_Pkg_ResetCurrentInputArg(int cArg) { return OPS_ResetCurrentInputArg(cArg); }
+extern "C" int OPS_Pkg_ResetCommandLine(int nArgs, int cArg, const char** argv) {
+    return OPS_ResetCommandLine(nArgs, cArg, argv);
+}
+extern "C" int OPS_Pkg_GetIntInput(int* numData, int* data) { return OPS_GetIntInput(numData, data); }
+extern "C" int OPS_Pkg_GetDoubleInput(int* numData, double* data) { return OPS_GetDoubleInput(numData, data); }
+extern "C" const char* OPS_Pkg_GetString(void) { return OPS_GetString(); }
+extern "C" int OPS_Pkg_AllocateMaterial(matObj* theMat) { return OPS_AllocateMaterial(theMat); }
+extern "C" int OPS_Pkg_AllocateElement(eleObj* theEle, int* matTags, int* matType) {
+    return OPS_AllocateElement(theEle, matTags, matType);
+}
+extern "C" int OPS_Pkg_InvokeMaterialDirectly(matObject** theMat, modelState* model,
+    double* strain, double* stress, double* tang, int* isw) {
+    return OPS_InvokeMaterialDirectly(theMat, model, strain, stress, tang, isw);
+}
+extern "C" int OPS_Pkg_GetNodeCrd(int* nodeTag, int* sizeData, double* data) {
+    return OPS_GetNodeCrd(nodeTag, sizeData, data);
+}
+extern "C" int OPS_Pkg_GetNodeDisp(int* nodeTag, int* sizeData, double* data) {
+    return OPS_GetNodeDisp(nodeTag, sizeData, data);
+}
+extern "C" int OPS_Pkg_GetNodeVel(int* nodeTag, int* sizeData, double* data) {
+    return OPS_GetNodeVel(nodeTag, sizeData, data);
+}
+extern "C" int OPS_Pkg_GetNodeAccel(int* nodeTag, int* sizeData, double* data) {
+    return OPS_GetNodeAccel(nodeTag, sizeData, data);
+}
+extern "C" int OPS_Pkg_GetNodeIncrDisp(int* nodeTag, int* sizeData, double* data) {
+    return OPS_GetNodeIncrDisp(nodeTag, sizeData, data);
+}
+extern "C" int OPS_Pkg_GetNodeIncrDeltaDisp(int* nodeTag, int* sizeData, double* data) {
+    return OPS_GetNodeIncrDeltaDisp(nodeTag, sizeData, data);
+}
+UniaxialMaterial* OPS_Pkg_GetUniaxialMaterial(int matTag) { return OPS_GetUniaxialMaterial(matTag); }
+NDMaterial* OPS_Pkg_GetNDMaterial(int matTag) { return OPS_GetNDMaterial(matTag); }
+SectionForceDeformation* OPS_Pkg_GetSectionForceDeformation(int secTag) {
+    return OPS_GetSectionForceDeformation(secTag);
+}
+CrdTransf* OPS_Pkg_GetCrdTransf(int crdTag) { return OPS_GetCrdTransf(crdTag); }
+FrictionModel* OPS_Pkg_GetFrictionModel(int frnTag) { return OPS_GetFrictionModel(frnTag); }
+Domain* OPS_Pkg_GetDomain(void) { return OPS_GetDomain(); }
+FE_Datastore* OPS_Pkg_GetFEDatastore(void) { return OPS_GetFEDatastore(); }
+SimulationInformation* OPS_Pkg_GetSimulationInfo(void) { return OPS_GetSimulationInfo(); }
+AnalysisModel** OPS_Pkg_GetAnalysisModel(void) { return OPS_GetAnalysisModel(); }
+EquiSolnAlgo** OPS_Pkg_GetAlgorithm(void) { return OPS_GetAlgorithm(); }
+ConstraintHandler** OPS_Pkg_GetHandler(void) { return OPS_GetHandler(); }
+DOF_Numberer** OPS_Pkg_GetNumberer(void) { return OPS_GetNumberer(); }
+LinearSOE** OPS_Pkg_GetSOE(void) { return OPS_GetSOE(); }
+EigenSOE** OPS_Pkg_GetEigenSOE(void) { return OPS_GetEigenSOE(); }
+StaticAnalysis** OPS_Pkg_GetStaticAnalysis(void) { return OPS_GetStaticAnalysis(); }
+DirectIntegrationAnalysis** OPS_Pkg_GetTransientAnalysis(void) { return OPS_GetTransientAnalysis(); }
+VariableTimeStepDirectIntegrationAnalysis** OPS_Pkg_GetVariableTimeStepTransientAnalysis(void) {
+    return OPS_GetVariableTimeStepTransientAnalysis();
+}
+int* OPS_Pkg_GetNumEigen(void) { return OPS_GetNumEigen(); }
+StaticIntegrator** OPS_Pkg_GetStaticIntegrator(void) { return OPS_GetStaticIntegrator(); }
+TransientIntegrator** OPS_Pkg_GetTransientIntegrator(void) { return OPS_GetTransientIntegrator(); }
+ConvergenceTest** OPS_Pkg_GetTest(void) { return OPS_GetTest(); }
+bool* OPS_Pkg_builtModel(void) { return OPS_builtModel(); }

@@ -48,6 +48,49 @@ httpGET_File(char const* URL, char const* page, unsigned int port, const char* f
 #include <elementAPI.h>
 //extern SimulationInformation* theSimulationInfoPtr;
 
+// Declared in elementAPI_TCL.cpp — unique names for loadPackage host binding.
+extern "C" int OPS_Pkg_GetNDM(void);
+extern "C" int OPS_Pkg_GetNDF(void);
+extern "C" int OPS_Pkg_Error(char* errorMessage, int length);
+extern "C" int OPS_Pkg_GetNumRemainingInputArgs(void);
+extern "C" int OPS_Pkg_ResetCurrentInputArg(int cArg);
+extern "C" int OPS_Pkg_ResetCommandLine(int nArgs, int cArg, const char** argv);
+extern "C" int OPS_Pkg_GetIntInput(int* numData, int* data);
+extern "C" int OPS_Pkg_GetDoubleInput(int* numData, double* data);
+extern "C" const char* OPS_Pkg_GetString(void);
+extern "C" int OPS_Pkg_AllocateMaterial(matObj* theMat);
+extern "C" int OPS_Pkg_AllocateElement(eleObj* theEle, int* matTags, int* matType);
+extern "C" int OPS_Pkg_InvokeMaterialDirectly(matObject** theMat, modelState* model,
+    double* strain, double* stress, double* tang, int* isw);
+extern "C" int OPS_Pkg_GetNodeCrd(int* nodeTag, int* sizeData, double* data);
+extern "C" int OPS_Pkg_GetNodeDisp(int* nodeTag, int* sizeData, double* data);
+extern "C" int OPS_Pkg_GetNodeVel(int* nodeTag, int* sizeData, double* data);
+extern "C" int OPS_Pkg_GetNodeAccel(int* nodeTag, int* sizeData, double* data);
+extern "C" int OPS_Pkg_GetNodeIncrDisp(int* nodeTag, int* sizeData, double* data);
+extern "C" int OPS_Pkg_GetNodeIncrDeltaDisp(int* nodeTag, int* sizeData, double* data);
+UniaxialMaterial* OPS_Pkg_GetUniaxialMaterial(int matTag);
+NDMaterial* OPS_Pkg_GetNDMaterial(int matTag);
+SectionForceDeformation* OPS_Pkg_GetSectionForceDeformation(int secTag);
+CrdTransf* OPS_Pkg_GetCrdTransf(int crdTag);
+FrictionModel* OPS_Pkg_GetFrictionModel(int frnTag);
+Domain* OPS_Pkg_GetDomain(void);
+FE_Datastore* OPS_Pkg_GetFEDatastore(void);
+SimulationInformation* OPS_Pkg_GetSimulationInfo(void);
+AnalysisModel** OPS_Pkg_GetAnalysisModel(void);
+EquiSolnAlgo** OPS_Pkg_GetAlgorithm(void);
+ConstraintHandler** OPS_Pkg_GetHandler(void);
+DOF_Numberer** OPS_Pkg_GetNumberer(void);
+LinearSOE** OPS_Pkg_GetSOE(void);
+EigenSOE** OPS_Pkg_GetEigenSOE(void);
+StaticAnalysis** OPS_Pkg_GetStaticAnalysis(void);
+DirectIntegrationAnalysis** OPS_Pkg_GetTransientAnalysis(void);
+VariableTimeStepDirectIntegrationAnalysis** OPS_Pkg_GetVariableTimeStepTransientAnalysis(void);
+int* OPS_Pkg_GetNumEigen(void);
+StaticIntegrator** OPS_Pkg_GetStaticIntegrator(void);
+TransientIntegrator** OPS_Pkg_GetTransientIntegrator(void);
+ConvergenceTest** OPS_Pkg_GetTest(void);
+bool* OPS_Pkg_builtModel(void);
+
 #else
 #include <dlfcn.h>
 #endif
@@ -192,52 +235,53 @@ getLibraryFunction(const char* libName, const char* funcName, void** libHandle, 
             return -3;
         }
         
-        // invoke the pointer function
+        // Bind Tcl elementAPI implementations via OPS_Pkg_* aliases so
+        // /FORCE:MULTIPLE cannot inject OpenSeesCommands (cmds==0) versions.
         (funcPtr)(
             opserrPtr,
             ops_TheActiveDomain,
             //theSimulationInfoPtr,
-            OPS_GetNDM,
-            OPS_GetNDF,
-            OPS_Error,
-            OPS_GetNumRemainingInputArgs,
-            OPS_ResetCurrentInputArg,
-            OPS_ResetCommandLine,
-            OPS_GetIntInput,
-            OPS_GetDoubleInput,
-            OPS_GetString,
+            OPS_Pkg_GetNDM,
+            OPS_Pkg_GetNDF,
+            OPS_Pkg_Error,
+            OPS_Pkg_GetNumRemainingInputArgs,
+            OPS_Pkg_ResetCurrentInputArg,
+            OPS_Pkg_ResetCommandLine,
+            OPS_Pkg_GetIntInput,
+            OPS_Pkg_GetDoubleInput,
+            OPS_Pkg_GetString,
             //OPS_GetStringCopy,
-            OPS_AllocateMaterial,
-            OPS_AllocateElement,
-            OPS_InvokeMaterialDirectly,
-            OPS_GetUniaxialMaterial,
-            OPS_GetNDMaterial,
-            OPS_GetSectionForceDeformation,
-            OPS_GetCrdTransf,
-            OPS_GetFrictionModel,
-            OPS_GetNodeCrd,
-            OPS_GetNodeDisp,
-            OPS_GetNodeVel,
-            OPS_GetNodeAccel,
-            OPS_GetNodeIncrDisp,
-            OPS_GetNodeIncrDeltaDisp,
-            OPS_GetDomain,
-            OPS_GetFEDatastore,
-            OPS_GetSimulationInfo,
-            OPS_GetAnalysisModel,
-            OPS_GetAlgorithm,
-            OPS_GetHandler,
-            OPS_GetNumberer,
-            OPS_GetSOE,
-            OPS_GetEigenSOE,
-            OPS_GetStaticAnalysis,
-            OPS_GetTransientAnalysis,
-            OPS_GetVariableTimeStepTransientAnalysis,
-            OPS_GetNumEigen,
-            OPS_GetStaticIntegrator,
-            OPS_GetTransientIntegrator,
-            OPS_GetTest,
-            OPS_builtModel);
+            OPS_Pkg_AllocateMaterial,
+            OPS_Pkg_AllocateElement,
+            OPS_Pkg_InvokeMaterialDirectly,
+            OPS_Pkg_GetUniaxialMaterial,
+            OPS_Pkg_GetNDMaterial,
+            OPS_Pkg_GetSectionForceDeformation,
+            OPS_Pkg_GetCrdTransf,
+            OPS_Pkg_GetFrictionModel,
+            OPS_Pkg_GetNodeCrd,
+            OPS_Pkg_GetNodeDisp,
+            OPS_Pkg_GetNodeVel,
+            OPS_Pkg_GetNodeAccel,
+            OPS_Pkg_GetNodeIncrDisp,
+            OPS_Pkg_GetNodeIncrDeltaDisp,
+            OPS_Pkg_GetDomain,
+            OPS_Pkg_GetFEDatastore,
+            OPS_Pkg_GetSimulationInfo,
+            OPS_Pkg_GetAnalysisModel,
+            OPS_Pkg_GetAlgorithm,
+            OPS_Pkg_GetHandler,
+            OPS_Pkg_GetNumberer,
+            OPS_Pkg_GetSOE,
+            OPS_Pkg_GetEigenSOE,
+            OPS_Pkg_GetStaticAnalysis,
+            OPS_Pkg_GetTransientAnalysis,
+            OPS_Pkg_GetVariableTimeStepTransientAnalysis,
+            OPS_Pkg_GetNumEigen,
+            OPS_Pkg_GetStaticIntegrator,
+            OPS_Pkg_GetTransientIntegrator,
+            OPS_Pkg_GetTest,
+            OPS_Pkg_builtModel);
         
         // call an init function if in library
         LocalInitPtrType initPtr;
