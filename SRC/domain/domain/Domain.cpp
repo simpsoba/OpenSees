@@ -84,10 +84,6 @@
 
 #include <DomainModalProperties.h>
 
-#ifdef _PARALLEL_INTERPRETERS
-#include <mpi.h>
-#endif
-
 //
 // global variables
 //
@@ -96,27 +92,6 @@ Domain       *ops_TheActiveDomain = 0;
 double        ops_Dt = 0.0;
 bool          ops_InitialStateAnalysis = false;
 int           ops_Creep = 0;
-
-#ifdef _PARALLEL_INTERPRETERS
-// Map local Domain status to a consistent result across OpenSeesMP ranks
-// when a collective LinearSOE is active (needsMPIStatusSync).
-static int
-ops_mpSyncDomainStatus(Domain *domain, int localOk)
-{
-  if (domain == 0 || !domain->needsMPIStatusSync())
-    return localOk;
-
-  int np = 1;
-  MPI_Comm_size(MPI_COMM_WORLD, &np);
-  if (np <= 1)
-    return localOk;
-
-  int localFailed = (localOk != 0) ? 1 : 0;
-  int globalFailed = 0;
-  MPI_Allreduce(&localFailed, &globalFailed, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
-  return globalFailed ? -1 : 0;
-}
-#endif
 
 Domain::Domain()
 :theRecorders(0), numRecorders(0),
@@ -129,7 +104,7 @@ Domain::Domain()
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
  theModalDampingFactors(0), inclModalMatrix(false),
- lastChannel(0), needsMPIStatusSyncFlag(false),
+ lastChannel(0), needsMPIStatusSyncFlag(false), mpiStatusSyncFn(0),
  paramIndex(0), paramSize(0), numParameters(0)
 {
   
@@ -187,7 +162,7 @@ Domain::Domain(int numNodes, int numElements, int numSPs, int numMPs, int numEQs
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
  theModalDampingFactors(0), inclModalMatrix(false),
- lastChannel(0), needsMPIStatusSyncFlag(false),
+ lastChannel(0), needsMPIStatusSyncFlag(false), mpiStatusSyncFn(0),
  paramIndex(0), paramSize(0), numParameters(0)
 {
     // init the arrays for storing the domain components
@@ -253,7 +228,7 @@ Domain::Domain(TaggedObjectStorage &theNodesStorage,
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
  theModalDampingFactors(0), inclModalMatrix(false),
- lastChannel(0), needsMPIStatusSyncFlag(false),
+ lastChannel(0), needsMPIStatusSyncFlag(false), mpiStatusSyncFn(0),
  paramIndex(0), paramSize(0), numParameters(0)
 {
     // init the arrays for storing the domain components
@@ -315,7 +290,7 @@ Domain::Domain(TaggedObjectStorage &theStorage)
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
  theModalDampingFactors(0), inclModalMatrix(false),
- lastChannel(0), needsMPIStatusSyncFlag(false),
+ lastChannel(0), needsMPIStatusSyncFlag(false), mpiStatusSyncFn(0),
  paramIndex(0), paramSize(0), numParameters(0)
 {
     // init the arrays for storing the domain components
@@ -2177,11 +2152,9 @@ Domain::record(bool fromAnalysis)
   // update the commitTag
   commitTag++;
 
-#ifdef _PARALLEL_INTERPRETERS
-  return ops_mpSyncDomainStatus(this, res);
-#else
+  if (mpiStatusSyncFn != 0)
+    return (*mpiStatusSyncFn)(this, res);
   return res;
-#endif
 }
 
 int
@@ -2216,11 +2189,9 @@ Domain::commit(void)
     // update the commitTag
     commitTag++;
 
-#ifdef _PARALLEL_INTERPRETERS
-    return ops_mpSyncDomainStatus(this, ok);
-#else
+    if (mpiStatusSyncFn != 0)
+      return (*mpiStatusSyncFn)(this, ok);
     return ok;
-#endif
 }
 
 int
@@ -2253,11 +2224,9 @@ Domain::revertToLastCommit(void)
     if (ok == 0)
       ok = u;
 
-#ifdef _PARALLEL_INTERPRETERS
-    return ops_mpSyncDomainStatus(this, ok);
-#else
+    if (mpiStatusSyncFn != 0)
+      return (*mpiStatusSyncFn)(this, ok);
     return ok;
-#endif
 }
 
 int
@@ -2298,11 +2267,9 @@ Domain::revertToStart(void)
     if (ok == 0)
       ok = u;
 
-#ifdef _PARALLEL_INTERPRETERS
-    return ops_mpSyncDomainStatus(this, ok);
-#else
+    if (mpiStatusSyncFn != 0)
+      return (*mpiStatusSyncFn)(this, ok);
     return ok;
-#endif
 }
 
 int
@@ -2326,11 +2293,9 @@ Domain::update(void)
   if (ok != 0)
     opserr << "Domain::update - domain failed in update\n";
 
-#ifdef _PARALLEL_INTERPRETERS
-  return ops_mpSyncDomainStatus(this, ok);
-#else
+  if (mpiStatusSyncFn != 0)
+    return (*mpiStatusSyncFn)(this, ok);
   return ok;
-#endif
 }
 
 
@@ -2338,6 +2303,12 @@ void
 Domain::setMPIStatusSync(bool flag)
 {
   needsMPIStatusSyncFlag = flag;
+}
+
+void
+Domain::setMPIStatusSyncFn(MPIStatusSyncFn fn)
+{
+  mpiStatusSyncFn = fn;
 }
 
 bool
