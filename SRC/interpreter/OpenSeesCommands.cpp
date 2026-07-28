@@ -158,6 +158,25 @@ ops_soeNeedsMPIStatusSync(LinearSOE *soe)
 #include <MumpsParallelSOE.h>
 #include <MumpsParallelSolver.h>
 #endif
+
+// Allreduce Domain local status when needsMPIStatusSync (collective SOE).
+// Lives here (not Domain.cpp): OPS_Domain is built without _PARALLEL_INTERPRETERS.
+static int
+ops_mpiStatusSync(Domain *domain, int localOk)
+{
+  if (domain == 0 || !domain->needsMPIStatusSync())
+    return localOk;
+
+  int np = 1;
+  MPI_Comm_size(MPI_COMM_WORLD, &np);
+  if (np <= 1)
+    return localOk;
+
+  int localFailed = (localOk != 0) ? 1 : 0;
+  int globalFailed = 0;
+  MPI_Allreduce(&localFailed, &globalFailed, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+  return globalFailed ? -1 : 0;
+}
 #elif _PARALLEL_PROCESSING
 #include <mpi.h>
 #include <PartitionedDomain.h>
@@ -205,6 +224,9 @@ OpenSeesCommands::OpenSeesCommands(DL_Interpreter* interp)
     cmds = this;
 
     theDomain = new Domain;
+#ifdef _PARALLEL_INTERPRETERS
+    theDomain->setMPIStatusSyncFn(ops_mpiStatusSync);
+#endif
 
     reliability = new OpenSeesReliabilityCommands(theDomain);
 }
