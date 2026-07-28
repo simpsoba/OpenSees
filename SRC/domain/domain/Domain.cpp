@@ -84,6 +84,10 @@
 
 #include <DomainModalProperties.h>
 
+#ifdef _PARALLEL_INTERPRETERS
+#include <mpi.h>
+#endif
+
 //
 // global variables
 //
@@ -92,6 +96,27 @@ Domain       *ops_TheActiveDomain = 0;
 double        ops_Dt = 0.0;
 bool          ops_InitialStateAnalysis = false;
 int           ops_Creep = 0;
+
+#ifdef _PARALLEL_INTERPRETERS
+// Map local Domain status to a consistent result across OpenSeesMP ranks
+// when a collective LinearSOE is active (needsMPIStatusSync).
+static int
+ops_mpSyncDomainStatus(Domain *domain, int localOk)
+{
+  if (domain == 0 || !domain->needsMPIStatusSync())
+    return localOk;
+
+  int np = 1;
+  MPI_Comm_size(MPI_COMM_WORLD, &np);
+  if (np <= 1)
+    return localOk;
+
+  int localFailed = (localOk != 0) ? 1 : 0;
+  int globalFailed = 0;
+  MPI_Allreduce(&localFailed, &globalFailed, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+  return globalFailed ? -1 : 0;
+}
+#endif
 
 Domain::Domain()
 :theRecorders(0), numRecorders(0),
@@ -104,7 +129,7 @@ Domain::Domain()
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
  theModalDampingFactors(0), inclModalMatrix(false),
- lastChannel(0),
+ lastChannel(0), needsMPIStatusSyncFlag(false),
  paramIndex(0), paramSize(0), numParameters(0)
 {
   
@@ -162,7 +187,8 @@ Domain::Domain(int numNodes, int numElements, int numSPs, int numMPs, int numEQs
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
  theModalDampingFactors(0), inclModalMatrix(false),
- lastChannel(0), paramIndex(0), paramSize(0), numParameters(0)
+ lastChannel(0), needsMPIStatusSyncFlag(false),
+ paramIndex(0), paramSize(0), numParameters(0)
 {
     // init the arrays for storing the domain components
     theElements = new MapOfTaggedObjects();
@@ -227,7 +253,8 @@ Domain::Domain(TaggedObjectStorage &theNodesStorage,
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
  theModalDampingFactors(0), inclModalMatrix(false),
- lastChannel(0),paramIndex(0), paramSize(0), numParameters(0)
+ lastChannel(0), needsMPIStatusSyncFlag(false),
+ paramIndex(0), paramSize(0), numParameters(0)
 {
     // init the arrays for storing the domain components
     thePCs      = new MapOfTaggedObjects();
@@ -288,7 +315,8 @@ Domain::Domain(TaggedObjectStorage &theStorage)
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
  theModalDampingFactors(0), inclModalMatrix(false),
- lastChannel(0),paramIndex(0), paramSize(0), numParameters(0)
+ lastChannel(0), needsMPIStatusSyncFlag(false),
+ paramIndex(0), paramSize(0), numParameters(0)
 {
     // init the arrays for storing the domain components
     theStorage.clearAll(); // clear the storage just in case populated
@@ -1105,6 +1133,8 @@ Domain::clearAll(void) {
   currentGeoTag = 0;
   lastGeoSendTag = -1;
   lastChannel = 0;
+
+  needsMPIStatusSyncFlag = false;
 
   // rest the flag to be as initial
   hasDomainChangedFlag = false;
@@ -2147,7 +2177,11 @@ Domain::record(bool fromAnalysis)
   // update the commitTag
   commitTag++;
 
+#ifdef _PARALLEL_INTERPRETERS
+  return ops_mpSyncDomainStatus(this, res);
+#else
   return res;
+#endif
 }
 
 int
@@ -2156,16 +2190,18 @@ Domain::commit(void)
     // 
     // first invoke commit on all nodes and elements in the domain
     //
+    int ok = 0;
+
     Node *nodePtr;
     NodeIter &theNodeIter = this->getNodes();
     while ((nodePtr = theNodeIter()) != 0) {
-      nodePtr->commitState();
+      ok += nodePtr->commitState();
     }
 
     Element *elePtr;
     ElementIter &theElemIter = this->getElements();    
     while ((elePtr = theElemIter()) != 0) {
-      elePtr->commitState();
+      ok += elePtr->commitState();
     }
 
     // set the new committed time in the domain
@@ -2175,11 +2211,16 @@ Domain::commit(void)
     // invoke record on all recorders
     for (int i=0; i<numRecorders; i++)
       if (theRecorders[i] != 0)
-	theRecorders[i]->record(commitTag, currentTime);
+	ok += theRecorders[i]->record(commitTag, currentTime);
 
     // update the commitTag
     commitTag++;
-    return 0;
+
+#ifdef _PARALLEL_INTERPRETERS
+    return ops_mpSyncDomainStatus(this, ok);
+#else
+    return ok;
+#endif
 }
 
 int
@@ -2188,16 +2229,17 @@ Domain::revertToLastCommit(void)
     // 
     // first invoke revertToLastCommit  on all nodes and elements in the domain
     //
+    int ok = 0;
     
     Node *nodePtr;
     NodeIter &theNodeIter = this->getNodes();
     while ((nodePtr = theNodeIter()) != 0)
-	nodePtr->revertToLastCommit();
+	ok += nodePtr->revertToLastCommit();
     
     Element *elePtr;
     ElementIter &theElemIter = this->getElements();    
     while ((elePtr = theElemIter()) != 0) {
-	elePtr->revertToLastCommit();
+	ok += elePtr->revertToLastCommit();
     }
 
     // set the current time and load factor in the domain to last committed
@@ -2207,7 +2249,15 @@ Domain::revertToLastCommit(void)
     // apply load for the last committed time
     this->applyLoad(currentTime);
 
-    return this->update();
+    int u = this->update();
+    if (ok == 0)
+      ok = u;
+
+#ifdef _PARALLEL_INTERPRETERS
+    return ops_mpSyncDomainStatus(this, ok);
+#else
+    return ok;
+#endif
 }
 
 int
@@ -2217,16 +2267,17 @@ Domain::revertToStart(void)
     // first invoke revertToLastCommit  on all nodes and 
     // elements in the domain
     //
+    int ok = 0;
 
     Node *nodePtr;
     NodeIter &theNodeIter = this->getNodes();
     while ((nodePtr = theNodeIter()) != 0) 
-	nodePtr->revertToStart();
+	ok += nodePtr->revertToStart();
 
     Element *elePtr;
     ElementIter &theElements = this->getElements();    
     while ((elePtr = theElements()) != 0) {
-	elePtr->revertToStart();
+	ok += elePtr->revertToStart();
     }
 
     // ADDED BY TERJE //////////////////////////////////
@@ -2243,7 +2294,15 @@ Domain::revertToStart(void)
     // apply load for the last committed time
     this->applyLoad(currentTime);
 
-    return this->update();
+    int u = this->update();
+    if (ok == 0)
+      ok = u;
+
+#ifdef _PARALLEL_INTERPRETERS
+    return ops_mpSyncDomainStatus(this, ok);
+#else
+    return ok;
+#endif
 }
 
 int
@@ -2267,7 +2326,24 @@ Domain::update(void)
   if (ok != 0)
     opserr << "Domain::update - domain failed in update\n";
 
+#ifdef _PARALLEL_INTERPRETERS
+  return ops_mpSyncDomainStatus(this, ok);
+#else
   return ok;
+#endif
+}
+
+
+void
+Domain::setMPIStatusSync(bool flag)
+{
+  needsMPIStatusSyncFlag = flag;
+}
+
+bool
+Domain::needsMPIStatusSync(void) const
+{
+  return needsMPIStatusSyncFlag;
 }
 
 
