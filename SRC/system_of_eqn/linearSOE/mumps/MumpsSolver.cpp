@@ -127,17 +127,17 @@ MumpsSolver::initializeMumps(void)
     id.job = 1;
     dmumps_c(&id);
 
+    // always restore 0-based C++ indexing (including on error)
+    for (int i = 0; i < nnz; i++) {
+      rowA[i]--;
+      colA[i]--;
+    }
+
     int info = id.infog[0];
     if (info != 0) {
       opserr << "WARNING MumpsSolver::setSize(void)- ";
       opserr << " Error " << info << " returned in substitution dmumps()\n";
       return info;
-    }
-    
-    // decrement row and col A values by 1 to return to C++ indexing
-    for (int i = 0; i < nnz; i++) {
-      rowA[i]--;
-      colA[i]--;
     }
     
     needsSetSize = false;
@@ -183,8 +183,6 @@ MumpsSolver::solveAfterInitialization(void)
     // Call the MUMPS package to factor & solve the system
     id.job = 5;
     dmumps_c(&id);
-
-    theMumpsSOE->factored = true;
   } else {
     // factor the matrix
     id.n   = theMumpsSOE->size; 
@@ -201,9 +199,17 @@ MumpsSolver::solveAfterInitialization(void)
     dmumps_c(&id);
   }	
 
-
-  
   info = id.infog[0];
+
+  if (info == 0 && id.job == 5)
+    theMumpsSOE->factored = true;
+
+  // always restore 0-based C++ indexing (including on error)
+  for (int i=0; i<nnz; i++) {
+    rowA[i]--;
+    colA[i]--;
+  }
+
   if (info != 0) {	
     opserr << "WARNING MumpsSolver::solve(void)- ";
     opserr << " Error " << info << " returned in substitution dmumps()\n";
@@ -224,12 +230,6 @@ MumpsSolver::solveAfterInitialization(void)
 		  ;
 	}
     return info;
-  }
-
-  // decrement row and col A values by 1 to return to C++ indexing
-  for (int i=0; i<nnz; i++) {
-    rowA[i]--;
-    colA[i]--;
   }
 
   return 0;
