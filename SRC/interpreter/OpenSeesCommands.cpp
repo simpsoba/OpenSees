@@ -156,25 +156,17 @@ ops_soeNeedsMPIStatusSync(LinearSOE *soe)
 #include <MumpsParallelSOE.h>
 #include <MumpsParallelSolver.h>
 #endif
+#include <ID.h>
+#include <Channel.h>
 
-// Allreduce Domain local status when needsMPIStatusSync (collective SOE).
+// Channel barrier for Domain local status when needsMPIStatusSync (collective SOE).
 // Lives here (not Domain.cpp): OPS_Domain is built without _PARALLEL_INTERPRETERS.
-static int
-ops_mpiStatusSync(Domain *domain, int localOk)
-{
-  if (domain == 0 || !domain->needsMPIStatusSync())
-    return localOk;
+// Uses OpenSeesMP hub-and-spoke channels (same fabric as MumpsParallelSOE), not
+// MPI_COMM_WORLD Allreduce — avoids cross-mechanism deadlock with getB/solve.
+// Tags distinct from MumpsParallelSOE's hardcoded (0, 0) vector traffic.
+static const int OPS_STATUS_SYNC_DBTAG     = 77;
+static const int OPS_STATUS_SYNC_COMMITTAG = 77;
 
-  int np = 1;
-  MPI_Comm_size(MPI_COMM_WORLD, &np);
-  if (np <= 1)
-    return localOk;
-
-  int localFailed = (localOk != 0) ? 1 : 0;
-  int globalFailed = 0;
-  MPI_Allreduce(&localFailed, &globalFailed, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
-  return globalFailed ? -1 : 0;
-}
 #elif _PARALLEL_PROCESSING
 #include <mpi.h>
 #include <PartitionedDomain.h>
@@ -187,6 +179,58 @@ ops_mpiStatusSync(Domain *domain, int localOk)
 
 // active object
 static OpenSeesCommands* cmds = 0;
+
+#ifdef _PARALLEL_INTERPRETERS
+static int
+ops_mpiStatusSync(Domain *domain, int localOk)
+{
+  if (domain == 0 || !domain->needsMPIStatusSync())
+    return localOk;
+  if (cmds == 0)
+    return localOk;
+
+  Channel **channels = cmds->getChannels();
+  int nChannels = cmds->getNumChannels();
+  MachineBroker *broker = cmds->getMachineBroker();
+  if (channels == 0 || nChannels <= 0 || broker == 0)
+    return localOk;
+
+  int rank = broker->getPID();
+  int np = broker->getNP();
+  if (np <= 1)
+    return localOk;
+
+  static ID data(1);
+  data(0) = (localOk != 0) ? 1 : 0;
+
+  if (rank == 0) {
+    int globalFailed = data(0);
+    for (int i = 0; i < nChannels; i++) {
+      ID remote(1);
+      if (channels[i]->recvID(OPS_STATUS_SYNC_DBTAG,
+                              OPS_STATUS_SYNC_COMMITTAG, remote) < 0)
+        return -1;
+      if (remote(0) != 0)
+        globalFailed = 1;
+    }
+    data(0) = globalFailed;
+    for (int i = 0; i < nChannels; i++) {
+      if (channels[i]->sendID(OPS_STATUS_SYNC_DBTAG,
+                              OPS_STATUS_SYNC_COMMITTAG, data) < 0)
+        return -1;
+    }
+  } else {
+    if (channels[0]->sendID(OPS_STATUS_SYNC_DBTAG,
+                            OPS_STATUS_SYNC_COMMITTAG, data) < 0)
+      return -1;
+    if (channels[0]->recvID(OPS_STATUS_SYNC_DBTAG,
+                            OPS_STATUS_SYNC_COMMITTAG, data) < 0)
+      return -1;
+  }
+
+  return data(0) ? -1 : 0;
+}
+#endif
 
 OpenSeesCommands::OpenSeesCommands(DL_Interpreter* interp)
     :interpreter(interp), theDomain(0), 
