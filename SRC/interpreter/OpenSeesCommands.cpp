@@ -112,6 +112,8 @@ UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 #endif
 #include <BackgroundMesh.h>
 #include <classTags.h>
+#include <Node.h>
+#include <Vector.h>
 
 #ifdef _ITPACK
 #include <ItpackLinSOE.h>
@@ -1392,6 +1394,284 @@ SimulationInformation* OPS_GetSimulationInfo(void)
 {
     if (cmds == 0) return 0;
     return cmds->getSimulationInformation();
+}
+
+FE_Datastore* OPS_GetFEDatastore(void)
+{
+    if (cmds == 0) return 0;
+    return cmds->getDatabase();
+}
+
+bool* OPS_builtModel(void)
+{
+    // Shared flag for loadPackage plugins (OpenFresco setGlobalPointers).
+    static bool builtModelFlag = false;
+    return &builtModelFlag;
+}
+
+NDMaterial* OPS_GetNDMaterial(int matTag)
+{
+    return OPS_getNDMaterial(matTag);
+}
+
+SectionForceDeformation* OPS_GetSectionForceDeformation(int secTag)
+{
+    return OPS_getSectionForceDeformation(secTag);
+}
+
+CrdTransf* OPS_GetCrdTransf(int crdTag)
+{
+    return OPS_getCrdTransf(crdTag);
+}
+
+FrictionModel* OPS_GetFrictionModel(int frnTag)
+{
+    return OPS_getFrictionModel(frnTag);
+}
+
+extern "C" int OPS_GetNodeCrd(int* nodeTag, int* sizeCrd, double* data)
+{
+    if (cmds == 0) return -1;
+    Domain* theDomain = cmds->getDomain();
+    if (theDomain == 0) return -1;
+    Node* theNode = theDomain->getNode(*nodeTag);
+    if (theNode == 0) {
+        opserr << "OPS_GetNodeCrd - no node with tag " << *nodeTag << endln;
+        return -1;
+    }
+    int size = *sizeCrd;
+    const Vector& crd = theNode->getCrds();
+    if (crd.Size() != size) {
+        opserr << "OPS_GetNodeCrd - crd size mismatch\n";
+        return -1;
+    }
+    for (int i = 0; i < size; i++)
+        data[i] = crd(i);
+    return 0;
+}
+
+extern "C" int OPS_GetNodeDisp(int* nodeTag, int* sizeData, double* data)
+{
+    if (cmds == 0) return -1;
+    Domain* theDomain = cmds->getDomain();
+    if (theDomain == 0) return -1;
+    Node* theNode = theDomain->getNode(*nodeTag);
+    if (theNode == 0) {
+        opserr << "OPS_GetNodeDisp - no node with tag " << *nodeTag << endln;
+        return -1;
+    }
+    int size = *sizeData;
+    const Vector& disp = theNode->getTrialDisp();
+    if (disp.Size() != size) {
+        opserr << "OPS_GetNodeDisp - size mismatch\n";
+        return -1;
+    }
+    for (int i = 0; i < size; i++)
+        data[i] = disp(i);
+    return 0;
+}
+
+extern "C" int OPS_GetNodeVel(int* nodeTag, int* sizeData, double* data)
+{
+    if (cmds == 0) return -1;
+    Domain* theDomain = cmds->getDomain();
+    if (theDomain == 0) return -1;
+    Node* theNode = theDomain->getNode(*nodeTag);
+    if (theNode == 0) {
+        opserr << "OPS_GetNodeVel - no node with tag " << *nodeTag << endln;
+        return -1;
+    }
+    int size = *sizeData;
+    const Vector& vel = theNode->getTrialVel();
+    if (vel.Size() != size) {
+        opserr << "OPS_GetNodeVel - size mismatch\n";
+        return -1;
+    }
+    for (int i = 0; i < size; i++)
+        data[i] = vel(i);
+    return 0;
+}
+
+extern "C" int OPS_GetNodeAccel(int* nodeTag, int* sizeData, double* data)
+{
+    if (cmds == 0) return -1;
+    Domain* theDomain = cmds->getDomain();
+    if (theDomain == 0) return -1;
+    Node* theNode = theDomain->getNode(*nodeTag);
+    if (theNode == 0) {
+        opserr << "OPS_GetNodeAccel - no node with tag " << *nodeTag << endln;
+        return -1;
+    }
+    int size = *sizeData;
+    const Vector& accel = theNode->getTrialAccel();
+    if (accel.Size() != size) {
+        opserr << "OPS_GetNodeAccel - size mismatch\n";
+        return -1;
+    }
+    for (int i = 0; i < size; i++)
+        data[i] = accel(i);
+    return 0;
+}
+
+extern "C" int OPS_GetNodeIncrDisp(int* nodeTag, int* sizeData, double* data)
+{
+    if (cmds == 0) return -1;
+    Domain* theDomain = cmds->getDomain();
+    if (theDomain == 0) return -1;
+    Node* theNode = theDomain->getNode(*nodeTag);
+    if (theNode == 0) {
+        opserr << "OPS_GetNodeIncrDisp - no node with tag " << *nodeTag << endln;
+        return -1;
+    }
+    int size = *sizeData;
+    const Vector& disp = theNode->getIncrDisp();
+    if (disp.Size() != size) {
+        opserr << "OPS_GetNodeIncrDisp - size mismatch\n";
+        return -1;
+    }
+    for (int i = 0; i < size; i++)
+        data[i] = disp(i);
+    return 0;
+}
+
+extern "C" int OPS_GetNodeIncrDeltaDisp(int* nodeTag, int* sizeData, double* data)
+{
+    if (cmds == 0) return -1;
+    Domain* theDomain = cmds->getDomain();
+    if (theDomain == 0) return -1;
+    Node* theNode = theDomain->getNode(*nodeTag);
+    if (theNode == 0) {
+        opserr << "OPS_GetNodeIncrDeltaDisp - no node with tag " << *nodeTag << endln;
+        return -1;
+    }
+    int size = *sizeData;
+    const Vector& disp = theNode->getIncrDeltaDisp();
+    if (disp.Size() != size) {
+        opserr << "OPS_GetNodeIncrDeltaDisp - size mismatch\n";
+        return -1;
+    }
+    for (int i = 0; i < size; i++)
+        data[i] = disp(i);
+    return 0;
+}
+
+static void OPS_InvokeMaterialObject(struct matObject* theMat, modelState* theModel,
+                                     double* strain, double* tang, double* stress,
+                                     int* isw, int* result)
+{
+    int matType = theMat->theParam[0];
+    if (matType == 1) {
+        UniaxialMaterial* theMaterial = (UniaxialMaterial*)theMat->matObjectPtr;
+        if (theMaterial == 0) {
+            *result = -1;
+            return;
+        }
+        if (*isw == ISW_COMMIT) {
+            *result = theMaterial->commitState();
+            return;
+        } else if (*isw == ISW_REVERT) {
+            *result = theMaterial->revertToLastCommit();
+            return;
+        } else if (*isw == ISW_REVERT_TO_START) {
+            *result = theMaterial->revertToStart();
+            return;
+        } else if (*isw == ISW_FORM_TANG_AND_RESID) {
+            double strainT = strain[0];
+            double stressT, tangT;
+            *result = theMaterial->setTrial(strainT, stressT, tangT);
+            stress[0] = stressT;
+            tang[0] = tangT;
+            return;
+        }
+    }
+    *result = -1;
+}
+
+extern "C"
+matObj* OPS_GetMaterial(int* matTag, int* matType)
+{
+    if (*matType == OPS_UNIAXIAL_MATERIAL_TYPE) {
+        UniaxialMaterial* theUniaxialMaterial = OPS_getUniaxialMaterial(*matTag);
+        if (theUniaxialMaterial != 0) {
+            UniaxialMaterial* theCopy = theUniaxialMaterial->getCopy();
+            matObject* theMatObject = new matObject;
+            theMatObject->tag = *matTag;
+            theMatObject->nParam = 1;
+            theMatObject->nState = 0;
+            theMatObject->theParam = new double[1];
+            theMatObject->theParam[0] = 1;
+            theMatObject->tState = 0;
+            theMatObject->cState = 0;
+            theMatObject->matFunctPtr = OPS_InvokeMaterialObject;
+            theMatObject->matObjectPtr = theCopy;
+            return theMatObject;
+        }
+        return 0;
+    }
+    return 0;
+}
+
+extern "C"
+int OPS_AllocateMaterial(matObject* theMat)
+{
+    if (theMat->nParam > 0)
+        theMat->theParam = new double[theMat->nParam];
+    int nState = theMat->nState;
+    if (nState > 0) {
+        theMat->cState = new double[nState];
+        theMat->tState = new double[nState];
+        for (int i = 0; i < nState; i++) {
+            theMat->cState[i] = 0;
+            theMat->tState[i] = 0;
+        }
+    } else {
+        theMat->cState = 0;
+        theMat->tState = 0;
+    }
+    return 0;
+}
+
+extern "C"
+int OPS_AllocateElement(eleObject* theEle, int* matTags, int* matType)
+{
+    if (theEle->nNode > 0)
+        theEle->node = new int[theEle->nNode];
+    if (theEle->nParam > 0)
+        theEle->param = new double[theEle->nParam];
+    if (theEle->nState > 0) {
+        theEle->cState = new double[theEle->nState];
+        theEle->tState = new double[theEle->nState];
+    }
+    int numMat = theEle->nMat;
+    if (numMat > 0)
+        theEle->mats = new matObject*[numMat];
+    for (int i = 0; i < numMat; i++)
+        theEle->mats[i] = OPS_GetMaterial(&(matTags[i]), matType);
+    return 0;
+}
+
+extern "C" int
+OPS_InvokeMaterialDirectly(matObject** theMat, modelState* model, double* strain,
+                           double* stress, double* tang, int* isw)
+{
+    int error = 0;
+    if (*theMat != 0)
+        (*theMat)->matFunctPtr(*theMat, model, strain, tang, stress, isw, &error);
+    else
+        error = -1;
+    return error;
+}
+
+extern "C" int
+OPS_InvokeMaterialDirectly2(matObject* theMat, modelState* model, double* strain,
+                            double* stress, double* tang, int* isw)
+{
+    int error = 0;
+    if (theMat != 0)
+        theMat->matFunctPtr(theMat, model, strain, tang, stress, isw, &error);
+    else
+        error = -1;
+    return error;
 }
 
 UniaxialMaterial *OPS_GetUniaxialMaterial(int matTag)
