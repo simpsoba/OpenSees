@@ -47,6 +47,7 @@ extern "C" {
 #include <OPS_Globals.h>
 #include <TclModelBuilder.h>
 #include <Matrix.h>
+#include <ID.h>
 #include <iostream>
 #include <set>
 #include <algorithm>
@@ -3135,23 +3136,51 @@ ops_soeNeedsMPIStatusSync(LinearSOE *soe)
           t == LinSOE_TAGS_DistributedCudaBcsrLinSOE);
 }
 
-// Allreduce Domain local status when needsMPIStatusSync (collective SOE).
+// Channel barrier for Domain local status when needsMPIStatusSync (collective SOE).
 // Lives here (not Domain.cpp): OPS_Domain is built without _PARALLEL_INTERPRETERS.
+// Uses OpenSeesMP hub-and-spoke channels (same fabric as MumpsParallelSOE), not
+// MPI_COMM_WORLD Allreduce — avoids cross-mechanism deadlock with getB/solve.
+// Tags distinct from MumpsParallelSOE's hardcoded (0, 0) vector traffic.
+static const int OPS_STATUS_SYNC_DBTAG     = 77;
+static const int OPS_STATUS_SYNC_COMMITTAG = 77;
+
 static int
 ops_mpiStatusSync(Domain *domain, int localOk)
 {
   if (domain == 0 || !domain->needsMPIStatusSync())
     return localOk;
-
-  int np = 1;
-  MPI_Comm_size(MPI_COMM_WORLD, &np);
-  if (np <= 1)
+  if (OPS_np <= 1 || theChannels == 0 || numChannels <= 0)
     return localOk;
 
-  int localFailed = (localOk != 0) ? 1 : 0;
-  int globalFailed = 0;
-  MPI_Allreduce(&localFailed, &globalFailed, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
-  return globalFailed ? -1 : 0;
+  static ID data(1);
+  data(0) = (localOk != 0) ? 1 : 0;
+
+  if (OPS_rank == 0) {
+    int globalFailed = data(0);
+    for (int i = 0; i < numChannels; i++) {
+      ID remote(1);
+      if (theChannels[i]->recvID(OPS_STATUS_SYNC_DBTAG,
+                                 OPS_STATUS_SYNC_COMMITTAG, remote) < 0)
+        return -1;
+      if (remote(0) != 0)
+        globalFailed = 1;
+    }
+    data(0) = globalFailed;
+    for (int i = 0; i < numChannels; i++) {
+      if (theChannels[i]->sendID(OPS_STATUS_SYNC_DBTAG,
+                                 OPS_STATUS_SYNC_COMMITTAG, data) < 0)
+        return -1;
+    }
+  } else {
+    if (theChannels[0]->sendID(OPS_STATUS_SYNC_DBTAG,
+                               OPS_STATUS_SYNC_COMMITTAG, data) < 0)
+      return -1;
+    if (theChannels[0]->recvID(OPS_STATUS_SYNC_DBTAG,
+                               OPS_STATUS_SYNC_COMMITTAG, data) < 0)
+      return -1;
+  }
+
+  return data(0) ? -1 : 0;
 }
 #endif
 
