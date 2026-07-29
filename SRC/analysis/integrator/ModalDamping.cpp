@@ -41,6 +41,8 @@
 #include <cmath>
 #include <cstring>
 #include <string.h>
+#include <WoodburySOE.h>
+#include <classTags.h>
 
 ModalDamping::ModalDamping(IncrementalIntegrator &owner)
     : theIntegrator(&owner),
@@ -93,6 +95,8 @@ ModalDamping::setupModal(const Vector *factors)
   eigenValues = new Vector(eigenvalues);
   dampingForces = new Vector(numDOF);
   eigenVectors = new double[static_cast<size_t>(numDOF) * static_cast<size_t>(numModes)];
+  for (int i = 0; i < numDOF * numModes; ++i)
+    eigenVectors[i] = 0.0;
 
   DOF_GrpIter &theDOFs = theAnalysisModel->getDOFs();
   DOF_Group *dofPtr;
@@ -110,12 +114,21 @@ ModalDamping::setupModal(const Vector *factors)
 
   double *eigenVectors2 = new double[static_cast<size_t>(numDOF) * static_cast<size_t>(numModes)];
 
+  WoodburySOE *wb = nullptr;
+  if (theSOE->getClassTag() == LinSOE_TAGS_WoodburySOE)
+    wb = static_cast<WoodburySOE *>(theSOE);
+
   for (int i = 0; i < numModes; i++) {
     double *eigenVectorI = &eigenVectors[numDOF * i];
     double *mEigenVectorI = &eigenVectors2[numDOF * i];
     Vector v1(eigenVectorI, numDOF);
     Vector v2(mEigenVectorI, numDOF);
     theIntegrator->doMv(v1, v2);
+    // Partitioned OpenSeesMP: merge local M*phi like ArpackSolver::myMv
+    if (wb != nullptr && wb->reduceSumVector(v2) < 0) {
+      delete[] eigenVectors2;
+      return -1;
+    }
   }
 
   delete[] eigenVectors;
@@ -176,6 +189,14 @@ ModalDamping::addToUnbalance(const Vector *factors)
           (*dampingForces)(j) += beta * eij;
       }
     }
+  }
+
+  // OpenSeesMP: when Woodbury holds a gather-on-solve SOE with full modal force
+  // on every rank, only P0 installs it (same rule as Arpack RHS).
+  if (theSOE->getClassTag() == LinSOE_TAGS_WoodburySOE) {
+    WoodburySOE *wb = static_cast<WoodburySOE *>(theSOE);
+    if (wb->getProcessID() > 0)
+      return 0;
   }
 
   return theSOE->setB(*dampingForces);

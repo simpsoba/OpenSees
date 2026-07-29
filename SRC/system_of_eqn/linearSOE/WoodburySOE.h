@@ -26,8 +26,11 @@
 //
 // Description: Wraps a structural LinearSOE for modalDamping -woodbury. The inner
 // SOE holds A_s; low-rank update A = A_s + U C V^T (symmetric Q diag(D) Q^T)
-// is applied in solve and formAp via Woodbury identity. Not intended for use
-// with parallel/distributed linear SOEs.
+// is applied in solve and formAp via Woodbury identity.
+//
+// OpenSeesMP: when the inner SOE gathers RHS contributions across ranks
+// (MumpsParallelSOE, DistributedProfileSPDLinSOE), Z = A_s^{-1} U is built with
+// the Arpack P0-only setB pattern so the dense modal columns are not summed.
 
 #include <LinearSOE.h>
 
@@ -35,6 +38,7 @@ class AnalysisModel;
 class WoodburySolver;
 class Matrix;
 class Vector;
+class Channel;
 
 class WoodburySOE : public LinearSOE
 {
@@ -43,6 +47,12 @@ class WoodburySOE : public LinearSOE
     ~WoodburySOE() override;
 
     LinearSOE &getInnerSOE(void) const { return *innerSOE; }
+
+    // OpenSeesMP: same pattern as ArpackSOE / MumpsParallelSOE
+    int setProcessID(int processTag);
+    int getProcessID(void) const { return processID; }
+    int setChannels(int nChannels, Channel **theChannels);
+    int reduceSumVector(Vector &v);
 
     int applyWoodburyCorrection(void);
 
@@ -61,6 +71,7 @@ class WoodburySOE : public LinearSOE
     int addA(const Matrix &) override;
     int addB(const Vector &, const ID &, double fact = 1.0) override;
     int setB(const Vector &, double fact = 1.0) override;
+    int setB(const Vector &v, bool localOnly) override;
 
     void zeroA(void) override;
     void zeroB(void) override;
@@ -69,6 +80,7 @@ class WoodburySOE : public LinearSOE
 
     const Vector &getX(void) override;
     const Vector &getB(void) override;
+    const Vector &getB(bool localOnly) override;
     const Matrix *getA(void) override;
     double normRHS(void) override;
 
@@ -108,6 +120,9 @@ class WoodburySOE : public LinearSOE
     LinearSOE *innerSOE;
     Vector *vectX;
     WoodburySolver *woodburySolver;
+    int processID; // -1 serial; >=0 OpenSeesMP (P0 owns dense RHS for Z solves)
+    int numChannels;
+    Channel **theChannels;
 
     LowRankKind lowRankKind;
     bool basisIsValid;

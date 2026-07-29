@@ -48,6 +48,7 @@ class EquiSolnAlgo;
 class ConvergenceTest;
 class EigenSOE;
 class WoodburySOE;
+class Channel;
 
 class DirectIntegrationAnalysis: public TransientAnalysis
 {
@@ -88,6 +89,8 @@ class DirectIntegrationAnalysis: public TransientAnalysis
     TransientIntegrator *getIntegrator(void);
     ConvergenceTest     *getConvergenceTest(void); 
     AnalysisModel       *getModel(void) ;
+    WoodburySOE         *getWoodburySOE(void) { return theWoodburyWrap; }
+    int setWoodburyParallel(int processID, int nChannels, Channel **theChannels);
 
   protected:
     

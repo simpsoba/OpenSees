@@ -43,6 +43,9 @@ WoodburySOE::WoodburySOE(LinearSOE &inner)
       innerSOE(&inner),
       vectX(nullptr),
       woodburySolver(nullptr),
+      processID(-1),
+      numChannels(0),
+      theChannels(nullptr),
       lowRankKind(LowRankKind::None),
       basisIsValid(false),
       lowRankNumDOF(0),
@@ -60,6 +63,56 @@ WoodburySOE::WoodburySOE(LinearSOE &inner)
     hookWoodburySolver();
 }
 
+int
+WoodburySOE::setProcessID(int processTag)
+{
+    processID = processTag;
+    return 0;
+}
+
+int
+WoodburySOE::setChannels(int nChannels, Channel **theC)
+{
+    numChannels = nChannels;
+
+    if (theChannels != nullptr)
+        delete[] theChannels;
+
+    theChannels = nullptr;
+    if (numChannels > 0 && theC != nullptr) {
+        theChannels = new Channel *[numChannels];
+        for (int i = 0; i < numChannels; i++)
+            theChannels[i] = theC[i];
+    }
+    return 0;
+}
+
+int
+WoodburySOE::reduceSumVector(Vector &v)
+{
+    // Same hub-and-spoke merge as ArpackSolver::myMv
+    if (processID < 0 || numChannels <= 0 || theChannels == nullptr)
+        return 0;
+
+    const int n = v.Size();
+    if (n <= 0)
+        return 0;
+
+    if (processID != 0) {
+        theChannels[0]->sendVector(0, 0, v);
+        theChannels[0]->recvVector(0, 0, v);
+    } else {
+        Vector other(n);
+        for (int i = 0; i < numChannels; i++) {
+            theChannels[i]->recvVector(0, 0, other);
+            v += other;
+        }
+        for (int i = 0; i < numChannels; i++)
+            theChannels[i]->sendVector(0, 0, v);
+    }
+    return 0;
+}
+
 WoodburySOE::~WoodburySOE()
 {
     unhookWoodburySolver();
@@ -67,6 +120,11 @@ WoodburySOE::~WoodburySOE()
     if (vectX != nullptr) {
         delete vectX;
         vectX = nullptr;
+    }
+    // Channels are owned by MachineBroker / interpreter; only free our pointer array.
+    if (theChannels != nullptr) {
+        delete[] theChannels;
+        theChannels = nullptr;
     }
 }
 
@@ -260,26 +318,34 @@ WoodburySOE::rebuildWoodburyBasis(void)
     lowRankWorkV1 = new Vector(lowRankRank);
     lowRankWorkV2 = new Vector(lowRankRank);
 
-    Vector bSave(innerSOE->getB());
+    // Newton does formUnbalance → formTangent (here) → solve, so the residual RHS
+    // must be preserved across the temporary multi-RHS solves for Z = A_s^{-1} U.
+    Vector bSave(innerSOE->getB(true));
+
+    // OpenSeesMP gather-on-solve: if U is full on every rank, only P0 sets B
+    // (Arpack pattern). processID < 0 means serial / unset.
     for (int col = 0; col < lowRankRank; ++col) {
         Vector ucol(n);
         for (int row = 0; row < n; ++row) {
             ucol(row) = (*lowRankU)(row, col);
         }
-        if (innerSOE->setB(ucol) < 0) {
-            innerSOE->setB(bSave);
+        if (processID > 0) {
+            innerSOE->zeroB();
+        } else if (innerSOE->setB(ucol) < 0) {
+            innerSOE->setB(bSave, true);
             return -2;
         }
         if (innerSOE->solve() < 0) {
-            innerSOE->setB(bSave);
+            innerSOE->setB(bSave, true);
             return -3;
         }
-        Vector &xcol = const_cast<Vector &>(innerSOE->getX());
+        const Vector &xcol = innerSOE->getX();
         for (int row = 0; row < n; ++row) {
             (*lowRankZ)(row, col) = xcol(row);
         }
     }
-    innerSOE->setB(bSave);
+    if (innerSOE->setB(bSave, true) < 0)
+        return -2;
 
     if (lowRankKind == LowRankKind::General) {
         if (lowRankV == nullptr || lowRankCinv == nullptr) {
@@ -485,6 +551,12 @@ WoodburySOE::setB(const Vector &v, double fact)
     return innerSOE->setB(v, fact);
 }
 
+int
+WoodburySOE::setB(const Vector &v, bool localOnly)
+{
+    return innerSOE->setB(v, localOnly);
+}
+
 void
 WoodburySOE::zeroA(void)
 {
@@ -523,6 +595,12 @@ const Vector &
 WoodburySOE::getB(void)
 {
     return innerSOE->getB();
+}
+
+const Vector &
+WoodburySOE::getB(bool localOnly)
+{
+    return innerSOE->getB(localOnly);
 }
 
 const Matrix *

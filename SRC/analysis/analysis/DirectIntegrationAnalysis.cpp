@@ -56,6 +56,7 @@
 #include <Matrix.h>
 #include <ID.h>
 #include <Graph.h>
+#include <classTags.h>
 
 // Constructor
 //    sets theModel and theSysOFEqn to 0 and the Algorithm to the one supplied
@@ -567,6 +568,19 @@ DirectIntegrationAnalysis::setLinearSOE(LinearSOE &theNewSOE)
 
   domainStamp = 0;
 
+  return 0;
+}
+
+int
+DirectIntegrationAnalysis::setWoodburyParallel(int processID, int nChannels,
+                                               Channel **channels)
+{
+  if (theWoodburyWrap == 0)
+    return 0;
+
+  theWoodburyWrap->setProcessID(processID);
+  if (nChannels > 0 && channels != 0)
+    theWoodburyWrap->setChannels(nChannels, channels);
   return 0;
 }
 

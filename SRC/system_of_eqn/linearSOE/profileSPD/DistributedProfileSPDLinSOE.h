@@ -50,11 +50,13 @@ class DistributedProfileSPDLinSOE : public ProfileSPDLinSOE
     // these methods need to be rewritten
     int addA(const Matrix &, const ID &, double fact = 1.0);
     int addB(const Vector &, const ID &, double fact = 1.0);    
-    int setB(const Vector &, double fact = 1.0);            
+    int setB(const Vector &, double fact = 1.0);
+    int setB(const Vector &v, bool localOnly) override;
     void zeroB(void);
     int setSize(Graph &theGraph);
     int solve(void);
     const Vector &getB(void);
+    const Vector &getB(bool localOnly) override;
 
     int sendSelf(int commitTag, Channel &theChannel);
     int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);    
