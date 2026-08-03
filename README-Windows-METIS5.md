@@ -113,6 +113,22 @@ The executable is written to:
 build-mp\Release\OpenSeesMP.exe
 ```
 
+### Build ops-fresco (OpenSees + OpenSeesMP, dynamic tcl86t)
+
+For the OpenFresco-capable `ops-fresco` branch, use:
+
+```bat
+makeOpsFresco_WIN.bat
+```
+
+That script auto-detects `..\metis-5.1.0\install`. If METIS is elsewhere, set
+`METIS5_DIR` in its SETTINGS block. Outputs:
+
+```text
+build\Release\OpenSees.exe
+build-mp\Release\OpenSeesMP.exe
+```
+
 ### Build OpenSees + OpenSeesMP (dual-tree)
 
 For the usual Conan / oneAPI dual-tree layout (`OpenSees.exe` + `OpenSeesMP.exe`
