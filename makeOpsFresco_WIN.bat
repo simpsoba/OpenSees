@@ -227,9 +227,9 @@ if exist "!VS_NINJA_BIN!\ninja.exe" set "PATH=!VS_NINJA_BIN!;!PATH!"
 
 echo.
 echo Checking build tools on PATH...
-call :check_cmd git "Git (https://git-scm.com/)"
-call :check_cmd cmake "CMake -- install VS 2022 C++ workload, or https://cmake.org/"
-call :check_cmd ninja "Ninja -- comes with VS CMake tools, or https://ninja-build.org/"
+call :check_cmd git "Git - https://git-scm.com/"
+call :check_cmd cmake "CMake - install VS 2022 C++ workload, or https://cmake.org/"
+call :check_cmd ninja "Ninja - comes with VS CMake tools, or https://ninja-build.org/"
 call :check_cmd conan "Conan - run: pip install conan - and ensure Scripts is on PATH"
 echo.
 if "!FAILED!"=="1" (
@@ -327,13 +327,13 @@ exit /b 1
 REM ---- helpers ---------------------------------------------------------------
 :check_cmd
 where %~1 >nul 2>&1
-if errorlevel 1 (
-  echo [MISSING] %~1
-  echo          Install: %~2
-  set "FAILED=1"
-) else (
+if not errorlevel 1 (
   echo [OK]      %~1
+  exit /b 0
 )
+echo [MISSING] %~1
+echo          Install: %~2
+set "FAILED=1"
 exit /b 0
 
 :configure_and_build
