@@ -47,6 +47,7 @@ extern "C" {
 #include <OPS_Globals.h>
 #include <TclModelBuilder.h>
 #include <Matrix.h>
+#include <ID.h>
 #include <iostream>
 #include <set>
 #include <algorithm>
@@ -95,6 +96,7 @@ OPS_Stream *opserrPtr = &sserr;
 
 #include <elementAPI.h>
 extern "C" int         OPS_ResetInputNoBuilder(ClientData clientData, Tcl_Interp * interp, int cArg, int mArg, TCL_Char * *argv, Domain * domain);
+extern int OPS_partition();
 
 #include <packages.h>
 
@@ -542,6 +544,10 @@ Domain theDomain;
 
 #endif
 
+#ifdef _PARALLEL_INTERPRETERS
+static int ops_barrierCheck(Domain *domain, int localOk);
+#endif
+
 #include <MachineBroker.h>
 
 MachineBroker *theMachineBroker =0;
@@ -842,6 +848,10 @@ int Tcl_InterpOpenSeesObjCmd(ClientData clientData,  Tcl_Interp *interp, int obj
 int OpenSeesAppInit(Tcl_Interp *interp) {
 
   ops_TheActiveDomain = &theDomain;
+
+#ifdef _PARALLEL_INTERPRETERS
+  theDomain.setBarrierCheckFn(ops_barrierCheck);
+#endif
 
   //
   // redo puts command so we can capture puts into std:cerr
@@ -1576,6 +1586,10 @@ wipeAnalysis(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **arg
   thePFEMAnalysis = 0;
   theTest = 0;
 
+#ifdef _PARALLEL_INTERPRETERS
+  theDomain.setBarrierCheck(false);
+#endif
+
 // AddingSensitivity:BEGIN /////////////////////////////////////////////////
 #ifdef _RELIABILITY
   theSensitivityAlgorithm =0;
@@ -1941,7 +1955,14 @@ partitionModel(int eleTag)
 int 
 opsPartition(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
 {
-#ifdef _PARALLEL_PROCESSING
+#ifdef _PARALLEL_INTERPRETERS
+  // METIS mesh partition (same algorithm as OpenSeesPy OPS_partition).
+  // cArg=1 skips argv[0]=="partition" so -ncuts/-niter/-ufactor/-info parse.
+  OPS_ResetInputNoBuilder(clientData, interp, 1, argc, argv, &theDomain);
+  if (OPS_partition() < 0)
+    return TCL_ERROR;
+  return TCL_OK;
+#elif defined(_PARALLEL_PROCESSING)
   int eleTag;
   if (argc == 2) {
     if (Tcl_GetInt(interp, argv[1], &eleTag) != TCL_OK) {
@@ -3097,6 +3118,72 @@ static ExternalClassFunction *theExternalStaticIntegratorCommands = NULL;
 static ExternalClassFunction *theExternalTransientIntegratorCommands = NULL;
 static ExternalClassFunction *theExternalAlgorithmCommands = NULL;
 
+#ifdef _PARALLEL_INTERPRETERS
+static bool
+ops_soeNeedsBarrierCheck(LinearSOE *soe)
+{
+  if (soe == 0)
+    return false;
+  int t = soe->getClassTag();
+  return (t == LinSOE_TAGS_MumpsParallelSOE ||
+          t == LinSOE_TAGS_MPIDiagonalSOE ||
+          t == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+          t == LinSOE_TAGS_DistributedBandGenLinSOE ||
+          t == LinSOE_TAGS_DistributedBandSPDLinSOE ||
+          t == LinSOE_TAGS_DistributedDiagonalSOE ||
+          t == LinSOE_TAGS_DistributedSparseGenColLinSOE ||
+          t == LinSOE_TAGS_DistributedSparseGenRowLinSOE ||
+          t == LinSOE_TAGS_DistributedCudaBcsrLinSOE);
+}
+
+// Channel barrier for Domain local status when needsBarrierCheck (collective SOE).
+// Lives here (not Domain.cpp): OPS_Domain is built without _PARALLEL_INTERPRETERS.
+// Uses OpenSeesMP hub-and-spoke channels (same fabric as MumpsParallelSOE), not
+// MPI_COMM_WORLD Allreduce — avoids cross-mechanism deadlock with getB/solve.
+// Tags distinct from MumpsParallelSOE's hardcoded (0, 0) vector traffic.
+static const int OPS_BARRIER_CHECK_DBTAG     = 77;
+static const int OPS_BARRIER_CHECK_COMMITTAG = 77;
+
+static int
+ops_barrierCheck(Domain *domain, int localOk)
+{
+  if (domain == 0 || !domain->needsBarrierCheck())
+    return localOk;
+  if (OPS_np <= 1 || theChannels == 0 || numChannels <= 0)
+    return localOk;
+
+  static ID data(1);
+  data(0) = (localOk != 0) ? 1 : 0;
+
+  if (OPS_rank == 0) {
+    int globalFailed = data(0);
+    for (int i = 0; i < numChannels; i++) {
+      ID remote(1);
+      if (theChannels[i]->recvID(OPS_BARRIER_CHECK_DBTAG,
+                                 OPS_BARRIER_CHECK_COMMITTAG, remote) < 0)
+        return -1;
+      if (remote(0) != 0)
+        globalFailed = 1;
+    }
+    data(0) = globalFailed;
+    for (int i = 0; i < numChannels; i++) {
+      if (theChannels[i]->sendID(OPS_BARRIER_CHECK_DBTAG,
+                                 OPS_BARRIER_CHECK_COMMITTAG, data) < 0)
+        return -1;
+    }
+  } else {
+    if (theChannels[0]->sendID(OPS_BARRIER_CHECK_DBTAG,
+                               OPS_BARRIER_CHECK_COMMITTAG, data) < 0)
+      return -1;
+    if (theChannels[0]->recvID(OPS_BARRIER_CHECK_DBTAG,
+                               OPS_BARRIER_CHECK_COMMITTAG, data) < 0)
+      return -1;
+  }
+
+  return data(0) ? -1 : 0;
+}
+#endif
+
 int 
 specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
 {
@@ -3830,6 +3917,10 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
 	theSub->setAnalysisLinearSOE(*theSOE);
       }
     }
+#endif
+
+#ifdef _PARALLEL_INTERPRETERS
+    theDomain.setBarrierCheck(ops_soeNeedsBarrierCheck(theSOE));
 #endif
     
     return TCL_OK;

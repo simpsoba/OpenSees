@@ -111,6 +111,7 @@ UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 #include <MumpsSOE.h>
 #endif
 #include <BackgroundMesh.h>
+#include <classTags.h>
 
 #ifdef _ITPACK
 #include <ItpackLinSOE.h>
@@ -119,6 +120,23 @@ UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 
 #ifdef _PARALLEL_INTERPRETERS
 bool setMPIDSOEFlag = false;
+
+static bool
+ops_soeNeedsBarrierCheck(LinearSOE *soe)
+{
+  if (soe == 0)
+    return false;
+  int t = soe->getClassTag();
+  return (t == LinSOE_TAGS_MumpsParallelSOE ||
+          t == LinSOE_TAGS_MPIDiagonalSOE ||
+          t == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+          t == LinSOE_TAGS_DistributedBandGenLinSOE ||
+          t == LinSOE_TAGS_DistributedBandSPDLinSOE ||
+          t == LinSOE_TAGS_DistributedDiagonalSOE ||
+          t == LinSOE_TAGS_DistributedSparseGenColLinSOE ||
+          t == LinSOE_TAGS_DistributedSparseGenRowLinSOE ||
+          t == LinSOE_TAGS_DistributedCudaBcsrLinSOE);
+}
 
 #include <mpi.h>
 #include <MPI_MachineBroker.h>
@@ -142,6 +160,17 @@ bool setMPIDSOEFlag = false;
 #include <MumpsParallelSOE.h>
 #include <MumpsParallelSolver.h>
 #endif
+#include <ID.h>
+#include <Channel.h>
+
+// Channel barrier for Domain local status when needsBarrierCheck (collective SOE).
+// Lives here (not Domain.cpp): OPS_Domain is built without _PARALLEL_INTERPRETERS.
+// Uses OpenSeesMP hub-and-spoke channels (same fabric as MumpsParallelSOE), not
+// MPI_COMM_WORLD Allreduce — avoids cross-mechanism deadlock with getB/solve.
+// Tags distinct from MumpsParallelSOE's hardcoded (0, 0) vector traffic.
+static const int OPS_BARRIER_CHECK_DBTAG     = 77;
+static const int OPS_BARRIER_CHECK_COMMITTAG = 77;
+
 #elif _PARALLEL_PROCESSING
 #include <mpi.h>
 #include <PartitionedDomain.h>
@@ -160,6 +189,58 @@ bool setMPIDSOEFlag = false;
 
 // active object
 static OpenSeesCommands* cmds = 0;
+
+#ifdef _PARALLEL_INTERPRETERS
+static int
+ops_barrierCheck(Domain *domain, int localOk)
+{
+  if (domain == 0 || !domain->needsBarrierCheck())
+    return localOk;
+  if (cmds == 0)
+    return localOk;
+
+  Channel **channels = cmds->getChannels();
+  int nChannels = cmds->getNumChannels();
+  MachineBroker *broker = cmds->getMachineBroker();
+  if (channels == 0 || nChannels <= 0 || broker == 0)
+    return localOk;
+
+  int rank = broker->getPID();
+  int np = broker->getNP();
+  if (np <= 1)
+    return localOk;
+
+  static ID data(1);
+  data(0) = (localOk != 0) ? 1 : 0;
+
+  if (rank == 0) {
+    int globalFailed = data(0);
+    for (int i = 0; i < nChannels; i++) {
+      ID remote(1);
+      if (channels[i]->recvID(OPS_BARRIER_CHECK_DBTAG,
+                              OPS_BARRIER_CHECK_COMMITTAG, remote) < 0)
+        return -1;
+      if (remote(0) != 0)
+        globalFailed = 1;
+    }
+    data(0) = globalFailed;
+    for (int i = 0; i < nChannels; i++) {
+      if (channels[i]->sendID(OPS_BARRIER_CHECK_DBTAG,
+                              OPS_BARRIER_CHECK_COMMITTAG, data) < 0)
+        return -1;
+    }
+  } else {
+    if (channels[0]->sendID(OPS_BARRIER_CHECK_DBTAG,
+                            OPS_BARRIER_CHECK_COMMITTAG, data) < 0)
+      return -1;
+    if (channels[0]->recvID(OPS_BARRIER_CHECK_DBTAG,
+                            OPS_BARRIER_CHECK_COMMITTAG, data) < 0)
+      return -1;
+  }
+
+  return data(0) ? -1 : 0;
+}
+#endif
 
 OpenSeesCommands::OpenSeesCommands(DL_Interpreter* interp)
     :interpreter(interp), theDomain(0), 
@@ -195,6 +276,9 @@ OpenSeesCommands::OpenSeesCommands(DL_Interpreter* interp)
     cmds = this;
 
     theDomain = new Domain;
+#ifdef _PARALLEL_INTERPRETERS
+    theDomain->setBarrierCheckFn(ops_barrierCheck);
+#endif
 
     reliability = new OpenSeesReliabilityCommands(theDomain);
 }
@@ -259,6 +343,12 @@ OpenSeesCommands::setSOE(LinearSOE* soe)
 
     // set new one
     theSOE = soe;
+
+#ifdef _PARALLEL_INTERPRETERS
+    if (theDomain != 0)
+      theDomain->setBarrierCheck(ops_soeNeedsBarrierCheck(soe));
+#endif
+
     if (soe == 0) return;
 
     // set in analysis object
@@ -1003,6 +1093,11 @@ OpenSeesCommands::wipeAnalysis()
     theVariableTimeStepTransientAnalysis = 0;
     thePFEMAnalysis = 0;
     theTest = 0;
+
+#ifdef _PARALLEL_INTERPRETERS
+    if (theDomain != 0)
+      theDomain->setBarrierCheck(false);
+#endif
 
 }
 

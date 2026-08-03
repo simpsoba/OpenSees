@@ -12,11 +12,16 @@
 
 add_library(METIS)
 
-# Bundled METIS 4 uses #include <metis.h> etc.; without this, the compiler can pick
-# a system METIS 5 metis.h and fail (unknown GraphType, CtrlType, idxtype).
-target_include_directories(METIS BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+# Bundled METIS 4 uses #include <metis.h> / "metis.h"; without this, the compiler
+# can pick a system METIS 5 metis.h and fail (unknown GraphType, CtrlType, idxtype).
+target_include_directories(
+  METIS
+  BEFORE
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
-target_sources(METIS PUBLIC
+target_sources(METIS PRIVATE
   coarsen.c
   fm.c
   initpart.c
@@ -70,4 +75,3 @@ target_sources(METIS PUBLIC
   subdomains.c
   ometis.c
 )
-

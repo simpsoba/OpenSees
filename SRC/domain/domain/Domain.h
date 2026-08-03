@@ -254,6 +254,19 @@ class Domain
     virtual int activateElements(const ID& elementList);
     virtual int deactivateElements(const ID& elementList);
 
+    // OpenSeesMP: when true, barrierCheck() syncs failure across ranks
+    // (set when a collective LinearSOE is installed; see setBarrierCheck).
+    void setBarrierCheck(bool flag);
+    bool needsBarrierCheck(void) const;
+
+    // Optional cross-rank barrier (registered by OpenSeesMP / parallel OpenSeesPy).
+    // Same role as PartitionedDomain::barrierCheck in OpenSeesSP; Domain stays free
+    // of mpi.h so OPS_Domain can be shared with serial builds. Non-virtual so it
+    // does not override PartitionedDomain's SP channel barrierCheck.
+    typedef int (*BarrierCheckFn)(Domain *domain, int localOk);
+    void setBarrierCheckFn(BarrierCheckFn fn);
+    int barrierCheck(int localResult);
+
   protected:    
 
     virtual int buildEleGraph(Graph *theEleGraph);
@@ -313,6 +326,9 @@ class Domain
     bool inclModalMatrix;
 
     int lastChannel;
+
+    bool needsBarrierCheckFlag;
+    BarrierCheckFn barrierCheckFn;
 
     // Integer array: index[i] = tag of component i
     // Should put these in another class eventually -- MHS

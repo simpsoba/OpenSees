@@ -104,7 +104,7 @@ Domain::Domain()
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
  theModalDampingFactors(0), inclModalMatrix(false),
- lastChannel(0),
+ lastChannel(0), needsBarrierCheckFlag(false), barrierCheckFn(0),
  paramIndex(0), paramSize(0), numParameters(0)
 {
   
@@ -162,7 +162,8 @@ Domain::Domain(int numNodes, int numElements, int numSPs, int numMPs, int numEQs
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
  theModalDampingFactors(0), inclModalMatrix(false),
- lastChannel(0), paramIndex(0), paramSize(0), numParameters(0)
+ lastChannel(0), needsBarrierCheckFlag(false), barrierCheckFn(0),
+ paramIndex(0), paramSize(0), numParameters(0)
 {
     // init the arrays for storing the domain components
     theElements = new MapOfTaggedObjects();
@@ -227,7 +228,8 @@ Domain::Domain(TaggedObjectStorage &theNodesStorage,
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
  theModalDampingFactors(0), inclModalMatrix(false),
- lastChannel(0),paramIndex(0), paramSize(0), numParameters(0)
+ lastChannel(0), needsBarrierCheckFlag(false), barrierCheckFn(0),
+ paramIndex(0), paramSize(0), numParameters(0)
 {
     // init the arrays for storing the domain components
     thePCs      = new MapOfTaggedObjects();
@@ -288,7 +290,8 @@ Domain::Domain(TaggedObjectStorage &theStorage)
  theBounds(6), theEigenvalues(0), theEigenvalueSetTime(0), 
  theModalProperties(0),
  theModalDampingFactors(0), inclModalMatrix(false),
- lastChannel(0),paramIndex(0), paramSize(0), numParameters(0)
+ lastChannel(0), needsBarrierCheckFlag(false), barrierCheckFn(0),
+ paramIndex(0), paramSize(0), numParameters(0)
 {
     // init the arrays for storing the domain components
     theStorage.clearAll(); // clear the storage just in case populated
@@ -1105,6 +1108,8 @@ Domain::clearAll(void) {
   currentGeoTag = 0;
   lastGeoSendTag = -1;
   lastChannel = 0;
+
+  needsBarrierCheckFlag = false;
 
   // rest the flag to be as initial
   hasDomainChangedFlag = false;
@@ -2147,7 +2152,7 @@ Domain::record(bool fromAnalysis)
   // update the commitTag
   commitTag++;
 
-  return res;
+  return Domain::barrierCheck(res);
 }
 
 int
@@ -2156,16 +2161,18 @@ Domain::commit(void)
     // 
     // first invoke commit on all nodes and elements in the domain
     //
+    int ok = 0;
+
     Node *nodePtr;
     NodeIter &theNodeIter = this->getNodes();
     while ((nodePtr = theNodeIter()) != 0) {
-      nodePtr->commitState();
+      ok += nodePtr->commitState();
     }
 
     Element *elePtr;
     ElementIter &theElemIter = this->getElements();    
     while ((elePtr = theElemIter()) != 0) {
-      elePtr->commitState();
+      ok += elePtr->commitState();
     }
 
     // set the new committed time in the domain
@@ -2175,11 +2182,12 @@ Domain::commit(void)
     // invoke record on all recorders
     for (int i=0; i<numRecorders; i++)
       if (theRecorders[i] != 0)
-	theRecorders[i]->record(commitTag, currentTime);
+	ok += theRecorders[i]->record(commitTag, currentTime);
 
     // update the commitTag
     commitTag++;
-    return 0;
+
+    return Domain::barrierCheck(ok);
 }
 
 int
@@ -2188,16 +2196,17 @@ Domain::revertToLastCommit(void)
     // 
     // first invoke revertToLastCommit  on all nodes and elements in the domain
     //
+    int ok = 0;
     
     Node *nodePtr;
     NodeIter &theNodeIter = this->getNodes();
     while ((nodePtr = theNodeIter()) != 0)
-	nodePtr->revertToLastCommit();
+	ok += nodePtr->revertToLastCommit();
     
     Element *elePtr;
     ElementIter &theElemIter = this->getElements();    
     while ((elePtr = theElemIter()) != 0) {
-	elePtr->revertToLastCommit();
+	ok += elePtr->revertToLastCommit();
     }
 
     // set the current time and load factor in the domain to last committed
@@ -2207,7 +2216,11 @@ Domain::revertToLastCommit(void)
     // apply load for the last committed time
     this->applyLoad(currentTime);
 
-    return this->update();
+    int u = this->update();
+    if (ok == 0)
+      ok = u;
+
+    return Domain::barrierCheck(ok);
 }
 
 int
@@ -2217,16 +2230,17 @@ Domain::revertToStart(void)
     // first invoke revertToLastCommit  on all nodes and 
     // elements in the domain
     //
+    int ok = 0;
 
     Node *nodePtr;
     NodeIter &theNodeIter = this->getNodes();
     while ((nodePtr = theNodeIter()) != 0) 
-	nodePtr->revertToStart();
+	ok += nodePtr->revertToStart();
 
     Element *elePtr;
     ElementIter &theElements = this->getElements();    
     while ((elePtr = theElements()) != 0) {
-	elePtr->revertToStart();
+	ok += elePtr->revertToStart();
     }
 
     // ADDED BY TERJE //////////////////////////////////
@@ -2243,7 +2257,11 @@ Domain::revertToStart(void)
     // apply load for the last committed time
     this->applyLoad(currentTime);
 
-    return this->update();
+    int u = this->update();
+    if (ok == 0)
+      ok = u;
+
+    return Domain::barrierCheck(ok);
 }
 
 int
@@ -2267,7 +2285,34 @@ Domain::update(void)
   if (ok != 0)
     opserr << "Domain::update - domain failed in update\n";
 
-  return ok;
+  return Domain::barrierCheck(ok);
+}
+
+
+void
+Domain::setBarrierCheck(bool flag)
+{
+  needsBarrierCheckFlag = flag;
+}
+
+void
+Domain::setBarrierCheckFn(BarrierCheckFn fn)
+{
+  barrierCheckFn = fn;
+}
+
+bool
+Domain::needsBarrierCheck(void) const
+{
+  return needsBarrierCheckFlag;
+}
+
+int
+Domain::barrierCheck(int localResult)
+{
+  if (barrierCheckFn != 0)
+    return (*barrierCheckFn)(this, localResult);
+  return localResult;
 }
 
 

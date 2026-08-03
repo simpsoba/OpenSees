@@ -235,7 +235,6 @@ MumpsParallelSolver::solveAfterInitialization(void)
     // Call the MUMPS package to factor & solve the system
     id.job = 5;
     dmumps_c(&id);
-    theMumpsSOE->factored = true;
 
   } else {
 
@@ -246,6 +245,16 @@ MumpsParallelSolver::solveAfterInitialization(void)
 
   int info = id.infog[0];
   int info2   = id.infog[1];
+
+  if (info == 0 && id.job == 5)
+    theMumpsSOE->factored = true;
+
+  // always restore 0-based C++ indexing (including on error)
+  for (int i=0; i<nnz; i++) {
+    rowA[i]--;
+    colA[i]--;
+  }
+
   if (info != 0) {	
     opserr << "WARNING MumpsParallelSolver::solve(void)- ";
     opserr << " Error " << info << " returned in substitution dmumps()\n";
@@ -278,12 +287,6 @@ MumpsParallelSolver::solveAfterInitialization(void)
       opserr << " mumps returned infog[0] and infog[1] error codes: " << info << " and " << info2;
     }
     return info;
-  }
-
-  // decrement row and col A values by 1 to return to C++ indexing
-  for (int i=0; i<nnz; i++) {
-    rowA[i]--;
-    colA[i]--;
   }
 
   return 0;
