@@ -57,7 +57,8 @@ TransformationDOF_Group::TransformationDOF_Group(int tag, Node *node,
 						 MP_Constraint *mp,
 						 TransformationConstraintHandler *theTHandler)  
 :DOF_Group(tag,node),
- theMP(mp),Trans(0),modTangent(0),modUnbalance(0),modID(0),theSPs(0)
+ theMP(mp),retainedNodePtr(0),Trans(0),modTangent(0),modUnbalance(0),modID(0),
+theSPs(0)
 {
     // determine the number of DOF 
     int numNodalDOF = node->getNumberDOF();
@@ -194,7 +195,8 @@ TransformationDOF_Group::TransformationDOF_Group(int tag,
 						 Node *node, 
 						 TransformationConstraintHandler *theTHandler)
 :DOF_Group(tag,node),
- theMP(0),Trans(0),modTangent(0),modUnbalance(0),modID(0),theSPs(0) 
+ theMP(0),retainedNodePtr(0),Trans(0),modTangent(0),modUnbalance(0),modID(0),
+theSPs(0) 
 {
     needRetainedData = -1;
     modNumDOF = node->getNumberDOF();
@@ -502,16 +504,19 @@ TransformationDOF_Group::setNodeDisp(const Vector &u)
 
 
   if (needRetainedData == 0) {
-    int retainedNode = theMP->getNodeRetained();
-    Domain *theDomain = myNode->getDomain();
-    Node *retainedNodePtr = theDomain->getNode(retainedNode);
-    const Vector &responseR = retainedNodePtr->getTrialDisp();
-    const ID &retainedDOF = theMP->getRetainedDOFs();
+    if (retainedNodePtr == 0) {
+      Domain *theDomain = myNode->getDomain();
+      retainedNodePtr = theDomain->getNode(theMP->getNodeRetained());
+    }
+    if (retainedNodePtr != 0) {
+      const Vector &responseR = retainedNodePtr->getTrialDisp();
+      const ID &retainedDOF = theMP->getRetainedDOFs();
 
-    for (int i=numConstrainedNodeRetainedDOF, j=0; i<modNumDOF; i++, j++) {
-      int loc = theID(i);
-      if (loc < 0)
-	(*modUnbalance)(i) = responseR(retainedDOF(j));
+      for (int i=numConstrainedNodeRetainedDOF, j=0; i<modNumDOF; i++, j++) {
+	int loc = theID(i);
+	if (loc < 0)
+	  (*modUnbalance)(i) = responseR(retainedDOF(j));
+      }
     }
   }
 
@@ -938,7 +943,12 @@ TransformationDOF_Group::doneID(void)
   
   int retainedNode = theMP->getNodeRetained();
   Domain *theDomain = myNode->getDomain();
-  Node *retainedNodePtr = theDomain->getNode(retainedNode);
+  retainedNodePtr = theDomain->getNode(retainedNode);
+  if (retainedNodePtr == 0) {
+    opserr << "WARNING TransformationDOF_Group::doneID() - retained node ";
+    opserr << retainedNode << " not in domain\n";
+    return -1;
+  }
   DOF_Group *retainedGroup = retainedNodePtr->getDOF_GroupPtr();
   const ID &otherID = retainedGroup->getID();
   
@@ -1021,6 +1031,12 @@ TransformationDOF_Group::addSP_Constraint(SP_Constraint &theSP)
 	this->setID(dof,-1);
     else {
 	const ID &constrainedDOF = theMP->getConstrainedDOFs();
+	// SP on a DOF that is already eliminated by the MP: nothing to mark in
+	// modID (those columns correspond to retained-node DOFs).  Handled by
+	// normalizeMPConstraints (flip/compose) or by fixing the retained node.
+	if (constrainedDOF.getLocation(dof) >= 0)
+	    return 0;
+
 	int loc = 0;
 	for (int i=0; i<dof; i++) 
 	    if (constrainedDOF.getLocation(i) < 0)
@@ -1062,36 +1078,41 @@ TransformationDOF_Group::enforceSPs(int doMP)
 
   else {
 
-    if (needRetainedData == 0) {
-      
-      if (theMP != 0) {
-	
-	const ID &theID = this->getID();
-	
-	int retainedNode = theMP->getNodeRetained();
+    // needRetainedData == 0 means at least one retained DOF is SP-constrained,
+    // so its value cannot be recovered from the solution vector and must be
+    // read off the retained node.  Only then is this absolute write needed:
+    // setNodeDisp covers every other MP group incrementally.
+    //
+    // All retained slots must be filled, not just the SP-constrained ones.
+    // Zeroing the free retained DOFs corrupted the constrained node's trial
+    // displacement whenever the retained node was only partially fixed
+    // (e.g. equalDOF onto a node with a fix on a subset of its DOFs).
+    if (needRetainedData == 0 && theMP != 0) {
+
+      if (retainedNodePtr == nullptr) {
 	Domain *theDomain = myNode->getDomain();
-	Node *retainedNodePtr = theDomain->getNode(retainedNode);
-	const Vector &responseR = retainedNodePtr->getTrialDisp();
-	const ID &retainedDOF = theMP->getRetainedDOFs();
-	
-	modUnbalance->Zero();    
-	for (int i=numConstrainedNodeRetainedDOF, j=0; i<modNumDOF; i++, j++) {
-	  int loc = theID(i);
-	  if (loc < 0)
-	    (*modUnbalance)(i) = responseR(retainedDOF(j));
-	}
-	
-	Matrix *T = this->getT();
-	if (T != 0) {
-	  
-	  // *unbalance = (*T) * (*modUnbalance);
-	  unbalance->addMatrixVector(0.0, *T, *modUnbalance, 1.0);
-	  
-	  const ID &constrainedDOF = theMP->getConstrainedDOFs();
-	  for (int i=0; i<constrainedDOF.Size(); i++) {
-	    int cDOF = constrainedDOF(i);
-	    myNode->setTrialDisp((*unbalance)(cDOF), cDOF);
-	  }
+	retainedNodePtr = theDomain->getNode(theMP->getNodeRetained());
+      }
+      if (retainedNodePtr == nullptr)
+	return -1;
+
+      const Vector &responseR = retainedNodePtr->getTrialDisp();
+      const ID &retainedDOF = theMP->getRetainedDOFs();
+
+      modUnbalance->Zero();
+      for (int i=numConstrainedNodeRetainedDOF, j=0; i<modNumDOF; i++, j++) {
+	(*modUnbalance)(i) = responseR(retainedDOF(j));
+      }
+
+      Matrix *T = this->getT();
+      if (T != 0) {
+
+	unbalance->addMatrixVector(0.0, *T, *modUnbalance, 1.0);
+
+	const ID &constrainedDOF = theMP->getConstrainedDOFs();
+	for (int i=0; i<constrainedDOF.Size(); i++) {
+	  int cDOF = constrainedDOF(i);
+	  myNode->setTrialDisp((*unbalance)(cDOF), cDOF);
 	}
       }
     }
