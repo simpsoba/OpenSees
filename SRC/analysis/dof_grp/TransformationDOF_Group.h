@@ -124,7 +124,6 @@ class TransformationDOF_Group: public DOF_Group
   private:
     // private variables - a copy for each object of the class            
     MP_Constraint *theMP;
-    Node *retainedNodePtr; // cached at doneID(); avoids per-step Domain::getNode
     Matrix *Trans;
     Matrix *modTangent;
     Vector *modUnbalance;
@@ -133,7 +132,6 @@ class TransformationDOF_Group: public DOF_Group
     int numConstrainedNodeRetainedDOF; 
     int needRetainedData;
     SP_Constraint **theSPs;
-
     
     // static variables - single copy for all objects of the class	    
     static Matrix **modMatrices; // array of pointers to class wide matrices
