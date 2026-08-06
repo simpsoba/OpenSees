@@ -12,6 +12,14 @@
 
 add_library(METIS)
 
+# Sources use #include "metis.h"; metis.h includes local headers with "" so they stay in this tree.
+target_include_directories(
+  METIS
+  BEFORE
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 target_sources(METIS PUBLIC
   coarsen.c
   fm.c

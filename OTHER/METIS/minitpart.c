@@ -13,7 +13,7 @@
  *
  */
 
-#include <metis.h>
+#include "metis.h"
 int SelectQueueOneWay(int ncon, float *npwgts, float *tpwgts, int from, PQueueType queues[MAXNCON][2]);
 /*************************************************************************
 * This function computes the initial bisection of the coarsest graph

@@ -353,6 +353,136 @@ foreach(filepath ${ops_include_files})
 endforeach()
 list(REMOVE_DUPLICATES OPS_INCLUDE_DIRS)
 
+# Makefile.incl does not add OTHER/METIS to FE_INCLUDES; bundled headers belong only to the METIS
+# library target so <metis.h> resolves to system METIS 5 when installed (partition API).
+set(OPS_INCLUDE_DIRS_FILTERED "")
+foreach(_d IN LISTS OPS_INCLUDE_DIRS)
+  if(NOT _d STREQUAL "${PROJECT_SOURCE_DIR}/OTHER/METIS")
+    list(APPEND OPS_INCLUDE_DIRS_FILTERED "${_d}")
+  endif()
+endforeach()
+set(OPS_INCLUDE_DIRS "${OPS_INCLUDE_DIRS_FILTERED}")
+
+# METIS 5 headers are required when MPI is found (parallel OpenSeesPy / partition()).
+# Bundled OTHER/METIS remains METIS 4 for legacy graph partitioning — do not use it for partition().
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(_opensees_default_metis5_root "/usr")
+elseif(WIN32)
+  if(DEFINED ENV{ProgramW6432} AND NOT "$ENV{ProgramW6432}" STREQUAL "")
+    set(_opensees_default_metis5_root "$ENV{ProgramW6432}/METIS")
+  elseif(DEFINED ENV{PROGRAMFILES} AND NOT "$ENV{PROGRAMFILES}" STREQUAL "")
+    set(_opensees_default_metis5_root "$ENV{PROGRAMFILES}/METIS")
+  else()
+    set(_opensees_default_metis5_root "C:/Program Files/METIS")
+  endif()
+else()
+  set(_opensees_default_metis5_root "")
+endif()
+
+set(
+  METIS5_ROOT
+  "${_opensees_default_metis5_root}"
+  CACHE
+    PATH
+    "METIS 5 install prefix (include/metis.h). Default /usr on Linux, %ProgramFiles%/METIS on Windows. Required when MPI is found (parallel OpenSeesPy)."
+)
+set(
+  METIS5_DIR
+  ""
+  CACHE
+    PATH
+    "Same meaning as METIS5_ROOT if you prefer this name; ignored when METIS5_ROOT is non-empty."
+)
+
+set(_opensees_metis5_prefix "")
+if(METIS5_ROOT)
+  set(_opensees_metis5_prefix "${METIS5_ROOT}")
+elseif(METIS5_DIR)
+  set(_opensees_metis5_prefix "${METIS5_DIR}")
+elseif(DEFINED ENV{METIS5_ROOT} AND NOT "$ENV{METIS5_ROOT}" STREQUAL "")
+  set(_opensees_metis5_prefix "$ENV{METIS5_ROOT}")
+elseif(DEFINED ENV{METIS5_DIR} AND NOT "$ENV{METIS5_DIR}" STREQUAL "")
+  set(_opensees_metis5_prefix "$ENV{METIS5_DIR}")
+elseif(DEFINED ENV{METIS5DIR} AND NOT "$ENV{METIS5DIR}" STREQUAL "")
+  set(_opensees_metis5_prefix "$ENV{METIS5DIR}")
+endif()
+
+set(OPENSEES_METIS5_INCLUDE_DIR "OPENSEES_METIS5_INCLUDE_DIR-NOTFOUND")
+if(_opensees_metis5_prefix)
+  if(EXISTS "${_opensees_metis5_prefix}/include/metis.h")
+    set(OPENSEES_METIS5_INCLUDE_DIR "${_opensees_metis5_prefix}/include")
+  elseif(EXISTS "${_opensees_metis5_prefix}/metis.h")
+    set(OPENSEES_METIS5_INCLUDE_DIR "${_opensees_metis5_prefix}")
+  endif()
+endif()
+
+if(OPENSEES_METIS5_INCLUDE_DIR STREQUAL "OPENSEES_METIS5_INCLUDE_DIR-NOTFOUND")
+  set(_opensees_metis_hints "")
+  if(_opensees_metis5_prefix)
+    list(APPEND _opensees_metis_hints "${_opensees_metis5_prefix}/include")
+  endif()
+  if(APPLE)
+    list(APPEND _opensees_metis_hints "/opt/homebrew/include" "/usr/local/include")
+  endif()
+  set(_opensees_metis_search_paths /usr/include /usr/local/include)
+  if(WIN32)
+    list(APPEND _opensees_metis_search_paths
+      "${_opensees_default_metis5_root}/include"
+      "${_opensees_default_metis5_root}"
+    )
+    if(DEFINED ENV{ProgramW6432} AND NOT "$ENV{ProgramW6432}" STREQUAL "")
+      list(APPEND _opensees_metis_search_paths
+        "$ENV{ProgramW6432}/METIS/include"
+        "$ENV{ProgramW6432}/METIS"
+      )
+    endif()
+    if(DEFINED ENV{PROGRAMFILES} AND NOT "$ENV{PROGRAMFILES}" STREQUAL "")
+      list(APPEND _opensees_metis_search_paths
+        "$ENV{PROGRAMFILES}/METIS/include"
+        "$ENV{PROGRAMFILES}/METIS"
+      )
+    endif()
+    if(DEFINED ENV{LOCALAPPDATA} AND NOT "$ENV{LOCALAPPDATA}" STREQUAL "")
+      list(APPEND _opensees_metis_search_paths
+        "$ENV{LOCALAPPDATA}/METIS/include"
+        "$ENV{LOCALAPPDATA}/METIS"
+      )
+    endif()
+  endif()
+  if(DEFINED ENV{METIS_ROOT} AND NOT "$ENV{METIS_ROOT}" STREQUAL "")
+    list(APPEND _opensees_metis_search_paths "$ENV{METIS_ROOT}/include" "$ENV{METIS_ROOT}")
+  endif()
+  find_path(
+    OPENSEES_METIS5_INCLUDE_DIR
+    NAMES metis.h
+    HINTS ${_opensees_metis_hints}
+    PATHS ${_opensees_metis_search_paths}
+    PATH_SUFFIXES "" include
+    DOC "Directory containing METIS 5 metis.h (partition / parallel OpenSeesPy only)"
+  )
+endif()
+
+set(OPENSEES_HAVE_METIS5_HEADER FALSE)
+if(
+  OPENSEES_METIS5_INCLUDE_DIR
+  AND NOT OPENSEES_METIS5_INCLUDE_DIR STREQUAL "OPENSEES_METIS5_INCLUDE_DIR-NOTFOUND"
+  AND EXISTS "${OPENSEES_METIS5_INCLUDE_DIR}/metis.h"
+)
+  file(READ "${OPENSEES_METIS5_INCLUDE_DIR}/metis.h" _opensees_metis_hdr LIMIT 12000)
+  if(
+    _opensees_metis_hdr MATCHES "METIS_VER_MAJOR"
+    OR _opensees_metis_hdr MATCHES "METIS_SetDefaultOptions"
+    OR _opensees_metis_hdr MATCHES "METIS_PartMeshNodal"
+  )
+    set(OPENSEES_HAVE_METIS5_HEADER TRUE)
+  endif()
+endif()
+
+message(
+  STATUS
+  "METIS 5 (partition / parallel Py only): OPENSEES_METIS5_INCLUDE_DIR=${OPENSEES_METIS5_INCLUDE_DIR}, HAVE_METIS5_HEADER=${OPENSEES_HAVE_METIS5_HEADER}"
+)
+
 include_directories(${OPS_INCLUDE_DIRS})
 # end TODO
 
@@ -402,6 +532,22 @@ endif()
 find_package(MPI)
 find_package(MKL)
 
+# When MPI is available, OpenSeesPy embeds _PARALLEL_INTERPRETERS (OpenSeesLIB_Py + OPS_INTERPRETER_PI).
+# No separate option or OpenSeesPyMP target — serial OpenSeesPy only when MPI is not found.
+if(MPI_FOUND AND NOT OPENSEES_HAVE_METIS5_HEADER)
+  message(
+    FATAL_ERROR
+    "MPI builds require METIS 5 headers (parallel OpenSeesPy / partition use METIS 5 APIs). "
+    "Install METIS development files (e.g. libmetis-dev), or pass an explicit prefix: "
+    "-DMETIS5_ROOT=/usr or -DMETIS5_DIR=/usr (path must contain include/metis.h), or set env "
+    "METIS5_ROOT / METIS5_DIR. Bundled OTHER/METIS is METIS 4 and is not used for partition()."
+  )
+endif()
+message(
+  STATUS
+  "OpenSeesPy parallel interpreters (MPI interpreter core): ${MPI_FOUND}"
+)
+
 #set (LAPACK_FOUND FALSE)
 #set (BLAS_FOUND FALSE)
 
@@ -414,6 +560,9 @@ else()
   add_subdirectory("${PROJECT_SOURCE_DIR}/OTHER/LAPACK")
   set(LAPACK_LIBRARIES LAPACK)
 endif()
+
+find_package(BLAS)
+message(STATUS "BLAS_LIBRARIES=${BLAS_LIBRARIES}")
 
 if(PYTHON_FOUND)
   message("Python_FOUND:${Python_FOUND}")
@@ -457,6 +606,48 @@ if(MPI_FOUND)
 
   add_subdirectory("${PROJECT_SOURCE_DIR}/OTHER/SuperLU_DIST_4.3/SRC")
   add_subdirectory("${PROJECT_SOURCE_DIR}/OTHER/METIS")
+
+  # Bundled METIS target is METIS 4. partition() / system <metis.h> use METIS 5 (METIS_SetDefaultOptions, ...).
+  # Link libmetis when METIS 5 headers were detected; otherwise keep bundled METIS for MPI builds.
+  set(OPENSEES_METIS_LINK_LIB "METIS")
+  if(OPENSEES_HAVE_METIS5_HEADER)
+    set(_metis5_lib_hints "")
+    if(_opensees_metis5_prefix)
+      list(
+        APPEND
+        _metis5_lib_hints
+        "${_opensees_metis5_prefix}/lib"
+        "${_opensees_metis5_prefix}/lib64"
+      )
+    endif()
+    get_filename_component(_metis5_root "${OPENSEES_METIS5_INCLUDE_DIR}" DIRECTORY)
+    list(
+      APPEND
+      _metis5_lib_hints
+      "${_metis5_root}/lib"
+      "${_metis5_root}/lib64"
+    )
+    find_library(
+      OPENSEES_METIS5_LIBRARY
+      NAMES metis
+      HINTS ${_metis5_lib_hints}
+      PATHS
+        /usr/lib/x86_64-linux-gnu
+        /usr/lib/aarch64-linux-gnu
+        /usr/lib64
+        /usr/lib
+      DOC "METIS 5 (libmetis) for partition() and MetisWrapper with system metis.h"
+    )
+    if(NOT OPENSEES_METIS5_LIBRARY)
+      message(
+        FATAL_ERROR
+        "METIS 5 headers were found at ${OPENSEES_METIS5_INCLUDE_DIR} but libmetis was not found. "
+        "Install the METIS library (e.g. apt install libmetis-dev) or set METIS5_ROOT to the install prefix."
+      )
+    endif()
+    set(OPENSEES_METIS_LINK_LIB "${OPENSEES_METIS5_LIBRARY}")
+    message(STATUS "MPI executables / OpenSeesPy: linking METIS 5 at ${OPENSEES_METIS5_LIBRARY}")
+  endif()
 else()
   message(STATUS "MPI was NOT found.")
 endif()
@@ -755,7 +946,7 @@ if(MPI_FOUND)
        OPS_Reliability
        OPS_ReliabilityTcl
        OPS_Recorder
-       METIS
+       ${OPENSEES_METIS_LINK_LIB}
        SUPERLU_DIST
        OPS_Numerics
        ${MUMPS_LIBRARIES}
@@ -820,7 +1011,7 @@ if(MPI_FOUND)
        OPS_Reliability
        OPS_ReliabilityTcl
        OPS_Recorder
-       METIS
+       ${OPENSEES_METIS_LINK_LIB}
        SUPERLU_DIST
        OPS_Numerics
        ${MUMPS_LIBRARIES}
@@ -851,46 +1042,20 @@ set_target_properties(OpenSeesPy PROPERTIES PREFIX "")
 
 target_include_directories(OpenSeesPy PUBLIC ${Python_INCLUDE_DIRS})
 
-target_link_libraries(OpenSeesPy
-   OpenSeesLIB
-   OPS_SysOfEqnPython   
-   OPS_Reliability
-   OPS_Recorder
-   OPS_Numerics
-   HDF5::HDF5	
-   ZLIB::ZLIB	
-   Eigen3::Eigen	
-   ${Python_LIBRARIES}
-)
-
 
 #
 # INSTALL
 #
 
 install (TARGETS OpenSees DESTINATION bin)
-
-#if (TCL_INIT_FILE)
-#   install(FILES "${TCL_INIT_FILE}"
-#       DESTINATION lib/tcl8.6 
-#   )
-#endif()
-
-install (TARGETS OpenSees DESTINATION bin)
 if (TCL_INIT_FILE)
    install(FILES "${TCL_INIT_FILE}"
-       DESTINATION library 
+       DESTINATION lib/tcl8.6 
    )
 endif()
-
-install(PROGRAMS $<TARGET_FILE:OpenSeesPy>
-        DESTINATION bin
+install(PROGRAMS $<TARGET_FILE:OpenSeesPy> 
+        DESTINATION bin 
         RENAME opensees.so)
-
-if (MPI_FOUND)
-    install(TARGETS OpenSeesSP DESTINATION bin OPTIONAL)
-    install(TARGETS OpenSeesMP DESTINATION bin OPTIONAL)
-endif()
 
 
 # Set selected executable to be built by default
@@ -898,6 +1063,181 @@ set_target_properties(${OPS_FINAL_TARGET} PROPERTIES EXCLUDE_FROM_ALL OFF)
 
 # Add sources to targets
 add_subdirectory(${OPS_SRC_DIR})
+
+#
+# OpenSeesPy link graph (after SRC populates OPS_INTERPRETER[_PI] and object libs)
+# MPI_FOUND → parallel interpreters in the single OpenSeesPy target; else serial OpenSeesLIB.
+#
+if(MPI_FOUND)
+  add_library(OpenSeesLIB_Py EXCLUDE_FROM_ALL)
+  target_compile_definitions(OpenSeesLIB_Py PUBLIC _UMFPACK_DLONG)
+  target_link_libraries(
+    OpenSeesLIB_Py
+    ${OPS_Extension_List}
+    OPS_Actor
+    OPS_Analysis
+    OPS_ConvergenceTest
+    OPS_Damage
+    OPS_Database
+    OPS_Domain
+    graph
+    OPS_Element
+    OPS_ElementFortran
+    OPS_Handler
+    OPS_INTERPRETER_PI
+    OPS_Material
+    OPS_MaterialFortran
+    OPS_Material_YieldSurface
+    OPS_Matrix
+    OPS_ModelBuilder
+    OPS_ObjectBroker
+    OPS_PFEM
+    OPS_Recorder
+    coordTransformation
+    damping
+    OPS_Renderer
+    OPS_Section_Repres
+    OPS_Section_YieldSurface
+    OPS_SysOfEqn
+    OPS_Thermal
+    OPS_OS_Specific_libs
+    OPS_Tagged
+    OPS_Utilities
+  )
+
+  if(NOT DEFINED MUMPS_DIR)
+    add_dependencies(OpenSeesPy mumps)
+  endif()
+
+  target_include_directories(
+    OpenSeesPy
+    PRIVATE
+    ${MUMPS_DIR}/_deps/mumps-src/include
+    ${MPI_CXX_INCLUDE_DIRS}
+  )
+  target_compile_options(OpenSeesPy PRIVATE ${MPI_CXX_COMPILE_FLAGS})
+
+  if(DEFINED OPENMPI)
+    target_compile_definitions(
+      OpenSeesPy
+      PRIVATE
+      _PARALLEL_INTERPRETERS
+      ${MUMPS_FLAG}
+      _OPENMPI
+    )
+  else()
+    target_compile_definitions(
+      OpenSeesPy
+      PRIVATE
+      _PARALLEL_INTERPRETERS
+      ${MUMPS_FLAG}
+    )
+  endif()
+
+  target_link_libraries(
+    OpenSeesPy
+    PRIVATE
+    OpenSeesLIB_Py
+    OPS_SysOfEqnPython
+    OPS_Reliability
+    OPS_Recorder
+    OPS_Numerics
+    HDF5::HDF5
+    ZLIB::ZLIB
+    Eigen3::Eigen
+    ${OPENSEES_METIS_LINK_LIB}
+    SUPERLU_DIST
+    ${MUMPS_LIBRARIES}
+    ${MPI_CXX_LIBRARIES}
+    ${SCALAPACK_LIBRARIES}
+    ${MPI_Fortran_LIBRARIES}
+    ${MPI_CXX_LINK_FLAGS}
+    ${Python_LIBRARIES}
+  )
+
+  # Same MPI-only .cpp objects OpenSeesMP links (not in OpenSeesLIB); see SRC/interpreter/Makefile
+  # INTERPRETER_LIBS_MPI_PARAMETERS and add_executable(OpenSeesMP). Skip Tcl and duplicate Domain/broker.
+  target_sources(
+    OpenSeesPy
+    PRIVATE
+    "${PROJECT_SOURCE_DIR}/OTHER/BLAS/saxpy_shim.c"
+    ${OPS_SRC_DIR}/actor/channel/MPI_Channel.cpp
+    ${OPS_SRC_DIR}/actor/machineBroker/MPI_MachineBroker.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/diagonal/MPIDiagonalSOE.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/diagonal/MPIDiagonalSolver.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/mumps/MumpsSOE.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/mumps/MumpsSolver.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/mumps/MumpsParallelSOE.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/mumps/MumpsParallelSolver.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseGEN/DistributedSuperLU.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseGEN/DistributedSparseGenColLinSOE.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseGEN/DistributedSparseGenRowLinSOE.cpp
+  )
+else()
+  target_link_libraries(
+    OpenSeesPy
+    PRIVATE
+    OpenSeesLIB
+    OPS_SysOfEqnPython
+    OPS_Reliability
+    OPS_Recorder
+    OPS_Numerics
+    HDF5::HDF5
+    ZLIB::ZLIB
+    Eigen3::Eigen
+    ${Python_LIBRARIES}
+  )
+endif()
+
+# Shared opensees.so: bundled OTHER/BLAS has no single-precision saxpy; MPI/Dist/SuperLU may need it.
+# Link BLAS explicitly so symbols resolve at dlopen (Linux --as-needed can drop INTERFACE-only BLAS).
+if(TARGET OpenSeesPy)
+  if(TARGET BLAS::BLAS)
+    target_link_libraries(OpenSeesPy PRIVATE BLAS::BLAS)
+  elseif(BLAS_LIBRARIES)
+    target_link_libraries(OpenSeesPy PRIVATE ${BLAS_LIBRARIES})
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_library(
+      OPENSEES_BLAS_LIBRARY
+      NAMES blas openblas
+      PATHS
+        /usr/lib/x86_64-linux-gnu
+        /usr/lib/aarch64-linux-gnu
+        /usr/lib64
+        /usr/lib
+      DOC "System BLAS for OpenSeesPy"
+    )
+    if(OPENSEES_BLAS_LIBRARY)
+      target_link_libraries(OpenSeesPy PRIVATE ${OPENSEES_BLAS_LIBRARY})
+      message(STATUS "OpenSeesPy: linking system BLAS: ${OPENSEES_BLAS_LIBRARY}")
+    endif()
+  endif()
+  if(LAPACK_LINKER_FLAGS)
+    target_link_options(OpenSeesPy PRIVATE ${LAPACK_LINKER_FLAGS})
+  endif()
+
+  # Intel MKL often does not export legacy GNU Fortran BLAS names (e.g. __saxpy) that SuperLU_DIST
+  # expects; add reference BLAS/OpenBLAS alongside MKL so dlopen finds them (may coexist as DT_NEEDED).
+  if(MKL_FOUND OR (DEFINED BLAS_LIBRARIES AND "${BLAS_LIBRARIES}" MATCHES "[Mm][Kk][Ll]"))
+    find_library(
+      OPENSEES_NETLIB_BLAS
+      NAMES blas openblas
+      PATHS
+        "$ENV{CONDA_PREFIX}/lib"
+        /usr/lib/x86_64-linux-gnu
+        /usr/lib/aarch64-linux-gnu
+        /usr/lib64
+        /usr/lib
+    )
+    if(OPENSEES_NETLIB_BLAS)
+      target_link_libraries(OpenSeesPy PRIVATE ${OPENSEES_NETLIB_BLAS})
+      message(
+        STATUS
+        "OpenSeesPy: linking reference BLAS next to MKL (Fortran BLAS symbols): ${OPENSEES_NETLIB_BLAS}"
+      )
+    endif()
+  endif()
+endif()
 
 
 
