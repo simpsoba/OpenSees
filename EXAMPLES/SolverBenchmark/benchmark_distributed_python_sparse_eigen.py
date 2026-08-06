@@ -1,21 +1,14 @@
 #!/usr/bin/env python3
 """
-Benchmark DistributedPythonSparse vs serial PythonSparse on the Scott cantilever
-brick (same geometry as benchmark_python_sparse.py).
+Eigen benchmark for DistributedPythonSparse vs serial PythonSparse.
 
-Uses inline SciPy CSR solvers (no CuPy / openseespy-solvers required).
+Same Scott cantilever brick as benchmark_python_sparse_eigen.py; SciPy CSR
+generalized eigen on rank 0 only when distributed.
 
-Usage (MPI OpenSeesPy on PYTHONPATH / build-mp/Release):
-
-  # Serial baseline (np=1) — PythonSparse + RCM
-  python3 EXAMPLES/SolverBenchmark/benchmark_distributed_python_sparse.py out.csv
-
-  # Partitioned gather-to-root — DistributedPythonSparse + ParallelPlain
-  mpirun -np 2 python3 EXAMPLES/SolverBenchmark/benchmark_distributed_python_sparse.py out.csv
-  mpirun -np 4 python3 ... out.csv --mesh-factors 2,4,6
-
-Note: solve is gather-to-root on rank 0. Expect enablement / overhead vs serial
-PythonSparse, not strong scaling of the factorization.
+Usage:
+  python3 EXAMPLES/SolverBenchmark/benchmark_distributed_python_sparse_eigen.py out.csv
+  mpirun -np 2 python3 EXAMPLES/SolverBenchmark/benchmark_distributed_python_sparse_eigen.py out.csv
+  mpirun -np 4 python3 ... out.csv --mesh-factors 2,4 --modes 5
 """
 
 from __future__ import annotations
@@ -29,10 +22,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dps_common import (
-    apply_far_face_load,
     build_solid_bar,
-    cantilever_load,
-    far_corner_disp,
+    eigen_cfg,
     import_opensees,
     mesh_counts,
     system_cfg,
@@ -47,42 +38,35 @@ CSV_HEADER = (
     "mesh_c",
     "num_elements",
     "num_nodes",
+    "num_modes",
     "status",
     "time_seconds",
-    "displacement_x",
-    "displacement_y",
-    "displacement_z",
+    "eigenvalue_1",
+    "eigenvalue_5",
 )
 
-DEFAULT_FACTORS = [2.0, 4.0, 6.0, 8.0]
+DEFAULT_FACTORS = [2.0, 4.0, 6.0]
 
 
-def run_one(mesh_factor: float, distributed: bool, pid: int, num_steps: int = 5):
+def run_one(mesh_factor: float, distributed: bool, pid: int, num_modes: int):
     mesh_size, (nx, ny, nz) = mesh_counts(mesh_factor)
     build_solid_bar(ops, nx, ny, nz)
-    n_far = sum(
-        1
-        for n in ops.getNodeTags()
-        if abs(ops.nodeCoord(n, 1) - 10.0) < 1e-9
-    )
     if distributed and ops.getNP() > 1:
         ops.partition()
-    apply_far_face_load(ops, cantilever_load(), n_far_global=n_far)
 
     name, cfg, numberer = system_cfg(ops, distributed, pid)
     ops.constraints("Plain")
     ops.numberer(numberer)
     ops.system(name, cfg)
-    ops.integrator("LoadControl", 1.0 / num_steps)
-    ops.test("NormUnbalance", 1.0e-8, 25, 0)
-    ops.algorithm("ModifiedNewton", "-FactorOnce")
     ops.analysis("Static")
 
     t0 = time.perf_counter()
-    status = ops.analyze(num_steps)
+    if distributed:
+        lam = ops.eigen("DistributedPythonSparse", num_modes, eigen_cfg(True, pid))
+    else:
+        lam = ops.eigen("PythonSparse", num_modes, eigen_cfg(False, pid))
     seconds = time.perf_counter() - t0
-
-    tip = far_corner_disp(ops) if status == 0 else None
+    status = 0 if lam is not None and len(lam) >= 1 else -1
     return {
         "mesh_size": mesh_size,
         "nx": nx,
@@ -92,18 +76,15 @@ def run_one(mesh_factor: float, distributed: bool, pid: int, num_steps: int = 5)
         "nnodes": len(ops.getNodeTags()),
         "status": status,
         "seconds": seconds,
-        "tip": tip,
+        "lam": lam,
     }
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("csv", type=Path, help="output CSV path")
-    ap.add_argument(
-        "--mesh-factors",
-        default=",".join(str(f) for f in DEFAULT_FACTORS),
-        help="comma-separated mesh refinement factors",
-    )
+    ap.add_argument("csv", type=Path)
+    ap.add_argument("--mesh-factors", default=",".join(str(f) for f in DEFAULT_FACTORS))
+    ap.add_argument("--modes", type=int, default=5)
     args = ap.parse_args()
 
     pid = ops.getPID()
@@ -119,26 +100,21 @@ def main():
 
     if pid == 0:
         args.csv.parent.mkdir(parents=True, exist_ok=True)
-        print(f"=== {solver_name} brick benchmark ===")
-        print(f"mesh factors: {factors}")
-        print(f"CSV: {args.csv}\n")
+        print(f"=== {solver_name} eigen benchmark ===")
+        print(f"modes={args.modes} factors={factors}\n")
 
     rows = []
     for factor in factors:
-        result = run_one(factor, distributed, pid)
-        if result["tip"] is not None:
-            print(
-                f"[pid={pid}] factor={factor} tip={result['tip']}",
-                flush=True,
-            )
+        result = run_one(factor, distributed, pid, args.modes)
         if pid == 0:
             status_str = "✓" if result["status"] == 0 else "✗"
+            lam0 = result["lam"][0] if result["lam"] else None
             print(
-                f"  factor={factor:.1f} mesh=({result['nx']},{result['ny']},{result['nz']}) "
-                f"ele={result['nele']} {status_str} {result['seconds']:.4f}s",
+                f"  factor={factor:.1f} {status_str} {result['seconds']:.4f}s "
+                f"lam0={lam0}",
                 flush=True,
             )
-            tip = result["tip"] or (None, None, None)
+            lam = result["lam"] or []
             rows.append([
                 solver_name,
                 np_,
@@ -146,14 +122,13 @@ def main():
                 result["mesh_size"],
                 result["nele"],
                 result["nnodes"],
+                args.modes,
                 result["status"],
                 f"{result['seconds']:.6f}",
-                tip[0],
-                tip[1],
-                tip[2],
+                lam[0] if len(lam) > 0 else "",
+                lam[4] if len(lam) > 4 else "",
             ])
         if result["status"] != 0 and pid == 0:
-            print("FAIL: analyze returned non-zero", file=sys.stderr)
             raise SystemExit(2)
 
     if pid == 0:
