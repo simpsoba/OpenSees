@@ -12,7 +12,8 @@ target_sources(OPS_Domain
     RigidRod.cpp 
     SP_Constraint.cpp 
     Pressure_Constraint.cpp
-    EQ_Constraint.cpp 
+    EQ_Constraint.cpp
+    MPConstraintRewriter.cpp
   PUBLIC
     MP_Constraint.h 
     RigidBeam.h 
@@ -20,7 +21,8 @@ target_sources(OPS_Domain
     RigidRod.h 
     SP_Constraint.h 
     Pressure_Constraint.h
-    EQ_Constraint.h 
+    EQ_Constraint.h
+    MPConstraintRewriter.h
 )
 target_sources(OPS_Domain
   PRIVATE

@@ -507,6 +507,15 @@ static int Tcl_ops_equalDOF(ClientData clientData, Tcl_Interp *interp, int argc,
     return TCL_OK;
 }
 
+static int Tcl_ops_rewriteMPConstraints(ClientData clientData, Tcl_Interp *interp, int argc,   TCL_Char **argv) {
+    wrapper->resetCommandLine(argc, 1, argv);
+
+    const int rc = OPS_rewriteMPConstraints();
+    if (rc < 0) return TCL_ERROR;
+
+    return TCL_OK;
+}
+
 static int Tcl_ops_equationConstraint(ClientData clientData, Tcl_Interp *interp, int argc,   TCL_Char **argv) {
     wrapper->resetCommandLine(argc, 1, argv);
 
@@ -1786,6 +1795,7 @@ TclWrapper::addOpenSeesCommands(Tcl_Interp* interp)
     addCommand(interp,"remove", &Tcl_ops_remove);
     addCommand(interp,"mass", &Tcl_ops_mass);
     addCommand(interp,"equalDOF", &Tcl_ops_equalDOF);
+    addCommand(interp,"rewriteMPConstraints", &Tcl_ops_rewriteMPConstraints);
     addCommand(interp,"equationConstraint", &Tcl_ops_equationConstraint);
     addCommand(interp,"nodeEigenvector", &Tcl_ops_nodeEigenvector);
     addCommand(interp,"getTime", &Tcl_ops_getTime);
