@@ -52,6 +52,8 @@
 #include <SP_ConstraintIter.h>
 #include <MP_Constraint.h>
 
+#include <MPConstraintRewriter.h>
+
 #include <RigidRod.h>
 #include <RigidBeam.h>
 #include <RigidDiaphragm.h>
@@ -245,6 +247,10 @@ TclCommand_addEqualDOF_MP (ClientData clientData, Tcl_Interp *interp,
 int
 TclCommand_addEqualDOF_MP_Mixed (ClientData clientData, Tcl_Interp *interp,
 			   int argc, TCL_Char **argv);
+
+int
+TclCommand_rewriteMPConstraints(ClientData clientData, Tcl_Interp *interp,
+				  int argc, TCL_Char **argv);
 
 int 
 TclCommand_RigidLink(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv);
@@ -567,6 +573,10 @@ TclModelBuilder::TclModelBuilder(Domain &theDomain, Tcl_Interp *interp, int NDM,
 		    (ClientData)NULL, NULL);
 
   Tcl_CreateCommand(interp, "equalDOF_Mixed", TclCommand_addEqualDOF_MP_Mixed,
+		    (ClientData)NULL, NULL);
+
+  Tcl_CreateCommand(interp, "rewriteMPConstraints",
+		    TclCommand_rewriteMPConstraints,
 		    (ClientData)NULL, NULL);
 
   Tcl_CreateCommand(interp, "rigidLink", &TclCommand_RigidLink, 
@@ -3906,6 +3916,49 @@ TclCommand_addImposedMotionSP(ClientData clientData,
 }
 
 
+
+int
+TclCommand_rewriteMPConstraints(ClientData clientData, Tcl_Interp *interp,
+				  int argc, TCL_Char **argv)
+{
+  (void)clientData;
+  if (theTclBuilder == 0 || theTclDomain == 0) {
+    opserr << "WARNING builder has been destroyed - rewriteMPConstraints\n";
+    return TCL_ERROR;
+  }
+
+  RewriteMPOptions opts;
+  for (int i = 1; i < argc; ++i) {
+    if (strcmp(argv[i], "-verbose") == 0 || strcmp(argv[i], "-Verbose") == 0) {
+      opts.verbose = true;
+    } else if (strcmp(argv[i], "-checkOnly") == 0 || strcmp(argv[i], "-CheckOnly") == 0 ||
+	       strcmp(argv[i], "-check") == 0 || strcmp(argv[i], "-Check") == 0) {
+      // -check kept as a synonym for -checkOnly
+      opts.checkOnly = true;
+    } else if (strcmp(argv[i], "-file") == 0 || strcmp(argv[i], "-File") == 0) {
+      if (i + 1 >= argc) {
+	opserr << "WARNING rewriteMPConstraints -file requires a file name\n";
+	return TCL_ERROR;
+      }
+      opts.fileName = argv[++i];
+    } else {
+      opserr << "WARNING rewriteMPConstraints unknown option '" << argv[i]
+	     << "' — expected -checkOnly, -verbose, or -file name\n";
+      return TCL_ERROR;
+    }
+  }
+
+  // Use theTclDomain directly: OPS_GetDomain() is only set while some
+  // OPS_ResetInput* call is in progress and can be null after pattern/load.
+  const int rc = rewriteMPConstraints(*theTclDomain, opts);
+  char buffer[64];
+  sprintf(buffer, "%d", rc);
+  Tcl_SetResult(interp, buffer, TCL_VOLATILE);
+
+  if (rc < 0)
+    return TCL_ERROR;
+  return TCL_OK;
+}
 
 int
 TclCommand_addEqualDOF_MP (ClientData clientData, Tcl_Interp *interp,

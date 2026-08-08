@@ -480,6 +480,7 @@ int OPS_Node();
 int OPS_HomogeneousBC();
 int OPS_EqualDOF();
 int OPS_EqualDOF_Mixed();
+int OPS_rewriteMPConstraints();
 int OPS_EquationConstraint();
 int OPS_HomogeneousBC_X();
 int OPS_HomogeneousBC_Y();

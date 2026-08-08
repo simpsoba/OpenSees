@@ -880,6 +880,18 @@ static PyObject *Py_ops_equalDOF(PyObject *self, PyObject *args)
     return wrapper->getResults();
 }
 
+static PyObject *Py_ops_rewriteMPConstraints(PyObject *self, PyObject *args)
+{
+    wrapper->resetCommandLine(PyTuple_Size(args), 1, args);
+
+    if (OPS_rewriteMPConstraints() < 0) {
+	opserr<<(void*)0;
+	return NULL;
+    }
+
+    return wrapper->getResults();
+}
+
 static PyObject *Py_ops_equationConstraint(PyObject *self, PyObject *args)
 {
     wrapper->resetCommandLine(PyTuple_Size(args), 1, args);
@@ -3132,6 +3144,7 @@ PythonWrapper::addOpenSeesCommands()
     addCommand("remove", &Py_ops_remove);
     addCommand("mass", &Py_ops_mass);
     addCommand("equalDOF", &Py_ops_equalDOF);
+    addCommand("rewriteMPConstraints", &Py_ops_rewriteMPConstraints);
     addCommand("equationConstraint", &Py_ops_equationConstraint);
     addCommand("nodeEigenvector", &Py_ops_nodeEigenvector);
     addCommand("getTime", &Py_ops_getTime);
