@@ -615,8 +615,8 @@ DistributedCudaBcsrLinSOE::solve(void)
     if (result(0) == 0)
         result(0) = theCudaSOE->solve();
 
-    // Ensure host X is current before broadcast
-    (void)theCudaSOE->getX();
+    // Force host X current before channel broadcast (integrators may leave xSyncMode=false).
+    theCudaSOE->syncXToHost();
 
     for (int j = 0; j < numChannels; ++j) {
         Channel *theChannel = theChannels[j];
@@ -631,14 +631,55 @@ DistributedCudaBcsrLinSOE::solve(void)
 int
 DistributedCudaBcsrLinSOE::formAp(const Vector &p, Vector &Ap)
 {
-    // Match DistributedProfileSPD / MumpsParallelSOE: no distributed SpMV yet.
-    // A correct gather-to-root formAp (merge A on rank 0, SpMV, broadcast Ap)
-    // can be added later; static/transient analyze does not need it.
-    (void)p;
-    (void)Ap;
-    opserr << "WARNING DistributedCudaBcsrLinSOE::formAp() - not supported "
-           << "(gather-to-root SpMV not implemented); returning -1\n";
-    return -1;
+    if (theCudaSOE == nullptr) {
+        opserr << "WARNING DistributedCudaBcsrLinSOE::formAp() - no CudaBcsrLinSOE\n";
+        return -1;
+    }
+
+    const int size = theCudaSOE->getNumEqn();
+    if (size != p.Size() || size != Ap.Size()) {
+        opserr << "WARNING DistributedCudaBcsrLinSOE::formAp() - vectors must match global size "
+               << size << "\n";
+        return -1;
+    }
+    if (size == 0) {
+        Ap.Zero();
+        return 0;
+    }
+
+    // Serial / single-process: local SpMV only.
+    if (numChannels <= 0 || theChannels == 0)
+        return theCudaSOE->formAp(p, Ap);
+
+    // Same gate as solve(): skip triplet gather when MatrixStatus is UNCHANGED.
+    if (ensureMergedA() < 0) {
+        opserr << "WARNING DistributedCudaBcsrLinSOE::formAp() - ensureMergedA failed\n";
+        return -1;
+    }
+
+    if (processID != 0) {
+        if (theChannels[0] == 0) {
+            opserr << "WARNING DistributedCudaBcsrLinSOE::formAp() - worker has no channel\n";
+            return -1;
+        }
+        if (theChannels[0]->recvVector(0, 0, Ap) < 0) {
+            opserr << "WARNING DistributedCudaBcsrLinSOE::formAp() - recv Ap failed\n";
+            return -1;
+        }
+        return 0;
+    }
+
+    const int rc = theCudaSOE->formAp(p, Ap);
+    if (rc != 0)
+        Ap.Zero();
+
+    for (int j = 0; j < numChannels; ++j) {
+        if (theChannels[j]->sendVector(0, 0, Ap) < 0) {
+            opserr << "WARNING DistributedCudaBcsrLinSOE::formAp() - send Ap failed\n";
+            return -1;
+        }
+    }
+    return rc;
 }
 
 LinearSOE *
@@ -739,6 +780,9 @@ int
 DistributedCudaBcsrLinSOE::setProcessID(int dTag)
 {
     processID = dTag;
+    // Workers never own the global CSR / GPU operators.
+    if (theCudaSOE != nullptr && processID != 0)
+        theCudaSOE->setCudaDeviceEnabled(false);
     return 0;
 }
 
@@ -758,5 +802,146 @@ DistributedCudaBcsrLinSOE::setChannels(int nChannels, Channel **theC)
         theChannels = 0;
         numChannels = 0;
     }
+    return 0;
+}
+
+int
+DistributedCudaBcsrLinSOE::sendPendingTriplets(Channel *theChannel)
+{
+    if (theChannel == 0)
+        return -1;
+
+    const int nTrip = static_cast<int>(tripletMap.size());
+    ID nTripID(1);
+    nTripID(0) = nTrip;
+    if (theChannel->sendID(0, 0, nTripID) < 0)
+        return -1;
+
+    if (nTrip > 0) {
+        ID rows(nTrip);
+        ID cols(nTrip);
+        Vector vals(nTrip);
+        int k = 0;
+        for (const auto &entry : tripletMap) {
+            rows(k) = static_cast<int>(entry.first >> 32);
+            cols(k) = static_cast<int>(entry.first & 0xffffffffu);
+            vals(k) = entry.second;
+            ++k;
+        }
+        if (theChannel->sendID(0, 0, rows) < 0 ||
+            theChannel->sendID(0, 0, cols) < 0 ||
+            theChannel->sendVector(0, 0, vals) < 0) {
+            return -1;
+        }
+    }
+    clearTriplets();
+    return 0;
+}
+
+int
+DistributedCudaBcsrLinSOE::recvAndMergeTriplets(void)
+{
+    int status = 0;
+    for (int j = 0; j < numChannels; ++j) {
+        Channel *theChannel = theChannels[j];
+        ID nTripID(1);
+        if (theChannel->recvID(0, 0, nTripID) < 0) {
+            status = -1;
+            continue;
+        }
+        const int nTrip = nTripID(0);
+        if (nTrip < 0) {
+            status = -1;
+            continue;
+        }
+        if (nTrip > 0) {
+            ID rows(nTrip);
+            ID cols(nTrip);
+            Vector vals(nTrip);
+            if (theChannel->recvID(0, 0, rows) < 0 ||
+                theChannel->recvID(0, 0, cols) < 0 ||
+                theChannel->recvVector(0, 0, vals) < 0) {
+                status = -1;
+                continue;
+            }
+            if (status == 0 &&
+                mergeTripletsIntoA(&rows(0), &cols(0), &vals(0), nTrip) < 0) {
+                status = -1;
+            }
+        }
+    }
+    return status;
+}
+
+int
+DistributedCudaBcsrLinSOE::ensureMergedA(void)
+{
+    if (theCudaSOE == nullptr)
+        return -1;
+    if (numChannels <= 0 || theChannels == 0)
+        return 0;
+    if (!needsMatrixTransfer())
+        return 0;
+
+    if (processID != 0) {
+        if (theChannels[0] == 0)
+            return -1;
+        return sendPendingTriplets(theChannels[0]);
+    }
+    return recvAndMergeTriplets();
+}
+
+int
+DistributedCudaBcsrLinSOE::broadcastFromRoot(Vector &v)
+{
+    if (numChannels <= 0 || theChannels == 0)
+        return 0;
+
+    if (processID != 0) {
+        if (theChannels[0] == 0)
+            return -1;
+        return theChannels[0]->recvVector(0, 0, v);
+    }
+
+    for (int j = 0; j < numChannels; ++j) {
+        if (theChannels[j]->sendVector(0, 0, v) < 0)
+            return -1;
+    }
+    return 0;
+}
+
+int
+DistributedCudaBcsrLinSOE::mergeBToRoot(void)
+{
+    if (theCudaSOE == nullptr)
+        return -1;
+
+    Vector &vectB = theCudaSOE->getHostBVector();
+
+    if (numChannels <= 0 || theChannels == 0) {
+        if (myVectB != 0)
+            vectB = *myVectB;
+        theCudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
+        return 0;
+    }
+
+    if (processID != 0) {
+        if (theChannels[0] == 0)
+            return -1;
+        if (theChannels[0]->sendVector(0, 0, *myVectB) < 0)
+            return -1;
+        // Workers keep their myB; callers that need a one-shot global RHS should zeroB after.
+        return 0;
+    }
+
+    vectB = *myVectB;
+    ensureWorkArea(myBsize);
+    Vector remoteB(workArea, myBsize);
+    for (int j = 0; j < numChannels; ++j) {
+        if (theChannels[j]->recvVector(0, 0, remoteB) < 0)
+            return -1;
+        vectB += remoteB;
+    }
+    theCudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
     return 0;
 }

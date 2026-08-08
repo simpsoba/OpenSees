@@ -45,7 +45,6 @@
 #include <elementAPI.h>
 #include <FileStream.h>
 #include <unordered_map>
-#include "ParameterUtils.h"
 
 // C++ includes
 #include <sstream>
@@ -392,9 +391,6 @@ struct CuDSSConfig {
     std::string threadingLibPath = "/usr/lib/x86_64-linux-gnu/libcudss_mtlayer_gomp.so";
 #endif
     std::string cudssMatTypeStr = "full"; // full | symmetric | spd (symmetric/spd use lower storage in SOE)
-    std::string parallelMode = "single";  // single | multiGPU | MGMN (parallelism across processes/GPUs)
-    int distributed = 0;                  // For MGMN: 0 = root-only (gather-scatter), 1 = row-wise distributed
-    std::vector<int> deviceIndices;       // For multiGPU: empty = use all devices; else list of device IDs
     int deviceId = -1;                    // Preferred single-GPU device (-1 = driver current/default)
     bool verifyRuntime = false;           // Optional early cuda/cuDSS smoke test at system time
     int irNSteps = 0;                     // Iterative refinement steps (0 = disabled)
@@ -480,39 +476,6 @@ CuDSSParameterParser::configParsers = {
             }
         }
     }},
-    {"parallelMode", [](CuDSSConfig& config) { 
-        const char* value = OPS_GetString();
-        if (value) {
-            std::string s(value);
-            if (s == "single" || s == "multiGPU" || s == "MGMN") {
-                config.parallelMode = s;
-            } else {
-                throw std::invalid_argument("parallelMode must be single, multiGPU, or MGMN");
-            }
-        }
-    }},
-    {"distributed", [](CuDSSConfig& config) { 
-        int numData = 1;
-        int flag = 0;
-        if (OPS_GetIntInput(&numData, &flag) == 0) {
-            if (flag != 0 && flag != 1) throw std::invalid_argument("distributed must be 0 or 1");
-            config.distributed = flag;
-        }
-    }},
-    {"devices", [](CuDSSConfig& config) { 
-        const char* value = OPS_GetString();
-        if (!value) return;
-        config.deviceIndices.clear();
-        if (strcmp(value, "all") == 0) return;  // empty = use all devices
-        int id = atoi(value);
-        config.deviceIndices.push_back(id);
-        int numData = 1;
-        while (OPS_GetNumRemainingInputArgs() > 0) {
-            int next = 0;
-            if (OPS_GetIntInput(&numData, &next) != 0) break;
-            config.deviceIndices.push_back(next);
-        }
-    }},
     {"device", [](CuDSSConfig& config) {
         int numData = 1;
         int id = 0;
@@ -565,25 +528,6 @@ bool CuDSSParameterParser::parseParameters(CuDSSConfig& config) {
             }
         }
 
-        // Validation: parallelMode vs single-process vs OpenSeesMP (works for Tcl and Python)
-        int np = getNumProcesses();
-        bool isParallel = (np > 1);
-        if (config.parallelMode == "MGMN" && !isParallel) {
-            opserr << "ERROR: CuDSSParameterParser::parseParameters() - "
-                   << "parallelMode MGMN requires OpenSeesMP (multiple processes). Use single or multiGPU for single-process runs." << endln;
-            return false;
-        }
-        if (config.parallelMode == "multiGPU" && isParallel) {
-            opserr << "ERROR: CuDSSParameterParser::parseParameters() - "
-                   << "parallelMode multiGPU is for single-process multi-GPU only. In OpenSeesMP use parallelMode MGMN." << endln;
-            return false;
-        }
-        if (config.parallelMode == "MGMN" && (config.hybridMemoryMode || config.hybridExecuteMode)) {
-            opserr << "ERROR: CuDSSParameterParser::parseParameters() - "
-                   << "hybridMemoryMode and hybridExecuteMode are not allowed with parallelMode MGMN." << endln;
-            return false;
-        }
-
         return true;
     } catch (const std::exception& e) {
         opserr << "WARNING: CuDSSParameterParser::parseParameters() - "
@@ -598,13 +542,7 @@ void CuDSSParameterParser::printUsageInfo() {
     opserr << "Options:" << endln;
     opserr << "  -precision <dDDI|dFFI>          Precision (default: dDDI)" << endln;
     opserr << "  -verbose <0|1>                  Enable verbose output (default: 0)" << endln;
-    opserr << "  -parallelMode <single|multiGPU|MGMN>  Parallelism across processes/GPUs (default: single)" << endln;
-    opserr << "                                  single: one process, one GPU" << endln;
-    opserr << "                                  multiGPU: one process, multiple GPUs" << endln;
-    opserr << "                                  MGMN: OpenSeesMP, multi-GPU multi-node (requires getNP > 1)" << endln;
-    opserr << "  -distributed <0|1>               For MGMN only: 0 = root-only gather-scatter (default), 1 = row-wise distributed" << endln;
-    opserr << "  -devices <all|id1 [id2 ...]>     For multiGPU only: GPU IDs to use (default: all)" << endln;
-    opserr << "  -device <id>                    Preferred CUDA device for single-GPU CuDSS/DistributedCuDSS (default: current)" << endln;
+    opserr << "  -device <id>                    Preferred CUDA device (default: current)" << endln;
     opserr << "  -verifyRuntime <0|1>            Early cudaGetDeviceCount/cudssCreate check at system time (default: 0)" << endln;
     opserr << "  -hybridMemoryMode <0|1>         Hybrid host/device memory mode (default: 0)" << endln;
     opserr << "  -hybridDeviceMemoryLimit <bytes1 [bytes2 ...]> Per-device limit for hybrid memory (one value=all devices; 0=min)" << endln;
@@ -624,9 +562,9 @@ void CuDSSParameterParser::printUsageInfo() {
     opserr << "                                  irTol=0: exactly irNSteps iterations, no convergence check" << endln;
     opserr << "                                  irTol>0: early stop when ||r||/||b|| < irTol (max irNSteps)" << endln;
     opserr << "Notes:" << endln;
-    opserr << "  - hybridMemoryMode and hybridExecuteMode are mutually exclusive; hybridExecute mode is not allowed with parallelMode MGMN" << endln;
-    opserr << "  - MGMN is only valid in OpenSeesMP (getNP > 1); multiGPU is only valid for single process" << endln;
+    opserr << "  - hybridMemoryMode and hybridExecuteMode are mutually exclusive" << endln;
     opserr << "  - When multiThreadingMode is enabled: set OMP_NUM_THREADS or CUDSS_THREADING_LIB as needed" << endln;
+    opserr << "  - OpenSeesMP: use system DistributedCuDSS (rank-0 GPU + gather-add); cuDSS multi-GPU/MGMN is not exposed yet" << endln;
 }
 
 // Factory function to create CuDSS solver from parsed config
@@ -643,7 +581,6 @@ CudaBcsrLinSolver* createCuDSSSolverFromConfig(const CuDSSConfig& config) {
     if (config.cudssMatTypeStr == "symmetric") cudssMatType = CuDSSMatrixType::SYMMETRIC;
     else if (config.cudssMatTypeStr == "spd") cudssMatType = CuDSSMatrixType::SPD;
 
-    bool useMultiGPU = (config.parallelMode == "multiGPU");
     return new CudaDirectSparseSolver(
         precision, 
         config.verbose,
@@ -653,8 +590,8 @@ CudaBcsrLinSolver* createCuDSSSolverFromConfig(const CuDSSConfig& config) {
         config.multiThreadingMode,
         config.threadingLibPath.c_str(),
         cudssMatType,
-        useMultiGPU,
-        config.deviceIndices,
+        /*useMultiGPU=*/false,
+        /*deviceIndices=*/{},
         config.irNSteps,
         config.irTol,
         config.deviceId
@@ -693,10 +630,6 @@ CudaBcsrLinSolver* createCuDSSSolverFromParser() {
 
 #include <DistributedCudaBcsrLinSOE.h>
 #include <classTags.h>
-
-#ifdef _PARALLEL_INTERPRETERS
-#include <mpi.h>
-#endif
 
 namespace {
 
@@ -846,14 +779,12 @@ void *OPS_DistributedCudaDirectSparseSolver(void)
     if (!parseCuDSSConfigFromOPS(config))
         return nullptr;
 
-    int rank = 0;
-#ifdef _PARALLEL_INTERPRETERS
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-#endif
+    // Workers: host-only SOE (no CUDA). Matches commands.cpp setProcessID(OPS_rank).
+    extern int OPS_rank;
+    const bool hostOnly = (OPS_rank != 0);
 
-    // Only rank 0 verifies (if requested) and owns cuDSS/CUDA.
     CudaBcsrLinSOE *cudaSOE =
-        createCudaBcsrSOEFromCuDSSConfig(config, /*hostOnly=*/(rank != 0));
+        createCudaBcsrSOEFromCuDSSConfig(config, hostOnly);
     if (cudaSOE == nullptr)
         return nullptr;
 

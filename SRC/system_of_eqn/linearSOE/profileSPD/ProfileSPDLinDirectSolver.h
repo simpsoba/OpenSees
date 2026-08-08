@@ -57,6 +57,8 @@ class ProfileSPDLinDirectSolver : public ProfileSPDLinSolver
     virtual int factor(int n);
     virtual int setProfileSOE(ProfileSPDLinSOE &theSOE);
 
+    LinearSOESolver *getCopy(void) const override;
+
     int sendSelf(int commitTag, Channel &theChannel);
     int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);
     

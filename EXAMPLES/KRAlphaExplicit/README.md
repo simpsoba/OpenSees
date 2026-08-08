@@ -14,16 +14,19 @@ It is intended as a **reproducible sandbox** for exercising:
 - `CudaKRAlpha_TP` / `CudaMKRAlpha_TP` (GPU trapezoidal rule; requires CuDSS build)
 
 ### Contents
-- `SDOF-OpenSees/`: single-DOF **plain transient** example (Python + `sdof.py`).
+- `SDOF-OpenSees/`: single-DOF **plain transient** example (Python + `sdof.py`) — **serial only**.
 - `Two-Story_MRF/`: two-story MRF model from Kolay & Ricles papers + ground motion file.
+  - Serial: `two_story_MRF.tcl` / `two_story_MRF.py` / `run_integrators.py`
+  - OpenSeesMP: `two_story_MRF_mp.tcl` + `run_mp_integrators.sh` (METIS `partition`, MultiSOE×Mumps/DistributedCuDSS, Cuda×DistributedCuDSS)
 
 ### Notes
-- These are **OpenSeesPy** scripts (Python), not Tcl scripts.
-- To run them you need an environment with `openseespy` (and for the MRF script: `numpy`, `scipy`, `pandas`, `matplotlib`, `opsvis`).
-- The integrator method names in OpenSeesPy match the Tcl names (e.g. `ops.integrator("KRAlphaExplicit_TP", rhoInf)`).
-- `*MultiSOE` integrators require optional flags first (any order), then trailing workspace blocks in fixed order: `Begin_Mass_System {...} End_Mass_System` then `Begin_Alpha_System {...} End_Alpha_System`, e.g.
-  `ops.integrator("KRAlphaExplicitMultiSOE", rhoInf, "-incrementalAccel", "Begin_Mass_System", "UmfPack", "End_Mass_System", "Begin_Alpha_System", "UmfPack", "End_Alpha_System")`.
-  The example scripts append the two blocks at the end when the method name contains `MultiSOE`.
+- Serial SDOF / MRF drivers are **OpenSeesPy** (need `numpy` / `scipy` / etc., or local `build/Release/opensees.so`).
+- OpenSeesMP MRF is **Tcl** (`two_story_MRF_mp.tcl`): every rank builds the full mesh, then METIS `partition`, gravity on Mumps, transient on the requested system.
+- OpenSeesMP backend rules for this sandbox:
+  - `*MultiSOE*` → `Mumps` or `DistributedCuDSS`
+  - `Cuda*` → `DistributedCuDSS` only
+- Tip histories are compared within each algorithm family (KR / MKR × midpoint / TP), not across families.
+- Prefer Intel MPI `mpirun` and `build-mp/Release/OpenSeesMP` (see `run_mp_integrators.sh`).
 
 ### Ground motion file format
 The example set includes both:
@@ -32,10 +35,15 @@ The example set includes both:
 - **numeric-only** `*.dat` files — kept for convenience, but not required.
 
 ### Quick runs
-- SDOF:
+- SDOF (serial):
   - `python3 EXAMPLES/KRAlphaExplicit/SDOF-OpenSees/run_integrators.py`
-- Two-Story MRF:
+- Two-Story MRF (serial):
   - `python3 EXAMPLES/KRAlphaExplicit/Two-Story_MRF/run_integrators.py`
+- Two-Story MRF (OpenSeesMP, auto-partition):
+  - `EXAMPLES/KRAlphaExplicit/Two-Story_MRF/run_mp_integrators.sh`                  # core: MultiSOE KR×{Mumps,DistCuDSS} + CudaKR
+  - `EXAMPLES/KRAlphaExplicit/Two-Story_MRF/run_mp_integrators.sh --cases all --quick`
+  - `EXAMPLES/KRAlphaExplicit/Two-Story_MRF/run_mp_integrators.sh --cases all --full`
+  - Single case: `mpirun -np 2 OpenSeesMP two_story_MRF_mp.tcl KRAlphaExplicitMultiSOE 0.5 3.0 -system Mumps -quick`
 
 ### Using the locally built Python module
 The example Python scripts prefer importing the locally built module at:

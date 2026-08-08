@@ -30,6 +30,7 @@
 #include <MumpsParallelSOE.h>
 #include <MumpsParallelSolver.h>
 #include <Matrix.h>
+#include <Vector.h>
 #include <Graph.h>
 #include <Vertex.h>
 #include <VertexIter.h>
@@ -636,4 +637,93 @@ MumpsParallelSOE::setChannels(int nChannels, Channel **theC)
     localCol[i] = 0;
 
   return 0;
+}
+
+
+int
+MumpsParallelSOE::formAp(const Vector &p, Vector &Ap)
+{
+  if (size != p.Size() || size != Ap.Size()) {
+    opserr << "WARNING MumpsParallelSOE::formAp() - vectors must match global size "
+           << size << "\n";
+    return -1;
+  }
+  if (size == 0) {
+    Ap.Zero();
+    return 0;
+  }
+
+  // Local SpMV over this rank's sparse contributions (distributed A).
+  Ap.Zero();
+  if (A != 0 && rowA != 0 && colStartA != 0) {
+    for (int col = 0; col < size; ++col) {
+      const double pj = p(col);
+      for (int k = colStartA[col]; k < colStartA[col + 1]; ++k) {
+        const int row = rowA[k];
+        const double aij = A[k];
+        Ap(row) += aij * pj;
+        // Symmetric storage keeps only row >= col; mirror the off-diagonal.
+        if (matType != 0 && row != col)
+          Ap(col) += aij * p(row);
+      }
+    }
+  }
+
+  // Sum-reduce Ap across ranks (same hub-and-spoke pattern as getB).
+  if (processID != 0) {
+    if (theChannels == 0 || numChannels <= 0) {
+      opserr << "WARNING MumpsParallelSOE::formAp() - worker has no channel\n";
+      return -1;
+    }
+    Channel *theChannel = theChannels[0];
+    if (theChannel->sendVector(0, 0, Ap) < 0 ||
+        theChannel->recvVector(0, 0, Ap) < 0) {
+      opserr << "WARNING MumpsParallelSOE::formAp() - channel failure\n";
+      return -1;
+    }
+    return 0;
+  }
+
+  if (numChannels > 0 && workArea != 0) {
+    Vector remoteAp(workArea, size);
+    for (int j = 0; j < numChannels; ++j) {
+      Channel *theChannel = theChannels[j];
+      if (theChannel->recvVector(0, 0, remoteAp) < 0) {
+        opserr << "WARNING MumpsParallelSOE::formAp() - recv remote Ap failed\n";
+        return -1;
+      }
+      Ap += remoteAp;
+    }
+    for (int j = 0; j < numChannels; ++j) {
+      if (theChannels[j]->sendVector(0, 0, Ap) < 0) {
+        opserr << "WARNING MumpsParallelSOE::formAp() - send Ap failed\n";
+        return -1;
+      }
+    }
+  }
+
+  return 0;
+}
+
+
+LinearSOE *
+MumpsParallelSOE::getCopy(void) const
+{
+  const LinearSOESolver *base = this->getSolver();
+  if (base == 0)
+    return 0;
+  LinearSOESolver *solverCopy = base->getCopy();
+  if (solverCopy == 0)
+    return 0;
+
+  MumpsParallelSolver *mumpsSolver = dynamic_cast<MumpsParallelSolver *>(solverCopy);
+  if (mumpsSolver == 0) {
+    delete solverCopy;
+    return 0;
+  }
+
+  MumpsParallelSOE *out = new MumpsParallelSOE(*mumpsSolver, matType);
+  out->setProcessID(processID);
+  out->setChannels(numChannels, theChannels);
+  return out;
 }

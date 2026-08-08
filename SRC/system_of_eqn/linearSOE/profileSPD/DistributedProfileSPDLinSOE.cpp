@@ -768,3 +768,148 @@ DistributedProfileSPDLinSOE::setChannels(int nChannels, Channel **theC)
 
   return 0;
 }
+
+
+namespace {
+
+/** Symmetric profile SpMV: A stores upper triangle including diagonal (Fortran profile). */
+void
+profileSpMV(const double *Avals, const int *iDiag, int n, const Vector &p, Vector &Ap)
+{
+  Ap.Zero();
+  if (Avals == 0 || iDiag == 0 || n <= 0)
+    return;
+
+  for (int col = 0; col < n; ++col) {
+    const double pj = p(col);
+    const double *coliiPtr = &Avals[iDiag[col] - 1];
+    int minColRow = 0;
+    if (col > 0)
+      minColRow = col - (iDiag[col] - iDiag[col - 1]) + 1;
+    for (int row = minColRow; row <= col; ++row) {
+      const double aij = coliiPtr[row - col];
+      Ap(row) += aij * pj;
+      if (row != col)
+        Ap(col) += aij * p(row);
+    }
+  }
+}
+
+} // namespace
+
+
+int
+DistributedProfileSPDLinSOE::formAp(const Vector &p, Vector &Ap)
+{
+  if (size != p.Size() || size != Ap.Size()) {
+    opserr << "WARNING DistributedProfileSPDLinSOE::formAp() - vectors must match global size "
+           << size << "\n";
+    return -1;
+  }
+  if (size == 0) {
+    Ap.Zero();
+    return 0;
+  }
+
+  // Serial / single process
+  if (numChannels <= 0 || theChannels == 0) {
+    profileSpMV(A, iDiagLoc, size, p, Ap);
+    return 0;
+  }
+
+  if (processID != 0) {
+    if (theChannels[0] == 0) {
+      opserr << "WARNING DistributedProfileSPDLinSOE::formAp() - worker has no channel\n";
+      return -1;
+    }
+    Channel *theChannel = theChannels[0];
+
+    // Same gather protocol as solve: send local A when not yet merged/factored.
+    if (isAfactored == false) {
+      Vector vectA(A, (*sizeLocal)(0));
+      if (theChannel->sendVector(0, 0, vectA) < 0) {
+        opserr << "WARNING DistributedProfileSPDLinSOE::formAp() - send A failed\n";
+        return -1;
+      }
+    }
+
+    if (theChannel->recvVector(0, 0, Ap) < 0) {
+      opserr << "WARNING DistributedProfileSPDLinSOE::formAp() - recv Ap failed\n";
+      return -1;
+    }
+    return 0;
+  }
+
+  // Rank 0: optionally merge worker A into a temporary buffer (do not mutate A /
+  // isAfactored — subsequent solve() still owns the permanent merge).
+  double *spmvA = A;
+  double *mergedA = 0;
+  if (isAfactored == false) {
+    mergedA = new double[profileSize];
+    for (int i = 0; i < profileSize; ++i)
+      mergedA[i] = A[i];
+
+    for (int j = 0; j < numChannels; ++j) {
+      Channel *theChannel = theChannels[j];
+      const ID &localMap = *(localCol[j]);
+      int localSize = (*sizeLocal)(j);
+      Vector vectA(workArea, localSize);
+      if (theChannel->recvVector(0, 0, vectA) < 0) {
+        opserr << "WARNING DistributedProfileSPDLinSOE::formAp() - recv A failed\n";
+        delete [] mergedA;
+        return -1;
+      }
+
+      int loc = 0;
+      for (int i = 0; i < localMap.Size(); ++i) {
+        int col = localMap(i);
+        int colSize, pos;
+        if (col == 0) {
+          colSize = 1;
+          pos = 0;
+        } else {
+          pos = iDiagLoc[col - 1];
+          colSize = iDiagLoc[col] - iDiagLoc[col - 1];
+        }
+        for (int k = 0; k < colSize; ++k)
+          mergedA[pos++] += workArea[loc++];
+      }
+    }
+    spmvA = mergedA;
+  }
+
+  profileSpMV(spmvA, iDiagLoc, size, p, Ap);
+  delete [] mergedA;
+
+  for (int j = 0; j < numChannels; ++j) {
+    if (theChannels[j]->sendVector(0, 0, Ap) < 0) {
+      opserr << "WARNING DistributedProfileSPDLinSOE::formAp() - send Ap failed\n";
+      return -1;
+    }
+  }
+
+  return 0;
+}
+
+
+LinearSOE *
+DistributedProfileSPDLinSOE::getCopy(void) const
+{
+  const LinearSOESolver *base = this->getSolver();
+  if (base == 0)
+    return 0;
+  LinearSOESolver *solverCopy = base->getCopy();
+  if (solverCopy == 0)
+    return 0;
+
+  ProfileSPDLinSolver *profileSolver = dynamic_cast<ProfileSPDLinSolver *>(solverCopy);
+  if (profileSolver == 0) {
+    delete solverCopy;
+    return 0;
+  }
+
+  DistributedProfileSPDLinSOE *out = new DistributedProfileSPDLinSOE(*profileSolver);
+  out->setProcessID(processID);
+  out->setChannels(numChannels, theChannels);
+  return out;
+}

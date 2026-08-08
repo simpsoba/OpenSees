@@ -54,6 +54,11 @@ class ExplicitAlphaMultiSOE : public TransientIntegrator
     void Print(OPS_Stream &s, int flag = 0) override;
     int revertToStart(void) override;
 
+    /** OpenSeesMP gather-add SOEs (MumpsParallel, DistributedProfileSPD, DistributedCuDSS):
+     *  set to OPS_rank so transformed RHS is installed only on P0. Default -1 = serial. */
+    void setProcessID(int pid) { processID = pid; }
+    int getProcessID(void) const { return processID; }
+
   protected:
     ExplicitAlphaMultiSOE(int classTag, double alphaF, double alphaM, double gamma, double beta,
                         bool updElemDisp, bool incrementalAccel, bool useAlphaCloseCheck);
@@ -75,8 +80,11 @@ class ExplicitAlphaMultiSOE : public TransientIntegrator
      *  tangents); \a statFlag selects Kt vs Ki for K. Temporarily repoints integrator links; restores primary SOE. */
     int formTangentOnSOE(LinearSOE &target, int statFlag, double c1v, double c2v, double c3v);
 
-    /** Solve \a soe for RHS \a b into \a x; \c nullptr \a soe or failure returns negative. */
+    /** Solve \a soe for RHS \a b into \a x; \c nullptr \a soe or failure returns negative.
+     *  When \c processID > 0 (worker on a gather-add SOE), workers zero B and P0 sets the global RHS. */
     int linearSolve(LinearSOE *soe, const Vector &b, Vector &x) const;
+    /** Install a global RHS for a subsequent gather-add \c solve (Woodbury/Arpack pattern). */
+    int setGlobalRhs(LinearSOE *soe, const Vector &b) const;
     /** \c soe->formAp(in, out); returns -1 if \a soe is null; otherwise returns \c formAp's result. */
     int applyOperator(LinearSOE *soe, const Vector &in, Vector &out) const;
 
@@ -123,6 +131,9 @@ class ExplicitAlphaMultiSOE : public TransientIntegrator
     /** Allocate/link workspace SOEs (M, alpha) from \c getCopy and size them; primary SOE is
      *  already sized by the analysis. */
     int setupWorkspaceSOEs(void);
+
+    /** -1 = serial / unset; >0 = OpenSeesMP worker on a gather-add distributed SOE. */
+    int processID;
 };
 
 void *OPS_ExplicitAlphaMultiSOE(void);

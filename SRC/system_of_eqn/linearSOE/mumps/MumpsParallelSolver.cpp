@@ -71,6 +71,12 @@ MumpsParallelSolver::~MumpsParallelSolver()
     dmumps_c(&id); /* Terminate instance */
 }
 
+LinearSOESolver *
+MumpsParallelSolver::getCopy(void) const
+{
+  return new MumpsParallelSolver(icntl7, icntl14);
+}
+
 int
 MumpsParallelSolver::initializeMumps()
 {

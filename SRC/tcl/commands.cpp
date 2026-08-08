@@ -254,6 +254,7 @@ extern void *OPS_MKRAlphaExplicitMultiSOE(void);
 extern void *OPS_ExplicitAlphaMultiSOE_TP(void);
 extern void *OPS_KRAlphaExplicitMultiSOE_TP(void);
 extern void *OPS_MKRAlphaExplicitMultiSOE_TP(void);
+#include <ExplicitAlphaMultiSOE.h>
 #if defined(_CUDSS)
 extern void *OPS_CudaExplicitAlpha(void);
 extern void *OPS_CudaKRAlpha(void);
@@ -2835,6 +2836,17 @@ specifyAnalysis(ClientData clientData, Tcl_Interp *interp, int argc,
 							     numSubSteps);
 	  ;
 #ifdef _PARALLEL_INTERPRETERS
+	if (ExplicitAlphaMultiSOE *multi = dynamic_cast<ExplicitAlphaMultiSOE *>(theTransientIntegrator)) {
+	  // Serial SOEs keep processID=-1 so MultiSOE setB stays local on every rank
+	  // (parametric MP models). Gather-add SOEs get OPS_rank (Woodbury/Arpack).
+	  int t = (theSOE != 0) ? theSOE->getClassTag() : -1;
+	  if (t == LinSOE_TAGS_MumpsParallelSOE ||
+	      t == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+	      t == LinSOE_TAGS_DistributedCudaBcsrLinSOE)
+	    multi->setProcessID(OPS_rank);
+	  else
+	    multi->setProcessID(-1);
+	}
 	if (setMPIDSOEFlag) {
 	  ((MPIDiagonalSOE*) theSOE)->setAnalysisModel(*theAnalysisModel);
 	}
@@ -2920,6 +2932,18 @@ specifyAnalysis(ClientData clientData, Tcl_Interp *interp, int argc,
 
 	// set the pointer for variable time step analysis
 	theTransientAnalysis = theVariableTimeStepTransientAnalysis;
+
+#ifdef _PARALLEL_INTERPRETERS
+	if (ExplicitAlphaMultiSOE *multi = dynamic_cast<ExplicitAlphaMultiSOE *>(theTransientIntegrator)) {
+	  int t = (theSOE != 0) ? theSOE->getClassTag() : -1;
+	  if (t == LinSOE_TAGS_MumpsParallelSOE ||
+	      t == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+	      t == LinSOE_TAGS_DistributedCudaBcsrLinSOE)
+	    multi->setProcessID(OPS_rank);
+	  else
+	    multi->setProcessID(-1);
+	}
+#endif
 
 	#ifdef _RELIABILITY
 
@@ -3921,6 +3945,15 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
 
 #ifdef _PARALLEL_INTERPRETERS
     theDomain.setBarrierCheck(ops_soeNeedsBarrierCheck(theSOE));
+    if (ExplicitAlphaMultiSOE *multi = dynamic_cast<ExplicitAlphaMultiSOE *>(theTransientIntegrator)) {
+      int t = (theSOE != 0) ? theSOE->getClassTag() : -1;
+      if (t == LinSOE_TAGS_MumpsParallelSOE ||
+          t == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+          t == LinSOE_TAGS_DistributedCudaBcsrLinSOE)
+        multi->setProcessID(OPS_rank);
+      else
+        multi->setProcessID(-1);
+    }
 #endif
     
     return TCL_OK;
@@ -5657,6 +5690,18 @@ specifyIntegrator(ClientData clientData, Tcl_Interp *interp, int argc,
   }
 #endif
 
+#ifdef _PARALLEL_INTERPRETERS
+  if (ExplicitAlphaMultiSOE *multi = dynamic_cast<ExplicitAlphaMultiSOE *>(theTransientIntegrator)) {
+    int t = (theSOE != 0) ? theSOE->getClassTag() : -1;
+    if (t == LinSOE_TAGS_MumpsParallelSOE ||
+        t == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+        t == LinSOE_TAGS_DistributedCudaBcsrLinSOE)
+      multi->setProcessID(OPS_rank);
+    else
+      multi->setProcessID(-1);
+  }
+#endif
+
   return TCL_OK;
 }
 
@@ -5852,6 +5897,17 @@ eigenAnalysis(ClientData clientData, Tcl_Interp *interp, int argc,
 							     *theSOE,
 							     *theTransientIntegrator,
 							     theTest);
+#ifdef _PARALLEL_INTERPRETERS
+	if (ExplicitAlphaMultiSOE *multi = dynamic_cast<ExplicitAlphaMultiSOE *>(theTransientIntegrator)) {
+	  int t = (theSOE != 0) ? theSOE->getClassTag() : -1;
+	  if (t == LinSOE_TAGS_MumpsParallelSOE ||
+	      t == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+	      t == LinSOE_TAGS_DistributedCudaBcsrLinSOE)
+	    multi->setProcessID(OPS_rank);
+	  else
+	    multi->setProcessID(-1);
+	}
+#endif
     }
 
     //

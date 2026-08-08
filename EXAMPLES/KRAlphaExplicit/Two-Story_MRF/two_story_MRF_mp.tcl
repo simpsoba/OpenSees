@@ -1,27 +1,36 @@
-# two_story_MRF.tcl
-# Two-Story MRF (Kolay & Ricles) — Tcl counterpart to two_story_MRF.py
+# two_story_MRF_mp.tcl
+# OpenSeesMP counterpart to two_story_MRF.tcl: all ranks build the full mesh,
+# then `partition` (METIS) auto-partitions before gravity + transient.
 #
-# Usage (from this directory):
-#   /path/to/OpenSees two_story_MRF.tcl
-#   /path/to/OpenSees two_story_MRF.tcl KRAlphaExplicit 0.5
-#   /path/to/OpenSees two_story_MRF.tcl CudaKRAlpha 1.0 3.0 -incrementalAccel
-#   /path/to/OpenSees two_story_MRF.tcl CudaKRAlpha 0.5 3.0 -massMode 1  # element lumped M
-#   /path/to/OpenSees two_story_MRF.tcl CudaKRAlpha 0.5 3.0 -massMode 2  # nodal lumped M
-#   /path/to/OpenSees two_story_MRF.tcl Newmark
-#   /path/to/OpenSees two_story_MRF.tcl NewmarkCPU
+# Serial sandbox (two_story_MRF.tcl / *.py) is unchanged. This script covers:
+#   - *MultiSOE* with system Mumps or DistributedCuDSS
+#   - Cuda* with system DistributedCuDSS only
 #
-# Recorder order matches KRAlphaSparse / two_story_MRF.py:
-#   analysis Transient -> mkdir -> results.txt + logFile -> recorders -> analyze -> remove recorders
+# Usage (from this directory, np >= 2):
+#   mpirun -np 2 OpenSeesMP two_story_MRF_mp.tcl KRAlphaExplicitMultiSOE 0.5 3.0 -system Mumps
+#   mpirun -np 2 OpenSeesMP two_story_MRF_mp.tcl KRAlphaExplicitMultiSOE 0.5 3.0 -system DistributedCuDSS
+#   mpirun -np 2 OpenSeesMP two_story_MRF_mp.tcl CudaKRAlpha 0.5 3.0
+#   mpirun -np 2 OpenSeesMP two_story_MRF_mp.tcl CudaKRAlpha 0.5 3.0 -quick
+#
+# Prefer ./run_mp_integrators.sh to sweep backends and compare tip histories.
 
 set scriptDir [file dirname [info script]]
 cd $scriptDir
 
+set pid [getPID]
+set np  [getNP]
+if {$np < 2} {
+    puts "ERROR two_story_MRF_mp.tcl requires OpenSeesMP with at least 2 ranks (got np=$np)"
+    exit 1
+}
+
 # --- analysis controls (override via argv: method [rho] [scale]) ---
-set integratorMethod KRAlphaExplicit
+set integratorMethod KRAlphaExplicitMultiSOE
 set rho 0.5
 set scaleFactor 3.0
 set dtAnalysis 0.005
 set freeVibrationSeconds 5.0
+set quickMode 0
 set gmFile [file join $scriptDir ground_motions RSN960_NORTHR_LOS270.AT2]
 
 if {$argc >= 1} {
@@ -45,13 +54,13 @@ if {$argc >= 2 && [_argvIsNumeric [lindex $argv 1]]} {
 # Optional flags after [rho] [scaleFactor] (case-insensitive).
 # massMode: 0 = consistent (-cMass), 1 = element lumped, 2 = nodal lumped.
 set massMode 0
-set numbererType RCM
+set numbererType ParallelPlain
 set useIncrementalAccel 0
 set useAlphaCloseCheck 0
 set systemOverride ""
 set cudssPrecision ""
 set cudssIrNSteps 0
-set testType NormUnbalance
+set outputFolderOverride ""
 # Constraint handler for gravity + transient. Penalty uses alphaS=alphaM=1e18.
 set constrHandler Transformation
 set penaltyAlpha 1.0e18
@@ -74,12 +83,12 @@ for {set i $flagStart} {$i < $argc} {incr i} {
         -numberer {
             incr i
             if {$i >= $argc} {
-                puts stderr "ERROR: -numberer requires Plain, RCM, or AMD"
+                puts stderr "ERROR: -numberer requires ParallelPlain or ParallelRCM"
                 exit 1
             }
             set numbererType [lindex $argv $i]
-            if {$numbererType ni {Plain RCM AMD}} {
-                puts stderr "ERROR: -numberer must be Plain, RCM, or AMD"
+            if {$numbererType ni {ParallelPlain ParallelRCM}} {
+                puts stderr "ERROR: -numberer must be ParallelPlain or ParallelRCM"
                 exit 1
             }
         }
@@ -95,24 +104,21 @@ for {set i $flagStart} {$i < $argc} {incr i} {
                 exit 1
             }
         }
-        -test {
-            incr i
-            if {$i >= $argc} {
-                puts stderr "ERROR: -test requires NormUnbalance or NormDispIncr"
-                exit 1
-            }
-            set testType [lindex $argv $i]
-            if {$testType ni {NormUnbalance NormDispIncr}} {
-                puts stderr "ERROR: -test must be NormUnbalance or NormDispIncr"
-                exit 1
-            }
-        }
         -incrementalaccel { set useIncrementalAccel 1 }
         -alphaclosecheck { set useAlphaCloseCheck 1 }
+        -quick { set quickMode 1 }
+        -outdir {
+            incr i
+            if {$i >= $argc} {
+                puts stderr "ERROR: -outdir requires a directory path"
+                exit 1
+            }
+            set outputFolderOverride [lindex $argv $i]
+        }
         -system {
             incr i
             if {$i >= $argc} {
-                puts stderr "ERROR: -system requires an argument (e.g. UmfPack, SuperLU, CuDSS)"
+                puts stderr "ERROR: -system requires Mumps or DistributedCuDSS"
                 exit 1
             }
             set systemOverride [lindex $argv $i]
@@ -139,7 +145,7 @@ for {set i $flagStart} {$i < $argc} {incr i} {
         }
         default {
             puts stderr "Unknown flag: [lindex $argv $i]"
-            puts stderr "Optional flags: -massMode 0|1|2 -numberer Plain|RCM|AMD -constraints Transformation|Penalty -test NormUnbalance|NormDispIncr -incrementalAccel -alphaCloseCheck -system SOE -cudssPrecision dFFI -cudssIrNSteps N"
+            puts stderr "Optional flags: -massMode 0|1|2 -numberer ParallelPlain|ParallelRCM -constraints Transformation|Penalty -incrementalAccel -alphaCloseCheck -quick -outdir DIR -system Mumps|DistributedCuDSS -cudssPrecision dFFI -cudssIrNSteps N"
             exit 1
         }
     }
@@ -174,177 +180,125 @@ proc appendIntegratorFlags {paramsList} {
 }
 
 switch -exact $integratorMethod {
-    Newmark {
-        set integratorParams [list 0.5 0.25]
-        set maxIter 25
-        set pFlag 0
-        set algo Newton
-        set linearSOE CuDSS
-        set newmarkCpu 0
-    }
-    NewmarkCPU {
-        set integratorMethod Newmark
-        set integratorParams [list 0.5 0.25]
-        set maxIter 25
-        set pFlag 0
-        set algo Newton
-        set linearSOE FullGeneral
-        set newmarkCpu 1
-    }
-    KRAlphaExplicit {
-        set integratorParams [list $rho]
-        set maxIter 1
-        set pFlag 5
-        set algo Linear
-        set linearSOE FullGeneral
-        set newmarkCpu 0
-    }
-    MKRAlphaExplicit {
-        set integratorParams [list $rho]
-        set maxIter 1
-        set pFlag 5
-        set algo Linear
-        set linearSOE FullGeneral
-        set newmarkCpu 0
-    }
-    KRAlphaExplicit_TP {
-        set integratorParams [appendIntegratorFlags [list $rho]]
-        set maxIter 1
-        set pFlag 5
-        set algo Linear
-        set linearSOE FullGeneral
-        set newmarkCpu 0
-    }
-    MKRAlphaExplicit_TP {
-        set integratorParams [appendIntegratorFlags [list $rho]]
-        set maxIter 1
-        set pFlag 5
-        set algo Linear
-        set linearSOE FullGeneral
-        set newmarkCpu 0
-    }
     CudaKRAlpha {
         set integratorParams [appendIntegratorFlags [list $rho]]
         set maxIter 1
         set pFlag 5
         set algo Linear
-        set linearSOE CuDSS
-        set newmarkCpu 0
+        set linearSOE DistributedCuDSS
     }
     CudaMKRAlpha {
         set integratorParams [appendIntegratorFlags [list $rho]]
         set maxIter 1
         set pFlag 5
         set algo Linear
-        set linearSOE CuDSS
-        set newmarkCpu 0
+        set linearSOE DistributedCuDSS
     }
     CudaKRAlpha_TP {
         set integratorParams [appendIntegratorFlags [list $rho]]
         set maxIter 1
         set pFlag 5
         set algo Linear
-        set linearSOE CuDSS
-        set newmarkCpu 0
+        set linearSOE DistributedCuDSS
     }
     CudaMKRAlpha_TP {
         set integratorParams [appendIntegratorFlags [list $rho]]
         set maxIter 1
         set pFlag 5
         set algo Linear
-        set linearSOE CuDSS
-        set newmarkCpu 0
+        set linearSOE DistributedCuDSS
     }
     KRAlphaExplicitMultiSOE {
         set integratorParams [appendIntegratorFlags [list $rho]]
         set maxIter 1
         set pFlag 5
         set algo Linear
-        set linearSOE CuDSS
-        set newmarkCpu 0
+        set linearSOE Mumps
     }
     MKRAlphaExplicitMultiSOE {
         set integratorParams [appendIntegratorFlags [list $rho]]
         set maxIter 1
         set pFlag 5
         set algo Linear
-        set linearSOE CuDSS
-        set newmarkCpu 0
+        set linearSOE Mumps
     }
     KRAlphaExplicitMultiSOE_TP {
         set integratorParams [appendIntegratorFlags [list $rho]]
         set maxIter 1
         set pFlag 5
         set algo Linear
-        set linearSOE CuDSS
-        set newmarkCpu 0
+        set linearSOE Mumps
     }
     MKRAlphaExplicitMultiSOE_TP {
         set integratorParams [appendIntegratorFlags [list $rho]]
         set maxIter 1
         set pFlag 5
         set algo Linear
-        set linearSOE CuDSS
-        set newmarkCpu 0
+        set linearSOE Mumps
     }
     default {
-        puts stderr "Unknown integrator: $integratorMethod"
-        puts stderr "Use: Newmark | NewmarkCPU | KRAlphaExplicit | MKRAlphaExplicit | KRAlphaExplicit_TP | MKRAlphaExplicit_TP | KRAlphaExplicitMultiSOE | MKRAlphaExplicitMultiSOE | KRAlphaExplicitMultiSOE_TP | MKRAlphaExplicitMultiSOE_TP | CudaKRAlpha | CudaMKRAlpha | CudaKRAlpha_TP | CudaMKRAlpha_TP"
+        puts stderr "Unknown / unsupported integrator for MP sandbox: $integratorMethod"
+        puts stderr "Use: KRAlphaExplicitMultiSOE | MKRAlphaExplicitMultiSOE | KRAlphaExplicitMultiSOE_TP | MKRAlphaExplicitMultiSOE_TP | CudaKRAlpha | CudaMKRAlpha | CudaKRAlpha_TP | CudaMKRAlpha_TP"
         exit 1
     }
 }
 
+set isCudaIntegrator [expr {[string match Cuda* $integratorMethod]}]
+set isMultiSOE [expr {[string match *MultiSOE* $integratorMethod]}]
+
 if {$systemOverride ne ""} {
-    if {$integratorMethod in {Newmark KRAlphaExplicitMultiSOE MKRAlphaExplicitMultiSOE KRAlphaExplicitMultiSOE_TP MKRAlphaExplicitMultiSOE_TP CudaKRAlpha CudaMKRAlpha CudaKRAlpha_TP CudaMKRAlpha_TP}} {
-        set linearSOE $systemOverride
-    } else {
-        puts stderr "WARNING two_story_MRF.tcl: -system $systemOverride ignored for $integratorMethod"
+    if {$systemOverride ni {Mumps DistributedCuDSS}} {
+        puts stderr "ERROR two_story_MRF_mp.tcl: -system must be Mumps or DistributedCuDSS (got $systemOverride)"
+        exit 1
     }
+    if {$isCudaIntegrator && $systemOverride ne "DistributedCuDSS"} {
+        puts stderr "ERROR two_story_MRF_mp.tcl: Cuda* integrators require DistributedCuDSS"
+        exit 1
+    }
+    set linearSOE $systemOverride
+} elseif {$isCudaIntegrator} {
+    set linearSOE DistributedCuDSS
 }
 
-if {$integratorMethod in {KRAlphaExplicit MKRAlphaExplicit} && ($useIncrementalAccel || $useAlphaCloseCheck)} {
-    puts stderr "WARNING two_story_MRF.tcl: -incrementalAccel/-alphaCloseCheck ignored for dense KRAlphaExplicit/MKRAlphaExplicit"
+if {$quickMode} {
+    set freeVibrationSeconds 0.0
 }
 
-# Output tree follows massMode: results / results_1 / results_2 (figures_* from run_integrators).
+# Output tree: results_mp / results_mp_1 / results_mp_2
 if {$massMode == 0} {
-    set resultsSubdir results
+    set resultsSubdir results_mp
 } else {
-    set resultsSubdir "results_$massMode"
+    set resultsSubdir "results_mp_$massMode"
 }
 
-set folderSystemLabel ""
-if {$linearSOE eq "CuDSS" && $cudssPrecision eq "dFFI"} {
+set folderSystemLabel $linearSOE
+if {$linearSOE eq "DistributedCuDSS" && $cudssPrecision eq "dFFI"} {
     if {$cudssIrNSteps > 0} {
-        set folderSystemLabel CuDSS_dFFI_ir$cudssIrNSteps
+        set folderSystemLabel DistributedCuDSS_dFFI_ir$cudssIrNSteps
     } else {
-        set folderSystemLabel CuDSS_dFFI
+        set folderSystemLabel DistributedCuDSS_dFFI
     }
-} elseif {$systemOverride ne "" && $systemOverride ne "CuDSS"} {
-    set folderSystemLabel $systemOverride
+}
+if {$quickMode} {
+    set folderSystemLabel "${folderSystemLabel}_quick"
 }
 
-proc buildOutputFolderName {integratorMethod integratorParams folderSystemLabel newmarkCpu numbererType constrHandler testType} {
+proc buildOutputFolderName {integratorMethod integratorParams folderSystemLabel numbererType} {
     set parts [list $integratorMethod]
-    if {$numbererType ne "RCM"} {
+    if {$numbererType ne "ParallelPlain"} {
         lappend parts $numbererType
     }
-    if {$constrHandler ne "Transformation"} {
-        lappend parts $constrHandler
-    }
-    if {$testType ne "NormUnbalance"} {
-        lappend parts $testType
-    }
-    if {$newmarkCpu} {
-        lappend parts FullGeneral
-    } elseif {$folderSystemLabel ne ""} {
+    if {$folderSystemLabel ne ""} {
         lappend parts $folderSystemLabel
     }
     set paramsLabel [formatParamsLabel $integratorParams]
     return [format "%s_params-%s" [join $parts _] $paramsLabel]
 }
 
-set outputFolder [file join $scriptDir $resultsSubdir [buildOutputFolderName $integratorMethod $integratorParams $folderSystemLabel $newmarkCpu $numbererType $constrHandler $testType]]
+set outputFolder [file join $scriptDir $resultsSubdir [buildOutputFolderName $integratorMethod $integratorParams $folderSystemLabel $numbererType]]
+if {$outputFolderOverride ne ""} {
+    set outputFolder $outputFolderOverride
+}
 
 # --- units (match two_story_MRF.py) ---
 set kN 1.0
@@ -415,7 +369,7 @@ proc elementLineMass {rho} {
 }
 
 proc buildModel {} {
-    global meter sec kg GPa MPa inch foot lbf gravity kN massMode numbererType
+    global meter sec kg GPa MPa inch foot lbf gravity kN massMode numbererType pid
     if {$massMode == 0} {
         set elementMassOpts [list -cMass]
     } else {
@@ -574,15 +528,25 @@ proc buildModel {} {
         load 16 0.0 [expr -$Pfloor1] 0.0
     }
 
+    # Auto-partition before any analysis (METIS). All ranks built the full mesh.
+    partition
+    set localEles [lsort -integer [getEleTags]]
+    puts "PARTITION rank=$pid count=[llength $localEles] sample=[lrange $localEles 0 11]"
+
     wipeAnalysis
     applyConstraints
     numberer $numbererType
-    system FullGeneral
+    # Gravity uses Mumps on all ranks (cheap vs earthquake); transient may use DistCuDSS.
+    system Mumps
     test NormDispIncr 1.0e-6 10
     algorithm KrylovNewton
     integrator LoadControl [expr 1.0 / 10.0]
     analysis Static
-    analyze 10
+    set ok [analyze 10]
+    if {$ok != 0} {
+        puts "ERROR: gravity analysis failed on rank $pid, code=$ok"
+        exit 1
+    }
     loadConst -time 0.0
 }
 
@@ -607,32 +571,50 @@ proc setupRayleighDamping {} {
     set a0 [expr 2.0 * ($zeta_j * $omega_i - $zeta_i * $omega_j) * ($omega_j * $omega_i) / $denom]
     set a1 [expr 2.0 * ($zeta_i * $omega_i - $zeta_j * $omega_j) / $denom]
     rayleigh $a0 0.0 $a1 0.0
+    set localEles [getEleTags]
     foreach ele {1 2 5 6 9 10 13 14} {
-        setElementRayleighDampingFactors $ele $a0 0.0 0.0 0.0
+        if {[lsearch -exact $localEles $ele] >= 0} {
+            setElementRayleighDampingFactors $ele $a0 0.0 0.0 0.0
+        }
     }
 }
 
 proc runDynamicAnalysis {} {
-    global scriptDir gmFile gravity scaleFactor dtAnalysis freeVibrationSeconds
-    global integratorMethod integratorParams maxIter pFlag algo linearSOE cudssPrecision cudssIrNSteps numbererType testType
-    global outputFolder MONITOR_NODES MONITOR_DOFS sec
+    global scriptDir gmFile gravity scaleFactor dtAnalysis freeVibrationSeconds quickMode
+    global integratorMethod integratorParams maxIter pFlag algo linearSOE cudssPrecision cudssIrNSteps numbererType
+    global outputFolder sec pid np
 
-    file mkdir $outputFolder
+    if {$pid == 0} {
+        file mkdir $outputFolder
+        puts "OUTPUT_FOLDER $outputFolder"
+        flush stdout
+    }
+    barrier
+
     set gmDat [file join $outputFolder gm.dat]
     source [file join $scriptDir .. .. verification ReadRecord.tcl]
-    ReadRecord $gmFile $gmDat dtFile nPts
+    # Rank 0 converts AT2 once; others wait then reuse the same gm.dat.
+    if {$pid == 0} {
+        ReadRecord $gmFile $gmDat dtFile nPts
+        set metaFd [open [file join $outputFolder gm_meta.tcl] w]
+        puts $metaFd "set dtFile $dtFile"
+        puts $metaFd "set nPts $nPts"
+        close $metaFd
+    }
+    barrier
+    source [file join $outputFolder gm_meta.tcl]
 
     timeSeries Path 2 -filePath $gmDat -dt $dtFile -factor $gravity
     pattern UniformExcitation 2 1 -accel 2 -fact $scaleFactor
 
     wipeAnalysis
-    if {$linearSOE eq "CuDSS" && $cudssPrecision eq "dFFI"} {
+    if {$linearSOE eq "DistributedCuDSS" && $cudssPrecision eq "dFFI"} {
         if {$cudssIrNSteps > 0} {
-            eval system CuDSS -precision dFFI -irNSteps $cudssIrNSteps
-            set systemLog "CuDSS -precision dFFI -irNSteps $cudssIrNSteps"
+            eval system DistributedCuDSS -precision dFFI -irNSteps $cudssIrNSteps
+            set systemLog "DistributedCuDSS -precision dFFI -irNSteps $cudssIrNSteps"
         } else {
-            eval system CuDSS -precision dFFI
-            set systemLog "CuDSS -precision dFFI"
+            eval system DistributedCuDSS -precision dFFI
+            set systemLog "DistributedCuDSS -precision dFFI"
         }
     } else {
         system $linearSOE
@@ -640,103 +622,120 @@ proc runDynamicAnalysis {} {
     }
     applyConstraints
     numberer $numbererType
-    test $testType 1.0e-8 $maxIter $pFlag
+    test NormUnbalance 1.0e-8 $maxIter $pFlag
     algorithm $algo
     eval integrator $integratorMethod {*}$integratorParams
     analysis Transient
-
-    set resultsPath [file join $outputFolder results.txt]
-    set resultsFd [open $resultsPath a+]
-    set logPath [file join $outputFolder OpenSees.log]
-    logFile $logPath -noEcho
-
-    set currentTime [clock format [clock seconds] -format {%Y-%m-%d %H:%M:%S}]
-    puts $resultsFd "$currentTime - Analysis STARTED."
 
     set freeVibration [expr $freeVibrationSeconds * $sec]
     set motionSteps [expr int(round($nPts * $dtFile / $dtAnalysis))]
     set freeSteps [expr int(round($freeVibration / $dtAnalysis))]
     set nSteps [expr $motionSteps + $freeSteps]
+    if {$quickMode} {
+        # Short transient for MP smoke / backend agreement (~1 s of motion).
+        set nSteps [expr {int(round(1.0 / $dtAnalysis))}]
+        if {$nSteps > $motionSteps} { set nSteps $motionSteps }
+    }
     set tFinal [expr $nSteps * $dtAnalysis]
     set gmLogName [file tail $gmDat]
 
-    puts $resultsFd "$currentTime - Running $gmLogName (dt = $dtFile s, npts = $nPts) with dt_analysis = $dtAnalysis s, n_steps = $nSteps (t_end = $tFinal s), scale factor = $scaleFactor."
-    puts $resultsFd "$currentTime - test $testType 1.0e-8 $maxIter $pFlag; algorithm $algo; system $systemLog; integrator $integratorMethod $integratorParams."
-    close $resultsFd
-
-    foreach resp {disp vel accel} {
-        set outFile [file join $outputFolder ${resp}.out]
-        recorder Node -file $outFile -time -node 17 10 2 -dof 1 2 3 $resp
+    if {$pid == 0} {
+        set resultsPath [file join $outputFolder results.txt]
+        set resultsFd [open $resultsPath w]
+        set currentTime [clock format [clock seconds] -format {%Y-%m-%d %H:%M:%S}]
+        puts $resultsFd "$currentTime - Analysis STARTED (OpenSeesMP np=$np partition)."
+        puts $resultsFd "$currentTime - Running $gmLogName (dt = $dtFile s, npts = $nPts) with dt_analysis = $dtAnalysis s, n_steps = $nSteps (t_end = $tFinal s), scale factor = $scaleFactor, quick=$quickMode."
+        puts $resultsFd "$currentTime - test NormUnbalance 1.0e-8 $maxIter $pFlag; algorithm $algo; system $systemLog; integrator $integratorMethod $integratorParams; numberer $numbererType."
+        close $resultsFd
+        logFile [file join $outputFolder OpenSees.log] -noEcho
     }
-    set rayleighFile [file join $outputFolder rayleigh-forces.out]
-    recorder Node -file $rayleighFile -time -node 17 10 2 -dof 1 2 3 rayleighForces
-    set elemFile [file join $outputFolder element-1-forces.txt]
-    recorder Element -file $elemFile -time -ele 1 localForce
+
+    # Tip node 2 (roof beam) may be shared; each owning rank writes tip_disp.out.<pid>.
+    set ownsTip [expr {[lsearch -exact [getNodeTags] 2] >= 0}]
+    set tipFd ""
+    if {$ownsTip} {
+        set tipFd [open [file join $outputFolder tip_disp.out.$pid] w]
+        puts $tipFd "# time u2_x"
+    }
 
     set ok 0
     set step 0
+    set tipSumAbs 0.0
+    set tipFinal 0.0
+    set tipCount 0
     set tWall0 [clock milliseconds]
-    set convPath [file join $outputFolder convergence.dat]
-    set convFd [open $convPath w]
-    puts $convFd "# time iters final_norm"
     while {$ok == 0 && $step < $nSteps} {
         set ok [analyze 1 $dtAnalysis]
-        if {$ok != 0 && $maxIter > 1} {
-            puts "$algo failed .. trying ModifiedNewton -initial"
-            test $testType 1.0e-8 [expr $maxIter * 100] $pFlag
-            algorithm ModifiedNewton -initial
-            set ok [analyze 1 $dtAnalysis]
-            if {$ok == 0} {
-                puts "that worked .. back to $algo"
-                test NormUnbalance 1.0e-8 $maxIter $pFlag
-                algorithm $algo
-            }
-        }
-        if {$ok == 0} {
-            set iters [testIter]
-            set norms [testNorms]
+        if {$ok == 0 && $ownsTip} {
+            set uTip [nodeDisp 2 1]
             set tStep [getTime]
-            puts $convFd "$tStep $iters [finalNorm $iters $norms]"
+            puts $tipFd "$tStep $uTip"
+            set tipSumAbs [expr {$tipSumAbs + abs($uTip)}]
+            set tipFinal $uTip
+            incr tipCount
         }
         incr step
     }
-    close $convFd
+    if {$tipFd ne ""} {
+        close $tipFd
+    }
 
     set wallTime [expr {([clock milliseconds] - $tWall0) / 1000.0}]
-    set timingPath [file join $outputFolder timing.txt]
-    set timingFd [open $timingPath w]
-    set currentTime [clock format [clock seconds] -format {%Y-%m-%d %H:%M:%S}]
-    puts $timingFd "# $currentTime"
-    puts $timingFd "label transient"
-    puts $timingFd "wall_time_s $wallTime"
-    close $timingFd
+    barrier
 
-    set resultsFd [open $resultsPath a+]
-    set currentTime [clock format [clock seconds] -format {%Y-%m-%d %H:%M:%S}]
-    if {$ok == 0} {
-        puts $resultsFd "$currentTime - Analysis COMPLETED successfully."
-        puts $resultsFd "$currentTime - transient wall time: $wallTime s"
-        puts "Passed!"
-    } else {
-        puts $resultsFd "$currentTime - Analysis FAILED at time t = [getTime] s"
-        puts $resultsFd "$currentTime - transient wall time: $wallTime s"
-        puts "Failed!"
+    if {$ownsTip} {
+        set summaryPath [file join $outputFolder tip_summary.$pid.txt]
+        set sFd [open $summaryPath w]
+        puts $sFd "pid $pid"
+        puts $sFd "tip_final $tipFinal"
+        puts $sFd "tip_sumabs $tipSumAbs"
+        puts $sFd "tip_count $tipCount"
+        puts $sFd "n_steps $step"
+        puts $sFd "ok $ok"
+        puts $sFd "wall_time_s $wallTime"
+        close $sFd
+        puts [format "RESULT tip pid=%d tip_final=%.16e tip_sumabs=%.16e tip_count=%d n_steps=%d ok=%d" \
+            $pid $tipFinal $tipSumAbs $tipCount $step $ok]
     }
-    close $resultsFd
 
-    remove recorders
+    if {$pid == 0} {
+        set resultsPath [file join $outputFolder results.txt]
+        set resultsFd [open $resultsPath a+]
+        set currentTime [clock format [clock seconds] -format {%Y-%m-%d %H:%M:%S}]
+        set timingPath [file join $outputFolder timing.txt]
+        set timingFd [open $timingPath w]
+        puts $timingFd "# $currentTime"
+        puts $timingFd "label transient"
+        puts $timingFd "wall_time_s $wallTime"
+        close $timingFd
+        if {$ok == 0} {
+            puts $resultsFd "$currentTime - Analysis COMPLETED successfully."
+            puts $resultsFd "$currentTime - transient wall time: $wallTime s"
+            puts "Passed!"
+        } else {
+            puts $resultsFd "$currentTime - Analysis FAILED at time t = [getTime] s"
+            puts $resultsFd "$currentTime - transient wall time: $wallTime s"
+            puts "Failed!"
+        }
+        close $resultsFd
+    }
+
+    if {$ok != 0} {
+        exit 1
+    }
 }
 
 buildModel
 setupRayleighDamping
 runDynamicAnalysis
 
-puts "Output folder: $outputFolder"
-foreach f {disp.out vel.out accel.out rayleigh-forces.out element-1-forces.txt} {
-    set path [file join $outputFolder $f]
-    if {[file exists $path]} {
-        puts "  $f: [file size $path] bytes"
-    } else {
-        puts "  $f: missing"
+if {$pid == 0} {
+    puts "OUTPUT_FOLDER $outputFolder"
+    puts "Output folder: $outputFolder"
+    foreach f [glob -nocomplain [file join $outputFolder tip_disp.out.*]] {
+        puts "  [file tail $f]: [file size $f] bytes"
     }
 }
+
+wipe
+exit 0

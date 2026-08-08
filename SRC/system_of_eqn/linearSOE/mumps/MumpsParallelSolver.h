@@ -63,6 +63,8 @@ class MumpsParallelSolver : public LinearSOESolver
 		      int ICNTL14);
 
   virtual ~MumpsParallelSolver();
+
+  LinearSOESolver *getCopy(void) const override;
   
   int solve(void);
   int setSize(void);

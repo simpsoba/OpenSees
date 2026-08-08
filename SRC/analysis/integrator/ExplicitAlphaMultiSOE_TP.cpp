@@ -367,8 +367,7 @@ ExplicitAlphaMultiSOE_TP::formUnbalance()
         return -3;
 
     if (areAlphaMFClose()) {
-        soeA->zeroB();
-        if (soeA->setB(*Phat) < 0) {
+        if (setGlobalRhs(soeA, *Phat) < 0) {
             opserr << "WARNING ExplicitAlphaMultiSOE_TP::formUnbalance() - setB failed (proportional path)\n";
             return -6;
         }
@@ -387,8 +386,7 @@ ExplicitAlphaMultiSOE_TP::formUnbalance()
         return -5;
     }
 
-    soeA->zeroB();
-    if (soeA->setB(*w3) < 0) {
+    if (setGlobalRhs(soeA, *w3) < 0) {
         opserr << "WARNING ExplicitAlphaMultiSOE_TP::formUnbalance() - setB failed\n";
         return -6;
     }

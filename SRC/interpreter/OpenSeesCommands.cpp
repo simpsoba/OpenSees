@@ -162,6 +162,7 @@ ops_soeNeedsBarrierCheck(LinearSOE *soe)
 #endif
 #include <ID.h>
 #include <Channel.h>
+#include <ExplicitAlphaMultiSOE.h>
 
 // Channel barrier for Domain local status when needsBarrierCheck (collective SOE).
 // Lives here (not Domain.cpp): OPS_Domain is built without _PARALLEL_INTERPRETERS.
@@ -357,6 +358,22 @@ OpenSeesCommands::setSOE(LinearSOE* soe)
     }
     if (theTransientAnalysis != 0) {
 	theTransientAnalysis->setLinearSOE(*soe);
+#ifdef _PARALLEL_INTERPRETERS
+	if (ExplicitAlphaMultiSOE *multi = dynamic_cast<ExplicitAlphaMultiSOE *>(theTransientIntegrator)) {
+	  int pid = -1;
+	  if (soe != 0) {
+	    int t = soe->getClassTag();
+	    if (t == LinSOE_TAGS_MumpsParallelSOE ||
+	        t == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+	        t == LinSOE_TAGS_DistributedCudaBcsrLinSOE) {
+	      MachineBroker *broker = this->getMachineBroker();
+	      if (broker != 0)
+	        pid = broker->getPID();
+	    }
+	  }
+	  multi->setProcessID(pid);
+	}
+#endif
     }
 }
 
@@ -647,6 +664,22 @@ OpenSeesCommands::setTransientIntegrator(TransientIntegrator* integrator)
     // set in analysis object
     if (theTransientAnalysis != 0) {
 	theTransientAnalysis->setIntegrator(*integrator);
+#ifdef _PARALLEL_INTERPRETERS
+	if (ExplicitAlphaMultiSOE *multi = dynamic_cast<ExplicitAlphaMultiSOE *>(theTransientIntegrator)) {
+	  int pid = -1;
+	  if (theSOE != 0) {
+	    int t = theSOE->getClassTag();
+	    if (t == LinSOE_TAGS_MumpsParallelSOE ||
+	        t == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+	        t == LinSOE_TAGS_DistributedCudaBcsrLinSOE) {
+	      MachineBroker *broker = this->getMachineBroker();
+	      if (broker != 0)
+	        pid = broker->getPID();
+	    }
+	  }
+	  multi->setProcessID(pid);
+	}
+#endif
     }
 }
 
@@ -1051,6 +1084,20 @@ OpenSeesCommands::setTransientAnalysis(bool suppress)
 	theTransientAnalysis->setEigenSOE(*theEigenSOE);
     }
 #ifdef _PARALLEL_INTERPRETERS
+	if (ExplicitAlphaMultiSOE *multi = dynamic_cast<ExplicitAlphaMultiSOE *>(theTransientIntegrator)) {
+	  int pid = -1;
+	  if (theSOE != 0) {
+	    int t = theSOE->getClassTag();
+	    if (t == LinSOE_TAGS_MumpsParallelSOE ||
+	        t == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+	        t == LinSOE_TAGS_DistributedCudaBcsrLinSOE) {
+	      MachineBroker *broker = this->getMachineBroker();
+	      if (broker != 0)
+	        pid = broker->getPID();
+	    }
+	  }
+	  multi->setProcessID(pid);
+	}
 	if (setMPIDSOEFlag) {
 	  ((MPIDiagonalSOE*) theSOE)->setAnalysisModel(*theAnalysisModel);
 	}

@@ -66,6 +66,12 @@ ProfileSPDLinDirectSolver::~ProfileSPDLinDirectSolver()
     if (invD != 0) delete [] invD;
 }
 
+LinearSOESolver *
+ProfileSPDLinDirectSolver::getCopy(void) const
+{
+    return new ProfileSPDLinDirectSolver(minDiagTol);
+}
+
 int
 ProfileSPDLinDirectSolver::setSize(void)
 {

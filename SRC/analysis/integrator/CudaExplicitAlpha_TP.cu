@@ -32,6 +32,7 @@
 
 #include <CudaExplicitAlpha_TP.h>
 #include <CudaBcsrLinSOE.h>
+#include <DistributedCudaBcsrLinSOE.h>
 #include <AnalysisModel.h>
 #include <Channel.h>
 #include <DOF_Group.h>
@@ -348,6 +349,7 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         const double bdt2 = integrator->beta * integrator->deltaT * integrator->deltaT;
         const double gdt = integrator->gamma * integrator->deltaT;
         const bool areClose = integrator->areAlphaMFClose();
+
         const int numRhs = areClose ? 1 : 2;
         ensureAlphaBuffers(numRhs);
 
@@ -367,7 +369,6 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         void *solAlpha1 = thrust::raw_pointer_cast(d_alphaSol.data());
 
         // --- Mass operator M ---
-        cudaSOE->zeroA();
         if (integrator->formTangentIntoSOE(INITIAL_TANGENT, 0.0, 0.0, 1.0) != 0) {
             return -1;
         }
@@ -377,7 +378,6 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         }
 
         // --- alpha = beta*dt^2*K + gamma*dt*C + M (predictor + RHS transform) ---
-        cudaSOE->zeroA();
         if (integrator->formTangentIntoSOE(INITIAL_TANGENT, bdt2, gdt, 1.0) != 0) {
             return -3;
         }
@@ -402,13 +402,12 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         }
 
         // --- A on primary SOE (SpMV for alpha_3 when alphaM != alphaF) ---
-        cudaSOE->zeroA();
         if (areClose) {
             if (integrator->formTangentIntoSOE(INITIAL_TANGENT, 0.0, 0.0, integrator->alphaM) != 0) {
                 return -5;
             }
         } else if (integrator->formTangentIntoSOE(INITIAL_TANGENT, integrator->alphaF * bdt2,
-                                                  integrator->alphaF * gdt, integrator->alphaM) != 0) {
+                                                   integrator->alphaF * gdt, integrator->alphaM) != 0) {
             return -5;
         }
         cudaSOE->syncAValuesToDevice();
@@ -596,7 +595,44 @@ void CudaExplicitAlpha_TP::ensureDeviceImpl(CudaBcsrLinSOE *cudaSOE)
 
 int CudaExplicitAlpha_TP::formOperators(CudaBcsrLinSOE *cudaSOE)
 {
-    return m_impl->formOperators(this, cudaSOE);
+    const double bdt2 = beta * deltaT * deltaT;
+    const double gdt = gamma * deltaT;
+    const bool areClose = areAlphaMFClose();
+    auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE());
+
+    if (!cudaSOE->isCudaDeviceEnabled()) {
+        if (formTangentIntoSOE(INITIAL_TANGENT, 0.0, 0.0, 1.0) != 0)
+            return -1;
+        if (formTangentIntoSOE(INITIAL_TANGENT, bdt2, gdt, 1.0) != 0)
+            return -3;
+        if (areClose) {
+            if (formTangentIntoSOE(INITIAL_TANGENT, 0.0, 0.0, alphaM) != 0)
+                return -5;
+        } else if (formTangentIntoSOE(INITIAL_TANGENT, alphaF * bdt2, alphaF * gdt, alphaM) != 0) {
+            return -5;
+        }
+        if (distSOE != nullptr) {
+            Vector status(1);
+            if (distSOE->broadcastFromRoot(status) < 0)
+                return -6;
+            if (status(0) < 0.0) {
+                opserr << "ERROR CudaExplicitAlpha_TP::formOperators - rank 0 GPU operator build failed\n";
+                return -6;
+            }
+        }
+        return 0;
+    }
+
+    if (m_impl == nullptr)
+        return -1;
+    const int rc = m_impl->formOperators(this, cudaSOE);
+    if (distSOE != nullptr) {
+        Vector status(1);
+        status(0) = (rc == 0) ? 1.0 : -1.0;
+        if (distSOE->broadcastFromRoot(status) < 0)
+            return -6;
+    }
+    return rc;
 }
 
 namespace {
@@ -798,12 +834,16 @@ int CudaExplicitAlpha_TP::validateCudaSOE(CudaBcsrLinSOE *&cudaSOE) const
 {
     LinearSOE *soe = this->getLinearSOE();
     if (soe == nullptr) {
-        opserr << "ERROR CudaExplicitAlpha_TP - no LinearSOE linked; use `system CuDSS`.\n";
+        opserr << "ERROR CudaExplicitAlpha_TP - no LinearSOE linked; use `system CuDSS` or `system DistributedCuDSS`.\n";
         return -1;
     }
     cudaSOE = dynamic_cast<CudaBcsrLinSOE *>(soe);
+    if (cudaSOE == nullptr) {
+        if (auto *dist = dynamic_cast<DistributedCudaBcsrLinSOE *>(soe))
+            cudaSOE = dist->getCudaBcsrLinSOE();
+    }
     if (cudaSOE == nullptr || cudaSOE->getBlockSize() != 1 || cudaSOE->getCudaBcsrLinSolver() == nullptr) {
-        opserr << "ERROR CudaExplicitAlpha_TP (CudaKRAlpha_TP/CudaMKRAlpha_TP) requires `system CuDSS`.\n";
+        opserr << "ERROR CudaExplicitAlpha_TP (CudaKRAlpha_TP/CudaMKRAlpha_TP) requires `system CuDSS` or `system DistributedCuDSS`.\n";
         return -2;
     }
     if (!isUniformPrecision(cudaSOE->getPrecision())) {
@@ -820,11 +860,24 @@ int CudaExplicitAlpha_TP::formTangentIntoSOE(int statFlag, double c1v, double c2
     if (this->getAnalysisModel() == nullptr) {
         return -1;
     }
+    LinearSOE *soe = this->getLinearSOE();
+    if (soe == nullptr) {
+        return -1;
+    }
+    soe->zeroA();
     statusFlag = statFlag;
     c1 = c1v;
     c2 = c2v;
     c3 = c3v;
-    return this->TransientIntegrator::formTangent(statFlag);
+    if (this->TransientIntegrator::formTangent(statFlag) != 0) {
+        return -1;
+    }
+    if (auto *dist = dynamic_cast<DistributedCudaBcsrLinSOE *>(soe)) {
+        if (dist->ensureMergedA() != 0) {
+            return -1;
+        }
+    }
+    return 0;
 }
 
 int CudaExplicitAlpha_TP::formTangent(int statFlag)
@@ -891,19 +944,28 @@ int CudaExplicitAlpha_TP::domainChanged()
         return 0;
     }
 
-    ensureDeviceImpl(cudaSOE);
-    cudaSOE->setXSyncMode(false);  // keep X on device between solve and updateState
-
-    m_impl->destroySolvers();
-    m_impl->allocate(size, areAlphaMFClose() ? 1 : 2);
-    const ImplBase::HostMotionPtrs buf = m_impl->ensureHostMotionBuffers(size);
-    Ut->setData(buf.Ut, size);
-    Utdot->setData(buf.Utdot, size);
-    Utdotdot->setData(buf.Utdotdot, size);
-    U->setData(buf.U, size);
-    Udot->setData(buf.Udot, size);
-    Udotdot->setData(buf.Uddot, size);
-    Put->setData(m_impl->getPutHostPtr(), size);  // *Put aliases pinned h_put
+    const bool deviceOn = cudaSOE->isCudaDeviceEnabled();
+    if (deviceOn) {
+        ensureDeviceImpl(cudaSOE);
+        cudaSOE->setXSyncMode(false);
+        m_impl->destroySolvers();
+        m_impl->allocate(size, areAlphaMFClose() ? 1 : 2);
+        const ImplBase::HostMotionPtrs buf = m_impl->ensureHostMotionBuffers(size);
+        Ut->setData(buf.Ut, size);
+        Utdot->setData(buf.Utdot, size);
+        Utdotdot->setData(buf.Utdotdot, size);
+        U->setData(buf.U, size);
+        Udot->setData(buf.Udot, size);
+        Udotdot->setData(buf.Uddot, size);
+        Put->setData(m_impl->getPutHostPtr(), size);
+    } else {
+        destroyDeviceImpl();
+        Ut->resize(size); Utdot->resize(size); Utdotdot->resize(size);
+        U->resize(size); Udot->resize(size); Udotdot->resize(size);
+        Put->resize(size);
+        Ut->Zero(); Utdot->Zero(); Utdotdot->Zero();
+        U->Zero(); Udot->Zero(); Udotdot->Zero(); Put->Zero();
+    }
     operatorsBuilt = false;
 
     AnalysisModel *theModel = this->getAnalysisModel();
@@ -949,13 +1011,21 @@ int CudaExplicitAlpha_TP::newStep(double _deltaT)
     if (validateCudaSOE(cudaSOE) != 0) {
         return -3;
     }
-    ensureDeviceImpl(cudaSOE);
-    if (m_impl == nullptr) {
+    auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE());
+    const bool deviceOn = cudaSOE->isCudaDeviceEnabled();
+    if (deviceOn) {
+        ensureDeviceImpl(cudaSOE);
+        if (m_impl == nullptr) {
+            opserr << "ERROR CudaExplicitAlpha_TP::newStep() - GPU state not initialized; "
+                   << "rebuild analysis with `system CuDSS`.\n";
+            return -2;
+        }
+        cudaSOE->setXSyncMode(false);
+    } else if (distSOE == nullptr) {
         opserr << "ERROR CudaExplicitAlpha_TP::newStep() - GPU state not initialized; "
                << "rebuild analysis with `system CuDSS`.\n";
         return -2;
     }
-    cudaSOE->setXSyncMode(false);
 
     *Ut = *U;
     *Utdot = *Udot;
@@ -983,11 +1053,29 @@ int CudaExplicitAlpha_TP::newStep(double _deltaT)
     if (TransientIntegrator::formUnbalance() < 0) {
         return -6;
     }
-    if (m_impl->capturePutFromDeviceB(cudaSOE) != 0) {
+    if (distSOE != nullptr) {
+        if (distSOE->mergeBToRoot() < 0)
+            return -6;
+        if (distSOE->getProcessID() != 0)
+            distSOE->zeroB();
+        else if (m_impl->capturePutFromDeviceB(cudaSOE) != 0)
+            return -6;
+    } else if (m_impl->capturePutFromDeviceB(cudaSOE) != 0) {
         return -6;
     }
 
-    if (m_impl->newStepPredictor(this) != 0) {
+    if (deviceOn) {
+        if (m_impl->newStepPredictor(this) != 0) {
+            return -7;
+        }
+    }
+    if (distSOE != nullptr) {
+        if (distSOE->broadcastFromRoot(*U) < 0 ||
+            distSOE->broadcastFromRoot(*Udot) < 0 ||
+            distSOE->broadcastFromRoot(*Udotdot) < 0) {
+            return -7;
+        }
+    } else if (!deviceOn) {
         return -7;
     }
 
@@ -1005,20 +1093,43 @@ int CudaExplicitAlpha_TP::newStep(double _deltaT)
         return -9;
     }
 
-    m_impl->blendPutFromHostB(cudaSOE, 1.0 - alphaF, alphaF);
+    if (distSOE != nullptr) {
+        if (distSOE->mergeBToRoot() < 0)
+            return -9;
+        if (distSOE->getProcessID() != 0)
+            distSOE->zeroB();
+        else
+            m_impl->blendPutFromHostB(cudaSOE, 1.0 - alphaF, alphaF);
+    } else {
+        m_impl->blendPutFromHostB(cudaSOE, 1.0 - alphaF, alphaF);
+    }
     return 0;
 }
 
 int CudaExplicitAlpha_TP::formUnbalance()
 {
-    if (m_impl == nullptr) {
-        return -1;
-    }
     CudaBcsrLinSOE *cudaSOE = nullptr;
     if (validateCudaSOE(cudaSOE) != 0) {
         return -2;
     }
-    // Uses blended Put from newStep(); does not re-assemble equilibrium residual.
+    auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE());
+    if (distSOE != nullptr) {
+        if (distSOE->getProcessID() != 0) {
+            distSOE->zeroB();
+            return 0;
+        }
+        if (m_impl == nullptr || !cudaSOE->isCudaDeviceEnabled())
+            return -1;
+        const int rc = m_impl->formUnbalanceFromPut(cudaSOE, areAlphaMFClose());
+        if (rc != 0)
+            return rc;
+        cudaSOE->syncBToHost();
+        if (distSOE->setB(cudaSOE->getHostBVector()) < 0)
+            return -2;
+        return 0;
+    }
+    if (m_impl == nullptr)
+        return -1;
     return m_impl->formUnbalanceFromPut(cudaSOE, areAlphaMFClose());
 }
 
@@ -1029,15 +1140,24 @@ int CudaExplicitAlpha_TP::update(const Vector &aiPlusOne)
         return -1;  // linear algorithm only
     }
     AnalysisModel *theModel = this->getAnalysisModel();
-    if (theModel == nullptr || U->Size() <= 0 || aiPlusOne.Size() != U->Size() || m_impl == nullptr) {
+    if (theModel == nullptr || U->Size() <= 0 || aiPlusOne.Size() != U->Size()) {
         return -2;
     }
     CudaBcsrLinSOE *cudaSOE = nullptr;
     if (validateCudaSOE(cudaSOE) != 0) {
         return -4;
     }
-    if (m_impl->updateState(cudaSOE, incrementalAccel, alphaF) != 0) {
-        return -4;
+    if (cudaSOE->isCudaDeviceEnabled()) {
+        if (m_impl == nullptr || m_impl->updateState(cudaSOE, incrementalAccel, alphaF) != 0) {
+            return -4;
+        }
+    } else {
+        // Worker: X already broadcast on host by DistributedCudaBcsrLinSOE::solve.
+        if (incrementalAccel) {
+            Udotdot->addVector(alphaF, aiPlusOne, 1.0);
+        } else {
+            *Udotdot = aiPlusOne;
+        }
     }
     theModel->setAccel(*Udotdot);
     if (theModel->updateDomain() < 0) {

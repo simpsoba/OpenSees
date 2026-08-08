@@ -18,7 +18,4 @@ namespace ParameterUtils {
     }
 }
 
-// Process count for CuDSS parsing. With MPI, uses MPI_Comm_size; otherwise 1.
-int getNumProcesses();
-
 #endif // ParameterUtils_h

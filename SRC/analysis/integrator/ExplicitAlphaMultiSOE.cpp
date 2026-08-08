@@ -210,7 +210,8 @@ ExplicitAlphaMultiSOE::ExplicitAlphaMultiSOE(int classTag, double _alphaF, doubl
       Phat(nullptr),
       w1(nullptr),
       w2(nullptr),
-      w3(nullptr)
+      w3(nullptr),
+      processID(-1)
 {
 }
 
@@ -338,12 +339,27 @@ ExplicitAlphaMultiSOE::formTangentOnSOE(LinearSOE &target, int statFlag, double 
 
 
 int
-ExplicitAlphaMultiSOE::linearSolve(LinearSOE *soe, const Vector &b, Vector &x) const
+ExplicitAlphaMultiSOE::setGlobalRhs(LinearSOE *soe, const Vector &b) const
 {
     if (soe == nullptr)
         return -1;
     soe->zeroB();
+    // Gather-add SOEs sum myB across ranks in solve(). A global RHS that already
+    // lives on every rank must be installed only on P0 (Woodbury/Arpack pattern).
+    if (processID > 0)
+        return 0;
     if (soe->setB(b) < 0)
+        return -2;
+    return 0;
+}
+
+
+int
+ExplicitAlphaMultiSOE::linearSolve(LinearSOE *soe, const Vector &b, Vector &x) const
+{
+    if (soe == nullptr)
+        return -1;
+    if (setGlobalRhs(soe, b) < 0)
         return -2;
     if (soe->solve() < 0)
         return -3;
@@ -689,8 +705,7 @@ ExplicitAlphaMultiSOE::formUnbalance()
     if (applyOperator(soeAlpha, *w2, *w3) != 0)
         return -5;
 
-    soeA->zeroB();
-    if (soeA->setB(*w3) < 0)
+    if (setGlobalRhs(soeA, *w3) < 0)
         return -6;
 
     return 0;

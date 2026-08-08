@@ -69,6 +69,9 @@ class DistributedProfileSPDLinSOE : public ProfileSPDLinSOE
     int setProcessID(int processTag);
     int setChannels(int numChannels, Channel **theChannels);
 
+    int formAp(const Vector &p, Vector &Ap) override;
+    LinearSOE *getCopy(void) const override;
+
   protected:
     
   private:

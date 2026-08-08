@@ -63,8 +63,20 @@ public:
 
     int setProcessID(int processTag);
     int setChannels(int numChannels, Channel **theChannels);
+    int getProcessID(void) const { return processID; }
 
     CudaBcsrLinSOE *getCudaBcsrLinSOE(void) { return theCudaSOE; }
+
+    /** Gather worker triplets into rank-0 host A (no solve). Safe to call repeatedly
+     *  after workers' maps have been cleared. Leaves MatrixStatus unchanged so a later
+     *  solve still refactorizes. */
+    int ensureMergedA(void);
+
+    /** Collective: P0 sends \a v, workers overwrite \a v with the received values. */
+    int broadcastFromRoot(Vector &v);
+
+    /** Collective merge of local myB into rank-0 host B (same protocol as getB/solve). */
+    int mergeBToRoot(void);
 
 protected:
 
@@ -78,6 +90,10 @@ private:
     int addAWorker(const Matrix &m, const ID &id, double fact);
     int buildMergeIndexMap(void);
     int mergeTripletsIntoA(const int *rows, const int *cols, const double *vals, int nTrip);
+    /** Worker side of ensureMergedA / formAp triplet transfer. */
+    int sendPendingTriplets(Channel *theChannel);
+    /** Rank-0 side: recv+merge from all workers. */
+    int recvAndMergeTriplets(void);
 
     CudaBcsrLinSOE *theCudaSOE;
 
