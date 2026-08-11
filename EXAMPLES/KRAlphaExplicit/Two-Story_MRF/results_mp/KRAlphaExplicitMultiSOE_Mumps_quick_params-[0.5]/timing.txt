@@ -1,0 +1,3 @@
+# 2026-08-02 20:32:54
+label transient
+wall_time_s 0.428

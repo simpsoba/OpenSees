@@ -1,0 +1,7 @@
+pid 1
+tip_final             -0.18270326162185407393
+tip_sumabs 737.1287051306952
+tip_count 4998
+n_steps 4998
+ok 0
+wall_time_s 6.249

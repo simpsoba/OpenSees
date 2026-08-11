@@ -1,0 +1,157 @@
+== SERIAL dense_KR: KRAlphaExplicit 0.5 3.0
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (47db3a6db4d526785d0863a24dc3cbaec2778eb2)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+OK dense_KR
+== SERIAL dense_MKR: MKRAlphaExplicit 0.5 3.0
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (47db3a6db4d526785d0863a24dc3cbaec2778eb2)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+OK dense_MKR
+== SERIAL dense_KR_TP: KRAlphaExplicit_TP 0.5 3.0
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (47db3a6db4d526785d0863a24dc3cbaec2778eb2)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+OK dense_KR_TP
+== SERIAL dense_MKR_TP: MKRAlphaExplicit_TP 0.5 3.0
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (47db3a6db4d526785d0863a24dc3cbaec2778eb2)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+OK dense_MKR_TP
+== SERIAL multi_KR_Umf: KRAlphaExplicitMultiSOE 0.5 3.0 -system UmfPack
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (47db3a6db4d526785d0863a24dc3cbaec2778eb2)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+OK multi_KR_Umf
+== SERIAL multi_MKR_Umf: MKRAlphaExplicitMultiSOE 0.5 3.0 -system UmfPack
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (47db3a6db4d526785d0863a24dc3cbaec2778eb2)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+OK multi_MKR_Umf
+== SERIAL multi_KR_TP_Umf: KRAlphaExplicitMultiSOE_TP 0.5 3.0 -system UmfPack
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (47db3a6db4d526785d0863a24dc3cbaec2778eb2)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+OK multi_KR_TP_Umf
+== SERIAL multi_MKR_TP_Umf: MKRAlphaExplicitMultiSOE_TP 0.5 3.0 -system UmfPack
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (47db3a6db4d526785d0863a24dc3cbaec2778eb2)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+OK multi_MKR_TP_Umf
+== SERIAL cuda_KR: CudaKRAlpha 0.5 3.0
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (47db3a6db4d526785d0863a24dc3cbaec2778eb2)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+OK cuda_KR
+== SERIAL cuda_MKR: CudaMKRAlpha 0.5 3.0
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (47db3a6db4d526785d0863a24dc3cbaec2778eb2)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+OK cuda_MKR
+== SERIAL cuda_KR_TP: CudaKRAlpha_TP 0.5 3.0
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (47db3a6db4d526785d0863a24dc3cbaec2778eb2)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+OK cuda_KR_TP
+== SERIAL cuda_MKR_TP: CudaMKRAlpha_TP 0.5 3.0
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (47db3a6db4d526785d0863a24dc3cbaec2778eb2)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+OK cuda_MKR_TP
+ALL_SERIAL_DONE

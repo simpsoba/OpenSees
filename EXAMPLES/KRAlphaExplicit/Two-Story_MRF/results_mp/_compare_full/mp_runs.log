@@ -1,0 +1,262 @@
+== OpenSeesMP MRF sandbox  np=2 rho=0.5 scale=3.0 quick=0 cases=all
+   binary: /home/garaujor/OpenSees-CUDA/build-mp/Release/OpenSeesMP
+
+-- KRAlphaExplicitMultiSOE_Mumps: integrator=KRAlphaExplicitMultiSOE system=Mumps
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (11ab4e327636a5cf49ad6f72f28406d4a8af02f1)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+PARTITION rank=0 count=15 sample=5 6 11 12 13 14 24 25 26 27 28 29
+PARTITION rank=1 count=17 sample=1 2 3 4 9 10 15 16 17 18 19 20
+OUTPUT_FOLDER /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/KRAlphaExplicitMultiSOE_Mumps
+RESULT tip pid=1 tip_final=-1.8270326162185407e-01 tip_sumabs=7.3712870513069515e+02 tip_count=4998 n_steps=4998 ok=0
+Process Terminating
+Process Terminating
+   captured tip history -> /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/KRAlphaExplicitMultiSOE_Mumps.tip
+
+-- KRAlphaExplicitMultiSOE_DistCuDSS: integrator=KRAlphaExplicitMultiSOE system=DistributedCuDSS
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (11ab4e327636a5cf49ad6f72f28406d4a8af02f1)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+PARTITION rank=0 count=15 sample=5 6 11 12 13 14 24 25 26 27 28 29
+PARTITION rank=1 count=17 sample=1 2 3 4 9 10 15 16 17 18 19 20
+OUTPUT_FOLDER /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/KRAlphaExplicitMultiSOE_DistCuDSS
+RESULT tip pid=1 tip_final=-1.8270326162160649e-01 tip_sumabs=7.3712870512974814e+02 tip_count=4998 n_steps=4998 ok=0
+Process Terminating
+Process Terminating
+   captured tip history -> /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/KRAlphaExplicitMultiSOE_DistCuDSS.tip
+
+-- MKRAlphaExplicitMultiSOE_Mumps: integrator=MKRAlphaExplicitMultiSOE system=Mumps
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (11ab4e327636a5cf49ad6f72f28406d4a8af02f1)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+PARTITION rank=0 count=15 sample=5 6 11 12 13 14 24 25 26 27 28 29
+PARTITION rank=1 count=17 sample=1 2 3 4 9 10 15 16 17 18 19 20
+OUTPUT_FOLDER /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/MKRAlphaExplicitMultiSOE_Mumps
+RESULT tip pid=1 tip_final=-1.9113060305105689e-01 tip_sumabs=7.6516184782549249e+02 tip_count=4998 n_steps=4998 ok=0
+Process Terminating
+Process Terminating
+   captured tip history -> /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/MKRAlphaExplicitMultiSOE_Mumps.tip
+
+-- MKRAlphaExplicitMultiSOE_DistCuDSS: integrator=MKRAlphaExplicitMultiSOE system=DistributedCuDSS
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (11ab4e327636a5cf49ad6f72f28406d4a8af02f1)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+PARTITION rank=0 count=15 sample=5 6 11 12 13 14 24 25 26 27 28 29
+PARTITION rank=1 count=17 sample=1 2 3 4 9 10 15 16 17 18 19 20
+OUTPUT_FOLDER /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/MKRAlphaExplicitMultiSOE_DistCuDSS
+RESULT tip pid=1 tip_final=-1.9113060305081597e-01 tip_sumabs=7.6516184782448317e+02 tip_count=4998 n_steps=4998 ok=0
+Process Terminating
+Process Terminating
+   captured tip history -> /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/MKRAlphaExplicitMultiSOE_DistCuDSS.tip
+
+-- KRAlphaExplicitMultiSOE_TP_Mumps: integrator=KRAlphaExplicitMultiSOE_TP system=Mumps
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (11ab4e327636a5cf49ad6f72f28406d4a8af02f1)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+PARTITION rank=0 count=15 sample=5 6 11 12 13 14 24 25 26 27 28 29
+PARTITION rank=1 count=17 sample=1 2 3 4 9 10 15 16 17 18 19 20
+OUTPUT_FOLDER /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/KRAlphaExplicitMultiSOE_TP_Mumps
+RESULT tip pid=1 tip_final=-1.8266347020098520e-01 tip_sumabs=7.3701100859424423e+02 tip_count=4998 n_steps=4998 ok=0
+Process Terminating
+Process Terminating
+   captured tip history -> /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/KRAlphaExplicitMultiSOE_TP_Mumps.tip
+
+-- KRAlphaExplicitMultiSOE_TP_DistCuDSS: integrator=KRAlphaExplicitMultiSOE_TP system=DistributedCuDSS
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (11ab4e327636a5cf49ad6f72f28406d4a8af02f1)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+PARTITION rank=0 count=15 sample=5 6 11 12 13 14 24 25 26 27 28 29
+PARTITION rank=1 count=17 sample=1 2 3 4 9 10 15 16 17 18 19 20
+OUTPUT_FOLDER /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/KRAlphaExplicitMultiSOE_TP_DistCuDSS
+RESULT tip pid=1 tip_final=-1.8266347020149656e-01 tip_sumabs=7.3701100859599057e+02 tip_count=4998 n_steps=4998 ok=0
+Process Terminating
+Process Terminating
+   captured tip history -> /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/KRAlphaExplicitMultiSOE_TP_DistCuDSS.tip
+
+-- MKRAlphaExplicitMultiSOE_TP_Mumps: integrator=MKRAlphaExplicitMultiSOE_TP system=Mumps
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (11ab4e327636a5cf49ad6f72f28406d4a8af02f1)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+PARTITION rank=0 count=15 sample=5 6 11 12 13 14 24 25 26 27 28 29
+PARTITION rank=1 count=17 sample=1 2 3 4 9 10 15 16 17 18 19 20
+OUTPUT_FOLDER /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/MKRAlphaExplicitMultiSOE_TP_Mumps
+RESULT tip pid=1 tip_final=-1.9120361675903458e-01 tip_sumabs=7.6548295190418139e+02 tip_count=4998 n_steps=4998 ok=0
+Process Terminating
+Process Terminating
+   captured tip history -> /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/MKRAlphaExplicitMultiSOE_TP_Mumps.tip
+
+-- MKRAlphaExplicitMultiSOE_TP_DistCuDSS: integrator=MKRAlphaExplicitMultiSOE_TP system=DistributedCuDSS
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (11ab4e327636a5cf49ad6f72f28406d4a8af02f1)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+PARTITION rank=0 count=15 sample=5 6 11 12 13 14 24 25 26 27 28 29
+PARTITION rank=1 count=17 sample=1 2 3 4 9 10 15 16 17 18 19 20
+OUTPUT_FOLDER /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/MKRAlphaExplicitMultiSOE_TP_DistCuDSS
+RESULT tip pid=1 tip_final=-1.9120361675876532e-01 tip_sumabs=7.6548295190333783e+02 tip_count=4998 n_steps=4998 ok=0
+Process Terminating
+Process Terminating
+   captured tip history -> /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/MKRAlphaExplicitMultiSOE_TP_DistCuDSS.tip
+
+-- CudaKRAlpha_DistCuDSS: integrator=CudaKRAlpha system=DistributedCuDSS
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (11ab4e327636a5cf49ad6f72f28406d4a8af02f1)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+PARTITION rank=0 count=15 sample=5 6 11 12 13 14 24 25 26 27 28 29
+PARTITION rank=1 count=17 sample=1 2 3 4 9 10 15 16 17 18 19 20
+OUTPUT_FOLDER /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/CudaKRAlpha_DistCuDSS
+RESULT tip pid=1 tip_final=-1.8270326162197209e-01 tip_sumabs=7.3712870513116331e+02 tip_count=4998 n_steps=4998 ok=0
+Process Terminating
+Process Terminating
+   captured tip history -> /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/CudaKRAlpha_DistCuDSS.tip
+
+-- CudaMKRAlpha_DistCuDSS: integrator=CudaMKRAlpha system=DistributedCuDSS
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (11ab4e327636a5cf49ad6f72f28406d4a8af02f1)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+PARTITION rank=0 count=15 sample=5 6 11 12 13 14 24 25 26 27 28 29
+PARTITION rank=1 count=17 sample=1 2 3 4 9 10 15 16 17 18 19 20
+OUTPUT_FOLDER /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/CudaMKRAlpha_DistCuDSS
+RESULT tip pid=1 tip_final=-1.9113060304971460e-01 tip_sumabs=7.6516184782145911e+02 tip_count=4998 n_steps=4998 ok=0
+Process Terminating
+Process Terminating
+   captured tip history -> /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/CudaMKRAlpha_DistCuDSS.tip
+
+-- CudaKRAlpha_TP_DistCuDSS: integrator=CudaKRAlpha_TP system=DistributedCuDSS
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (11ab4e327636a5cf49ad6f72f28406d4a8af02f1)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+PARTITION rank=0 count=15 sample=5 6 11 12 13 14 24 25 26 27 28 29
+PARTITION rank=1 count=17 sample=1 2 3 4 9 10 15 16 17 18 19 20
+OUTPUT_FOLDER /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/CudaKRAlpha_TP_DistCuDSS
+RESULT tip pid=1 tip_final=-1.8266347020125395e-01 tip_sumabs=7.3701100859535745e+02 tip_count=4998 n_steps=4998 ok=0
+Process Terminating
+Process Terminating
+   captured tip history -> /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/CudaKRAlpha_TP_DistCuDSS.tip
+
+-- CudaMKRAlpha_TP_DistCuDSS: integrator=CudaMKRAlpha_TP system=DistributedCuDSS
+
+
+         OpenSees -- Open System For Earthquake Engineering Simulation
+                 Pacific Earthquake Engineering Research Center
+        Version 3.8.0 64-Bit (11ab4e327636a5cf49ad6f72f28406d4a8af02f1)
+
+      (c) Copyright 1999-2016 The Regents of the University of California
+                              All Rights Reserved
+  (Copyright and Disclaimer @ http://www.berkeley.edu/OpenSees/copyright.html)
+
+
+PARTITION rank=0 count=15 sample=5 6 11 12 13 14 24 25 26 27 28 29
+PARTITION rank=1 count=17 sample=1 2 3 4 9 10 15 16 17 18 19 20
+OUTPUT_FOLDER /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/CudaMKRAlpha_TP_DistCuDSS
+RESULT tip pid=1 tip_final=-1.9120361675740766e-01 tip_sumabs=7.6548295189959561e+02 tip_count=4998 n_steps=4998 ok=0
+Process Terminating
+Process Terminating
+   captured tip history -> /home/garaujor/OpenSees-CUDA/EXAMPLES/KRAlphaExplicit/Two-Story_MRF/results_mp/_compare/CudaMKRAlpha_TP_DistCuDSS.tip
+
+== Tip agreement [KR] vs reference KRAlphaExplicitMultiSOE_Mumps (tol=1e-06)
+  OK KRAlphaExplicitMultiSOE_DistCuDSS: rel_l2=1.343e-12 max_abs=5.016e-13 n=4998
+  OK CudaKRAlpha_DistCuDSS: rel_l2=1.101e-12 max_abs=2.692e-12 n=4998
+
+== Tip agreement [KR_TP] vs reference KRAlphaExplicitMultiSOE_TP_Mumps (tol=1e-06)
+  OK KRAlphaExplicitMultiSOE_TP_DistCuDSS: rel_l2=2.610e-12 max_abs=7.886e-13 n=4998
+  OK CudaKRAlpha_TP_DistCuDSS: rel_l2=2.001e-12 max_abs=1.860e-12 n=4998
+
+== Tip agreement [MKR] vs reference MKRAlphaExplicitMultiSOE_Mumps (tol=1e-06)
+  OK MKRAlphaExplicitMultiSOE_DistCuDSS: rel_l2=1.460e-12 max_abs=8.004e-13 n=4998
+  OK CudaMKRAlpha_DistCuDSS: rel_l2=9.264e-12 max_abs=1.956e-11 n=4998
+
+== Tip agreement [MKR_TP] vs reference MKRAlphaExplicitMultiSOE_TP_Mumps (tol=1e-06)
+  OK MKRAlphaExplicitMultiSOE_TP_DistCuDSS: rel_l2=1.498e-12 max_abs=7.219e-13 n=4998
+  OK CudaMKRAlpha_TP_DistCuDSS: rel_l2=1.161e-11 max_abs=2.131e-11 n=4998
+
+OpenSeesMP MultiSOE/Cuda sandbox tip comparison passed.
+
+All requested OpenSeesMP sandbox cases finished.

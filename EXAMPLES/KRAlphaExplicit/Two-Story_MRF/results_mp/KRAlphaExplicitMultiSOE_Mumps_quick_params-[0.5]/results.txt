@@ -1,0 +1,5 @@
+2026-08-02 20:32:54 - Analysis STARTED (OpenSeesMP np=2 partition).
+2026-08-02 20:32:54 - Running gm.dat (dt = .0100 s, npts = 1999) with dt_analysis = 0.005 s, n_steps = 200 (t_end = 1.0 s), scale factor = 3.0, quick=1.
+2026-08-02 20:32:54 - test NormUnbalance 1.0e-8 1 5; algorithm Linear; system Mumps; integrator KRAlphaExplicitMultiSOE 0.5; numberer ParallelPlain.
+2026-08-02 20:32:54 - Analysis COMPLETED successfully.
+2026-08-02 20:32:54 - transient wall time: 0.428 s
