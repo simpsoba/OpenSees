@@ -12,6 +12,7 @@ REM    1. Switches git to branch RTHS-CUDA (if needed)
 REM    2. Builds OpenSees.exe and OpenSeesMP.exe
 REM       (linked to dynamic tcl86t.dll so OpenFresco loadPackage works)
 REM    3. Enables CUDA when nvcc is found; otherwise CPU-only (no FATAL_ERROR)
+REM    4. Stages build\lib (+ build\bin-fresco) for OpenFresco Release-CMake
 REM
 REM  You usually do NOT need to edit anything if your machine matches the
 REM  "expected layout" below. If a check fails, the script tells you what
@@ -58,6 +59,9 @@ set "CHECKOUT_BRANCH=1"
 REM Copy finished .exe files into the ShearBuilding40 example folder? 1 = yes
 set "STAGE_SHEAR40=0"
 
+REM Flatten OpenSees Release .lib files into build\lib for OpenFresco Release-CMake? 1 = yes
+set "STAGE_FRESCO_LIBS=1"
+
 REM --- Paths (leave blank "" to auto-detect; fill in only if auto-detect fails) ---
 REM Example overrides:
 REM   set "TCL_ROOT=D:\Tcl"
@@ -84,6 +88,7 @@ REM   set OPS_FRESCO_NOPAUSE=1
 if defined OPS_FRESCO_BUILD_OPENSEES set "BUILD_OPENSEES=%OPS_FRESCO_BUILD_OPENSEES%"
 if defined OPS_FRESCO_BUILD_OPENSEESMP set "BUILD_OPENSEESMP=%OPS_FRESCO_BUILD_OPENSEESMP%"
 if defined OPS_FRESCO_BUILD_OPENSEESSP set "BUILD_OPENSEESSP=%OPS_FRESCO_BUILD_OPENSEESSP%"
+if defined OPS_FRESCO_STAGE_LIBS set "STAGE_FRESCO_LIBS=%OPS_FRESCO_STAGE_LIBS%"
 if defined OPS_FRESCO_NOPAUSE set "NOPAUSE=1"
 
 REM =============================================================================
@@ -315,6 +320,11 @@ if "!BUILD_OPENSEESSP!"=="1" (
   if errorlevel 1 goto :fail
 )
 
+if "!STAGE_FRESCO_LIBS!"=="1" if "!BUILD_OPENSEES!"=="1" (
+  call :stage_fresco_libs "!BUILD_DIR!\Release"
+  if errorlevel 1 goto :fail
+)
+
 if "!STAGE_SHEAR40!"=="1" (
   if not exist "!SHEAR40_BIN!" mkdir "!SHEAR40_BIN!"
   if "!BUILD_OPENSEES!"=="1" if exist "!BUILD_DIR!\Release\OpenSees.exe" (
@@ -337,6 +347,10 @@ echo ============================================================
 if "!BUILD_OPENSEES!"=="1"   echo   OpenSees:   !REPO!\!BUILD_DIR!\Release\OpenSees.exe
 if "!BUILD_OPENSEESMP!"=="1" echo   OpenSeesMP: !REPO!\!BUILD_MP_DIR!\Release\OpenSeesMP.exe
 if "!BUILD_OPENSEESSP!"=="1" echo   OpenSeesSP: !REPO!\!BUILD_SP_DIR!\Release\OpenSeesSP.exe
+if "!STAGE_FRESCO_LIBS!"=="1" if "!BUILD_OPENSEES!"=="1" (
+  echo   OpenFresco libs: !REPO!\build\lib\*.lib
+  echo   OpenFresco bins: !REPO!\build\bin-fresco\
+)
 echo   Tcl DLL:    !TCL_ROOT!\bin\tcl86t.dll
 if "!WITH_CUDA!"=="1" (echo   CUDA:        enabled at !CUDAToolkit_ROOT!) else (echo   CUDA:        skipped / CPU-only)
 echo.
@@ -427,3 +441,99 @@ echo ------------------------------------------------------------
 if errorlevel 1 exit /b 1
 shift
 goto build_next_target
+
+:stage_fresco_libs
+set "_REL=%~1"
+set "_STAGE_FAILED=0"
+set "FRESCO_LIB_DIR=!REPO!\build\lib"
+set "FRESCO_BIN_DIR=!REPO!\build\bin-fresco"
+
+echo.
+echo ------------------------------------------------------------
+echo  Stage OpenFresco Release-CMake inputs
+echo  ^(flatten Release .lib files into build\lib^)
+echo ------------------------------------------------------------
+
+if not exist "!_REL!\OpenSees.exe" (
+  echo ERROR: Expected OpenSees.exe under !_REL!
+  exit /b 1
+)
+
+if not exist "!FRESCO_LIB_DIR!" mkdir "!FRESCO_LIB_DIR!"
+if not exist "!FRESCO_BIN_DIR!" mkdir "!FRESCO_BIN_DIR!"
+
+if not exist "!_REL!\OTHER\ITPACK\ITPACK.lib" (
+  echo Building ITPACK.lib for OpenFresco staging...
+  "!CMAKE!" --build "!_REL!" --target ITPACK --parallel !JOBS!
+  if errorlevel 1 exit /b 1
+)
+
+call :stage_one_lib "!_REL!" "OTHER\ARPACK\ARPACK.lib" "ARPACK.lib"
+call :stage_one_lib "!_REL!" "OTHER\SuperLU_5.1.1\SUPERLU.lib" "SUPERLU.lib"
+call :stage_one_lib "!_REL!" "OTHER\UMFPACK\UMFPACK.lib" "UMFPACK.lib"
+call :stage_one_lib "!_REL!" "OTHER\AMD\AMD.lib" "AMD.lib"
+call :stage_one_lib "!_REL!" "OTHER\CSPARSE\CSPARSE.lib" "CSPARSE.lib"
+call :stage_one_lib "!_REL!" "OTHER\ITPACK\ITPACK.lib" "ITPACK.lib"
+call :stage_one_lib "!_REL!" "OTHER\tetgen1.4.3\tet.lib" "tet.lib"
+call :stage_one_lib "!_REL!" "OTHER\Triangle\triangle.lib" "triangle.lib"
+call :stage_one_lib "!_REL!" "SRC\material\uniaxial\OPS_Material_f.lib" "OPS_Material_f.lib"
+call :stage_one_lib "!_REL!" "SRC\material\nD\feap\OPS_Material_nD_Feap_f.lib" "OPS_Material_nD_Feap_f.lib"
+call :stage_one_lib "!_REL!" "SRC\material\uniaxial\drain\OPS_Material_Uniaxial_Drain_f.lib" "OPS_Material_Uniaxial_Drain_f.lib"
+call :stage_one_lib "!_REL!" "SRC\system_of_eqn\linearSOE\sparseSYM\OPS_SysOfEqn_f.lib" "OPS_SysOfEqn_f.lib"
+
+REM Optional extras that older OpenFresco link lines may reference.
+call :stage_one_lib_optional "!_REL!" "OpenSeesLIB.lib" "OpenSeesLIB.lib"
+call :stage_one_lib_optional "!_REL!" "OPS_InterpTcl.lib" "OPS_InterpTcl.lib"
+call :stage_one_lib_optional "!_REL!" "SRC\coordTransformation\coordTransformation.lib" "coordTransformation.lib"
+call :stage_one_lib_optional "!_REL!" "SRC\damping\damping.lib" "damping.lib"
+
+copy /Y "!_REL!\OpenSees.exe" "!FRESCO_BIN_DIR!\OpenSees.exe" >nul
+copy /Y "!TCL_ROOT!\bin\tcl86t.dll" "!FRESCO_BIN_DIR!\" >nul
+
+if "!BUILD_OPENSEESMP!"=="1" if exist "!BUILD_MP_DIR!\Release\OpenSeesMP.exe" (
+  copy /Y "!BUILD_MP_DIR!\Release\OpenSeesMP.exe" "!FRESCO_BIN_DIR!\OpenSeesMP.exe" >nul
+)
+if "!BUILD_OPENSEESSP!"=="1" if exist "!BUILD_SP_DIR!\Release\OpenSeesSP.exe" (
+  copy /Y "!BUILD_SP_DIR!\Release\OpenSeesSP.exe" "!FRESCO_BIN_DIR!\OpenSeesSP.exe" >nul
+)
+
+if "!_STAGE_FAILED!"=="1" (
+  echo ERROR: One or more required OpenFresco libs could not be staged.
+  echo        See [MISSING] lines above.
+  exit /b 1
+)
+
+echo [OK]      Staged OpenFresco libs in !FRESCO_LIB_DIR!
+echo [OK]      Staged OpenFresco bins in !FRESCO_BIN_DIR!
+exit /b 0
+
+:stage_one_lib
+set "_BASE=%~1"
+set "_SRC=%~2"
+set "_NAME=%~3"
+if exist "!_BASE!\!_SRC!" (
+  copy /Y "!_BASE!\!_SRC!" "!FRESCO_LIB_DIR!\!_NAME!" >nul
+  exit /b 0
+)
+if exist "!_BASE!\!_NAME!" (
+  copy /Y "!_BASE!\!_NAME!" "!FRESCO_LIB_DIR!\!_NAME!" >nul
+  exit /b 0
+)
+echo [MISSING] !_NAME! ^(looked for !_SRC! under !_BASE!^)
+set "_STAGE_FAILED=1"
+exit /b 0
+
+:stage_one_lib_optional
+set "_BASE=%~1"
+set "_SRC=%~2"
+set "_NAME=%~3"
+if exist "!_BASE!\!_SRC!" (
+  copy /Y "!_BASE!\!_SRC!" "!FRESCO_LIB_DIR!\!_NAME!" >nul
+  exit /b 0
+)
+if exist "!_BASE!\!_NAME!" (
+  copy /Y "!_BASE!\!_NAME!" "!FRESCO_LIB_DIR!\!_NAME!" >nul
+  exit /b 0
+)
+echo [WARN]    optional !_NAME! not staged ^(!_SRC!^)
+exit /b 0
