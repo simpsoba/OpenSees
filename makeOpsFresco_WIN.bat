@@ -7,10 +7,11 @@ REM  makeOpsFresco_WIN.bat
 REM  ---------------------
 REM  Double-click this file, or run it from a cmd.exe window in this folder.
 REM
-REM  What it does (for the ops-fresco branch):
-REM    1. Switches git to branch ops-fresco (if needed)
+REM  What it does (for the RTHS-CUDA branch):
+REM    1. Switches git to branch RTHS-CUDA (if needed)
 REM    2. Builds OpenSees.exe and OpenSeesMP.exe
 REM       (linked to dynamic tcl86t.dll so OpenFresco loadPackage works)
+REM    3. Enables CUDA when nvcc is found; otherwise CPU-only (no FATAL_ERROR)
 REM
 REM  You usually do NOT need to edit anything if your machine matches the
 REM  "expected layout" below. If a check fails, the script tells you what
@@ -51,7 +52,7 @@ REM How many CPU cores to use while compiling
 set "JOBS=10"
 
 REM Switch to this git branch before building? 1 = yes, 0 = leave current branch
-set "BRANCH=ops-fresco"
+set "BRANCH=RTHS-CUDA"
 set "CHECKOUT_BRANCH=1"
 
 REM Copy finished .exe files into the ShearBuilding40 example folder? 1 = yes
@@ -67,6 +68,7 @@ set "TCL_ROOT="
 set "MUMPS_DIR="
 set "METIS5_DIR="
 set "ONEAPI_SETVARS="
+set "CUDAToolkit_ROOT="
 
 REM Build folder names (rarely need changing)
 set "BUILD_DIR=build"
@@ -94,7 +96,7 @@ set "FAILED=0"
 
 echo.
 echo ============================================================
-echo  OpenSees ops-fresco Windows build
+echo  OpenSees RTHS-CUDA Windows build
 echo ============================================================
 echo  Folder: !REPO!
 echo.
@@ -129,6 +131,13 @@ if "!ONEAPI_SETVARS!"=="" (
     set "ONEAPI_SETVARS=C:\Program Files\Intel\oneAPI\setvars.bat"
   )
 )
+
+if "!CUDAToolkit_ROOT!"=="" (
+  if exist "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9\bin\nvcc.exe" (
+    set "CUDAToolkit_ROOT=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9"
+  )
+)
+if not defined OPS_SKIP_CUDA set "OPS_SKIP_CUDA=0"
 
 REM ---- Preflight: install locations -----------------------------------------
 echo Checking prerequisites...
@@ -199,6 +208,19 @@ if "!METIS5_DIR!"=="" (
   echo [OK]      METIS 5: !METIS5_DIR!
 )
 
+set "WITH_CUDA=0"
+if /I not "!OPS_SKIP_CUDA!"=="1" (
+  if not "!CUDAToolkit_ROOT!"=="" if exist "!CUDAToolkit_ROOT!\bin\nvcc.exe" (
+    set "WITH_CUDA=1"
+  )
+)
+if "!WITH_CUDA!"=="1" (
+  echo [OK]      CUDA: !CUDAToolkit_ROOT!
+) else (
+  echo [INFO]    CUDA skipped ^(CPU-only^). Set CUDAToolkit_ROOT if nvcc exists, or OPS_SKIP_CUDA=1.
+  set "CUDAToolkit_ROOT="
+)
+
 echo.
 if "!FAILED!"=="1" (
   echo ============================================================
@@ -224,6 +246,7 @@ set "VS_CMAKE_BIN=C:\Program Files\Microsoft Visual Studio\2022\Community\Common
 set "VS_NINJA_BIN=C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja"
 if exist "!VS_CMAKE_BIN!\cmake.exe" set "PATH=!VS_CMAKE_BIN!;!PATH!"
 if exist "!VS_NINJA_BIN!\ninja.exe" set "PATH=!VS_NINJA_BIN!;!PATH!"
+if "!WITH_CUDA!"=="1" set "PATH=!CUDAToolkit_ROOT!\bin;!PATH!"
 
 echo.
 echo Checking build tools on PATH...
@@ -271,6 +294,11 @@ if not "!METIS5_DIR!"=="" if exist "!METIS5_DIR!\include\metis.h" (
   set "METIS5_CMAKE_ARGS=-DMETIS5_DIR=!METIS5_DIR! -UOPENSEES_METIS5_LIBRARY"
 )
 
+set "CUDA_CMAKE_ARGS=-UCUDToolkit_ROOT"
+if "!WITH_CUDA!"=="1" (
+  set "CUDA_CMAKE_ARGS=-DCUDAToolkit_ROOT=!CUDAToolkit_ROOT! -Ucudss_DIR -Ucudss_INCLUDE_DIR -Ucudss_LIBRARY_DIR -Ucudss_BINARY_DIR -UAMGX_NO_MPI_DIR"
+)
+
 REM ---- Builds ----------------------------------------------------------------
 if "!BUILD_OPENSEES!"=="1" (
   call :configure_and_build "!BUILD_DIR!" "!BUILD_DIR!\Release" OFF OpenSees
@@ -310,6 +338,7 @@ if "!BUILD_OPENSEES!"=="1"   echo   OpenSees:   !REPO!\!BUILD_DIR!\Release\OpenS
 if "!BUILD_OPENSEESMP!"=="1" echo   OpenSeesMP: !REPO!\!BUILD_MP_DIR!\Release\OpenSeesMP.exe
 if "!BUILD_OPENSEESSP!"=="1" echo   OpenSeesSP: !REPO!\!BUILD_SP_DIR!\Release\OpenSeesSP.exe
 echo   Tcl DLL:    !TCL_ROOT!\bin\tcl86t.dll
+if "!WITH_CUDA!"=="1" (echo   CUDA:        enabled at !CUDAToolkit_ROOT!) else (echo   CUDA:        skipped / CPU-only)
 echo.
 if not defined NOPAUSE pause
 endlocal
@@ -382,6 +411,7 @@ echo ------------------------------------------------------------
   !METIS5_CMAKE_ARGS! ^
   -UOPENMPI ^
   -DPARALLEL_PROCESSING=!_PAR! ^
+  !CUDA_CMAKE_ARGS! ^
   -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON ^
   -DCMAKE_C_USE_RESPONSE_FILE_FOR_OBJECTS=ON ^
   -DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=ON

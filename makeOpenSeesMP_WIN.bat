@@ -5,7 +5,8 @@ REM ---------------------------------------------------------------------------
 REM OpenSeesMP Windows build (Ninja + Conan + Intel oneAPI) with METIS 5 + CUDA.
 REM Edit these paths for your machine, or set them before calling this script.
 REM
-REM CPU-only (no CUDA): set OPS_SKIP_CUDA=1
+REM CPU-only (no CUDA): set OPS_SKIP_CUDA=1, or omit CUDA when nvcc is absent.
+REM Missing nvcc is not fatal: CMake CPU-builds and CUDAToolkit_ROOT is unset.
 REM ---------------------------------------------------------------------------
 if not defined BUILD_DIR set "BUILD_DIR=build-mp"
 if not defined MUMPS_DIR set "MUMPS_DIR=%~dp0..\mumps\build"
@@ -35,14 +36,16 @@ if not exist "!METIS5_DIR!\include\metis.h" (
 
 set "WITH_CUDA=0"
 if /I not "!OPS_SKIP_CUDA!"=="1" (
-  if not exist "!CUDAToolkit_ROOT!\bin\nvcc.exe" (
-    echo ERROR: CUDA not found at CUDAToolkit_ROOT=!CUDAToolkit_ROOT!
-    echo Set CUDAToolkit_ROOT, or OPS_SKIP_CUDA=1 for a CPU-only OpenSeesMP.
-    exit /b 1
+  if exist "!CUDAToolkit_ROOT!\bin\nvcc.exe" (
+    set "WITH_CUDA=1"
+    set "PATH=!CUDAToolkit_ROOT!\bin;!PATH!"
+  ) else (
+    echo WARNING: CUDA nvcc not found at CUDAToolkit_ROOT=!CUDAToolkit_ROOT!
+    echo          Building CPU-only OpenSeesMP; CMake will not see CUDAToolkit_ROOT.
+    echo          Set CUDAToolkit_ROOT to a toolkit with nvcc, or OPS_SKIP_CUDA=1.
   )
-  set "WITH_CUDA=1"
-  set "PATH=!CUDAToolkit_ROOT!\bin;!PATH!"
 )
+if "!WITH_CUDA!"=="0" set "CUDAToolkit_ROOT="
 
 call "!ONEAPI_SETVARS!" intel64 mod
 if errorlevel 1 exit /b 1
@@ -71,7 +74,7 @@ if not exist "!TOOLCHAIN!" (
   exit /b 1
 )
 
-set "CUDA_CMAKE_ARGS="
+set "CUDA_CMAKE_ARGS=-UCUDToolkit_ROOT"
 if "!WITH_CUDA!"=="1" (
   set "CUDA_CMAKE_ARGS=-DCUDAToolkit_ROOT=!CUDAToolkit_ROOT! -Ucudss_DIR -Ucudss_INCLUDE_DIR -Ucudss_LIBRARY_DIR -Ucudss_BINARY_DIR -UAMGX_NO_MPI_DIR"
 )
