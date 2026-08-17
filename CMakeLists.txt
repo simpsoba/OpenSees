@@ -924,6 +924,7 @@ function(ops_cuda_finalize_executable_link target_name)
 
   if(CUDAToolkit_LIBRARY_DIR)
     target_link_directories(${target_name} PRIVATE "${CUDAToolkit_LIBRARY_DIR}")
+    target_link_options(${target_name} PRIVATE "LINKER:/LIBPATH:${CUDAToolkit_LIBRARY_DIR}")
   endif()
   if(TARGET CUDA::cudadevrt)
     target_link_libraries(${target_name} PRIVATE CUDA::cudadevrt)
