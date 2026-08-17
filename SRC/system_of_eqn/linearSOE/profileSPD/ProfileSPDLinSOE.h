@@ -60,6 +60,9 @@ class ProfileSPDLinSOE : public LinearSOE
     virtual void zeroA(void);
     virtual void zeroB(void);
 
+    int formAp(const Vector &p, Vector &Ap) override;
+    LinearSOE *getCopy(void) const override;
+
     virtual void setX(int loc, double value);
     virtual void setX(const Vector &x);
     
@@ -70,6 +73,9 @@ class ProfileSPDLinSOE : public LinearSOE
     virtual int setProfileSPDSolver(ProfileSPDLinSolver &newSolver);    
     virtual int sendSelf(int commitTag, Channel &theChannel);
     virtual int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);
+
+    /** Copy assembled A before in-place LDLᵀ so formAp can SpMV the unfactored profile. */
+    void snapshotUnfactoredA(void);
 
     friend class ProfileSPDLinSolver;    
     friend class ProfileSPDLinDirectSolver;
@@ -88,6 +94,12 @@ class ProfileSPDLinSOE : public LinearSOE
     int Asize, Bsize;
     bool isAfactored, isAcondensed;
     int numInt;
+    double *Aunfactored;
+    int AunfactoredSize;
+
+    /** Symmetric profile SpMV: A stores upper triangle including diagonal (Fortran profile). */
+    static void profileSpMV(const double *Avals, const int *iDiag, int n,
+                            const Vector &p, Vector &Ap);
     
   private:
 };

@@ -41,6 +41,7 @@
 #include <FEM_ObjectBroker.h>
 
 #include <iostream>
+#include <cstring>
 using std::nothrow;
 
 
@@ -48,7 +49,7 @@ ProfileSPDLinSOE::ProfileSPDLinSOE(ProfileSPDLinSolver &the_Solver)
 :LinearSOE(the_Solver, LinSOE_TAGS_ProfileSPDLinSOE),
  size(0), profileSize(0), A(0), B(0), X(0), vectX(0), vectB(0),
  iDiagLoc(0), Asize(0), Bsize(0), isAfactored(false), isAcondensed(false),
- numInt(0) 
+ numInt(0), Aunfactored(0), AunfactoredSize(0) 
 {
     the_Solver.setLinearSOE(*this);
 }
@@ -58,7 +59,7 @@ ProfileSPDLinSOE::ProfileSPDLinSOE(int classTag)
 :LinearSOE(classTag),
  size(0), profileSize(0), A(0), B(0), X(0), vectX(0), vectB(0),
  iDiagLoc(0), Asize(0), Bsize(0), isAfactored(false), isAcondensed(false),
- numInt(0) 
+ numInt(0), Aunfactored(0), AunfactoredSize(0) 
 {
 
 }
@@ -68,7 +69,7 @@ ProfileSPDLinSOE::ProfileSPDLinSOE(ProfileSPDLinSolver &the_Solver, int classTag
 :LinearSOE(the_Solver, classTag),
  size(0), profileSize(0), A(0), B(0), X(0), vectX(0), vectB(0),
  iDiagLoc(0), Asize(0), Bsize(0), isAfactored(false), isAcondensed(false),
- numInt(0) 
+ numInt(0), Aunfactored(0), AunfactoredSize(0) 
 {
     the_Solver.setLinearSOE(*this);
 }
@@ -79,7 +80,7 @@ ProfileSPDLinSOE::ProfileSPDLinSOE(int N, int *iLoc,
 :LinearSOE(the_Solver, LinSOE_TAGS_ProfileSPDLinSOE),
  size(0), profileSize(0), A(0), B(0), X(0), vectX(0), vectB(0),
  iDiagLoc(0), Asize(0), Bsize(0), isAfactored(false), isAcondensed(false),
- numInt(0)
+ numInt(0), Aunfactored(0), AunfactoredSize(0)
 {
     size = N;
     profileSize = iLoc[N-1];
@@ -134,6 +135,7 @@ ProfileSPDLinSOE::ProfileSPDLinSOE(int N, int *iLoc,
 ProfileSPDLinSOE::~ProfileSPDLinSOE()
 {
     if (A != 0) delete [] A;
+    if (Aunfactored != 0) delete [] Aunfactored;
     if (B != 0) delete [] B;
     if (X != 0) delete [] X;
     if (iDiagLoc != 0) delete [] iDiagLoc;
@@ -497,6 +499,99 @@ ProfileSPDLinSOE::zeroA(void)
 	*Aptr++ = 0;
     
     isAfactored = false;
+}
+
+
+void
+ProfileSPDLinSOE::snapshotUnfactoredA(void)
+{
+    if (A == 0 || profileSize <= 0)
+	return;
+
+    if (Aunfactored == 0 || AunfactoredSize < profileSize) {
+	if (Aunfactored != 0)
+	    delete [] Aunfactored;
+	Aunfactored = new (nothrow) double[profileSize];
+	AunfactoredSize = (Aunfactored != 0) ? profileSize : 0;
+	if (Aunfactored == 0) {
+	    opserr << "WARNING ProfileSPDLinSOE::snapshotUnfactoredA() - "
+		      "ran out of memory for unfactored A\n";
+	    return;
+	}
+    }
+
+    memcpy(Aunfactored, A, profileSize * sizeof(double));
+}
+
+
+void
+ProfileSPDLinSOE::profileSpMV(const double *Avals, const int *iDiag, int n,
+                             const Vector &p, Vector &Ap)
+{
+    Ap.Zero();
+    if (Avals == 0 || iDiag == 0 || n <= 0)
+	return;
+
+    for (int col = 0; col < n; ++col) {
+	const double pj = p(col);
+	const double *coliiPtr = &Avals[iDiag[col] - 1];
+	int minColRow = 0;
+	if (col > 0)
+	    minColRow = col - (iDiag[col] - iDiag[col - 1]) + 1;
+	for (int row = minColRow; row <= col; ++row) {
+	    const double aij = coliiPtr[row - col];
+	    Ap(row) += aij * pj;
+	    if (row != col)
+		Ap(col) += aij * p(row);
+	}
+    }
+}
+
+
+int
+ProfileSPDLinSOE::formAp(const Vector &p, Vector &Ap)
+{
+    if (size != p.Size() || size != Ap.Size()) {
+	opserr << "WARNING ProfileSPDLinSOE::formAp() - vectors must match size "
+	       << size << "\n";
+	return -1;
+    }
+    if (size == 0) {
+	Ap.Zero();
+	return 0;
+    }
+
+    const double *vals = A;
+    if (isAfactored) {
+	if (Aunfactored == 0) {
+	    opserr << "WARNING ProfileSPDLinSOE::formAp() - A is factored but no unfactored snapshot\n";
+	    return -1;
+	}
+	vals = Aunfactored;
+    }
+
+    profileSpMV(vals, iDiagLoc, size, p, Ap);
+    return 0;
+}
+
+
+LinearSOE *
+ProfileSPDLinSOE::getCopy(void) const
+{
+    const LinearSOESolver *base = this->getSolver();
+    if (base == 0)
+	return 0;
+    LinearSOESolver *solverCopy = base->getCopy();
+    if (solverCopy == 0)
+	return 0;
+
+    ProfileSPDLinSolver *profileSolver = dynamic_cast<ProfileSPDLinSolver *>(solverCopy);
+    if (profileSolver == 0) {
+	delete solverCopy;
+	return 0;
+    }
+
+    return new ProfileSPDLinSOE(*profileSolver);
 }
 	
 void 

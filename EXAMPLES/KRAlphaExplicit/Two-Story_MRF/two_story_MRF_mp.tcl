@@ -3,12 +3,14 @@
 # then `partition` (METIS) auto-partitions before gravity + transient.
 #
 # Serial sandbox (two_story_MRF.tcl / *.py) is unchanged. This script covers:
-#   - *MultiSOE* with system Mumps or DistributedCuDSS
+#   - *MultiSOE* with system Mumps or DistributedCuDSS (primary);
+#     ParallelProfileSPD is an optional CPU SPD fallback
 #   - Cuda* with system DistributedCuDSS only
 #
 # Usage (from this directory, np >= 2):
 #   mpirun -np 2 OpenSeesMP two_story_MRF_mp.tcl KRAlphaExplicitMultiSOE 0.5 3.0 -system Mumps
 #   mpirun -np 2 OpenSeesMP two_story_MRF_mp.tcl KRAlphaExplicitMultiSOE 0.5 3.0 -system DistributedCuDSS
+#   mpirun -np 2 OpenSeesMP two_story_MRF_mp.tcl MKRAlphaExplicitMultiSOE 0.5 3.0 -system ParallelProfileSPD -quick
 #   mpirun -np 2 OpenSeesMP two_story_MRF_mp.tcl CudaKRAlpha 0.5 3.0
 #   mpirun -np 2 OpenSeesMP two_story_MRF_mp.tcl CudaKRAlpha 0.5 3.0 -quick
 #
@@ -118,7 +120,7 @@ for {set i $flagStart} {$i < $argc} {incr i} {
         -system {
             incr i
             if {$i >= $argc} {
-                puts stderr "ERROR: -system requires Mumps or DistributedCuDSS"
+                puts stderr "ERROR: -system requires Mumps, DistributedCuDSS, or ParallelProfileSPD"
                 exit 1
             }
             set systemOverride [lindex $argv $i]
@@ -145,7 +147,7 @@ for {set i $flagStart} {$i < $argc} {incr i} {
         }
         default {
             puts stderr "Unknown flag: [lindex $argv $i]"
-            puts stderr "Optional flags: -massMode 0|1|2 -numberer ParallelPlain|ParallelRCM -constraints Transformation|Penalty -incrementalAccel -alphaCloseCheck -quick -outdir DIR -system Mumps|DistributedCuDSS -cudssPrecision dFFI -cudssIrNSteps N"
+            puts stderr "Optional flags: -massMode 0|1|2 -numberer ParallelPlain|ParallelRCM -constraints Transformation|Penalty -incrementalAccel -alphaCloseCheck -quick -outdir DIR -system Mumps|DistributedCuDSS|ParallelProfileSPD -cudssPrecision dFFI -cudssIrNSteps N"
             exit 1
         }
     }
@@ -247,8 +249,8 @@ set isCudaIntegrator [expr {[string match Cuda* $integratorMethod]}]
 set isMultiSOE [expr {[string match *MultiSOE* $integratorMethod]}]
 
 if {$systemOverride ne ""} {
-    if {$systemOverride ni {Mumps DistributedCuDSS}} {
-        puts stderr "ERROR two_story_MRF_mp.tcl: -system must be Mumps or DistributedCuDSS (got $systemOverride)"
+    if {$systemOverride ni {Mumps DistributedCuDSS ParallelProfileSPD}} {
+        puts stderr "ERROR two_story_MRF_mp.tcl: -system must be Mumps, DistributedCuDSS, or ParallelProfileSPD (got $systemOverride)"
         exit 1
     }
     if {$isCudaIntegrator && $systemOverride ne "DistributedCuDSS"} {

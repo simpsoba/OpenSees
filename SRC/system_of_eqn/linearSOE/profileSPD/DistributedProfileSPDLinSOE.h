@@ -51,6 +51,7 @@ class DistributedProfileSPDLinSOE : public ProfileSPDLinSOE
     int addA(const Matrix &, const ID &, double fact = 1.0);
     int addB(const Vector &, const ID &, double fact = 1.0);    
     int setB(const Vector &, double fact = 1.0);            
+    void zeroA(void);
     void zeroB(void);
     int setSize(Graph &theGraph);
     int solve(void);
@@ -75,6 +76,9 @@ class DistributedProfileSPDLinSOE : public ProfileSPDLinSOE
   protected:
     
   private:
+    int ensureMergedA(void);
+    int mergeWorkerA(void);
+
     int processID;
     int numChannels;
     Channel **theChannels;
@@ -85,6 +89,7 @@ class DistributedProfileSPDLinSOE : public ProfileSPDLinSOE
     int sizeWork;
     Vector *myVectB;
     double *myB;
+    bool matrixDirty;
 };
 
 

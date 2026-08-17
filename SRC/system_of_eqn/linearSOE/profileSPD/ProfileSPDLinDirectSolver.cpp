@@ -156,6 +156,8 @@ ProfileSPDLinDirectSolver::solve(void)
 	    opserr << "ProfileSPDLinDirectSolver::solve() - singular 1x1 (|aii| < 1e-15)\n";
 	    return -2;
 	}
+	if (theSOE->isAfactored == false)
+	    theSOE->snapshotUnfactoredA();
 	X[0] = B[0] / a;
 	invD[0] = 1.0 / a;
 	theSOE->isAfactored = true;
@@ -185,6 +187,9 @@ ProfileSPDLinDirectSolver::solve(void)
 	// FACTOR & SOLVE
 	double *ajiPtr, *akjPtr, *akiPtr, *bjPtr;    
 	
+	// Keep the assembled profile for later formAp (MultiSOE with M / alpha / A).
+	theSOE->snapshotUnfactoredA();
+
 	// if the matrix has not been factored already factor it into U^t D U
 	// storing D^-1 in invD as we go
 
@@ -383,6 +388,8 @@ ProfileSPDLinDirectSolver::factor(int n)
 	// FACTOR & SOLVE
 	double *ajiPtr, *akjPtr, *akiPtr;    
 	
+	theSOE->snapshotUnfactoredA();
+
 	// if the matrix has not been factored already factor it into U^t D U
 	// storing D^-1 in invD as we go
     

@@ -40,7 +40,8 @@
 DistributedProfileSPDLinSOE::DistributedProfileSPDLinSOE(ProfileSPDLinSolver &theSolvr)
   :ProfileSPDLinSOE(theSolvr, LinSOE_TAGS_DistributedProfileSPDLinSOE), 
    processID(0), numChannels(0), theChannels(0), 
-   localCol(0), sizeLocal(0), workArea(0), sizeWork(0), myVectB(0), myB(0)
+   localCol(0), sizeLocal(0), workArea(0), sizeWork(0), myVectB(0), myB(0),
+   matrixDirty(true)
 {
     theSolvr.setLinearSOE(*this);
 }
@@ -49,7 +50,8 @@ DistributedProfileSPDLinSOE::DistributedProfileSPDLinSOE(ProfileSPDLinSolver &th
 DistributedProfileSPDLinSOE::DistributedProfileSPDLinSOE()
   :ProfileSPDLinSOE(LinSOE_TAGS_DistributedProfileSPDLinSOE), 
    processID(0), numChannels(0), theChannels(0), 
-   localCol(0), sizeLocal(0), workArea(0), sizeWork(0), myVectB(0), myB(0)
+   localCol(0), sizeLocal(0), workArea(0), sizeWork(0), myVectB(0), myB(0),
+   matrixDirty(true)
 {
 
 }
@@ -291,7 +293,8 @@ DistributedProfileSPDLinSOE::setSize(Graph &theGraph)
     A[k] = 0;
   
   isAfactored = false;
-  isAcondensed = false;    
+  isAcondensed = false;
+  matrixDirty = true; 
   
   if (size > Bsize) { // we have to get another space for A
     
@@ -422,30 +425,102 @@ DistributedProfileSPDLinSOE::addA(const Matrix &m, const ID &id, double fact)
     }  // for i
     
   }
+  // Still inside the post-zeroA assembly window (historic: isAfactored stays false).
+  // After ensureMergedA, incremental addA without zeroA is unsupported, as before.
   return 0;
 }
+
+int
+DistributedProfileSPDLinSOE::mergeWorkerA(void)
+{
+  for (int j = 0; j < numChannels; ++j) {
+    Channel *theChannel = theChannels[j];
+    const ID &localMap = *(localCol[j]);
+    int localSize = (*sizeLocal)(j);
+    Vector vectA(workArea, localSize);
+    if (theChannel->recvVector(0, 0, vectA) < 0) {
+      opserr << "WARNING DistributedProfileSPDLinSOE::mergeWorkerA() - recv A failed\n";
+      return -1;
+    }
+
+    int loc = 0;
+    for (int i = 0; i < localMap.Size(); ++i) {
+      int col = localMap(i);
+      int colSize, pos;
+      if (col == 0) {
+        colSize = 1;
+        pos = 0;
+      } else {
+        pos = iDiagLoc[col - 1];
+        colSize = iDiagLoc[col] - iDiagLoc[col - 1];
+      }
+      for (int k = 0; k < colSize; ++k)
+        A[pos++] += workArea[loc++];
+    }
+  }
+  return 0;
+}
+
+
+int
+DistributedProfileSPDLinSOE::ensureMergedA(void)
+{
+  // Serial / single-process DistributedProfileSPD: nothing to gather.
+  if (numChannels <= 0 || theChannels == 0)
+    return 0;
+  if (!matrixDirty)
+    return 0;
+
+  if (processID != 0) {
+    if (theChannels[0] == 0) {
+      opserr << "WARNING DistributedProfileSPDLinSOE::ensureMergedA() - worker has no channel\n";
+      return -1;
+    }
+    Vector vectA(A, (*sizeLocal)(0));
+    if (theChannels[0]->sendVector(0, 0, vectA) < 0) {
+      opserr << "WARNING DistributedProfileSPDLinSOE::ensureMergedA() - send A failed\n";
+      return -1;
+    }
+    matrixDirty = false;
+    return 0;
+  }
+
+  if (mergeWorkerA() < 0)
+    return -1;
+
+  matrixDirty = false;
+  isAfactored = false;
+  return 0;
+}
+
+
+void
+DistributedProfileSPDLinSOE::zeroA(void)
+{
+  ProfileSPDLinSOE::zeroA();
+  matrixDirty = true;
+}
+
 
 int 
 DistributedProfileSPDLinSOE::solve(void)
 {
   static ID result(1);
 
+  if (ensureMergedA() < 0) {
+    opserr << "WARNING DistributedProfileSPDLinSOE::solve() - ensureMergedA failed\n";
+    return -1;
+  }
+
   //
-  // if subprocess send B and A and receive back result X, B & result
+  // if subprocess send B and receive back result X, B & result
   //
 
   if (processID != 0) {
     Channel *theChannel = theChannels[0];
 
-    // send B
     theChannel->sendVector(0, 0, *myVectB);
 
-    if (isAfactored == false) {
-      // send A in packets placed in vector X
-      Vector vectA(A, (*sizeLocal)(0));    
-      theChannel->sendVector(0, 0, vectA);
-    }
-    // receive X,B and result
     theChannel->recvVector(0, 0, *vectX);
     theChannel->recvVector(0, 0, *vectB);
     theChannel->recvID(0, 0, result);
@@ -453,55 +528,21 @@ DistributedProfileSPDLinSOE::solve(void)
   } 
 
   //
-  // if main process, recv B & A from all, solve and send back X, B & result
+  // if main process, recv B from all, solve and send back X, B & result
   //
 
   else {
     
-    // add P0 contribution to B
     *vectB = *myVectB;
     
-    // receive X and A contribution from subprocess & add them in
     for (int j=0; j<numChannels; j++) {
-
-      // get X & add
       Channel *theChannel = theChannels[j];
       theChannel->recvVector(0, 0, *vectX);
       *vectB += *vectX;
-
-      // get A & add using local map
-      if (isAfactored == false) {
-	const ID &localMap = *(localCol[j]);
-	int localSize = (*sizeLocal)(j);
-	Vector vectA(workArea, localSize);    
-	theChannel->recvVector(0, 0, vectA);
-	
-	int loc = 0;
-	for (int i=0; i<localMap.Size(); i++) {
-	  int col = localMap(i);
-	  int colSize, pos;
-	  
-	  if (col == 0) {
-	    colSize = 1;
-	    pos = 0;
-	  }
-	  else {
-	    pos = iDiagLoc[col-1];
-	    colSize = iDiagLoc[col] - iDiagLoc[col-1];
-	  }
-	  for (int k=0; k<colSize; k++) {
-	    A[pos++] += workArea[loc++];
-	  }
-	}
-      }    
     }
 
-    // solve
     result(0) = this->LinearSOE::solve();
 
-    //    opserr << *vectX;
-
-    // send results back
     for (int j=0; j<numChannels; j++) {
       Channel *theChannel = theChannels[j];
       theChannel->sendVector(0, 0, *vectX);
@@ -770,34 +811,6 @@ DistributedProfileSPDLinSOE::setChannels(int nChannels, Channel **theC)
 }
 
 
-namespace {
-
-/** Symmetric profile SpMV: A stores upper triangle including diagonal (Fortran profile). */
-void
-profileSpMV(const double *Avals, const int *iDiag, int n, const Vector &p, Vector &Ap)
-{
-  Ap.Zero();
-  if (Avals == 0 || iDiag == 0 || n <= 0)
-    return;
-
-  for (int col = 0; col < n; ++col) {
-    const double pj = p(col);
-    const double *coliiPtr = &Avals[iDiag[col] - 1];
-    int minColRow = 0;
-    if (col > 0)
-      minColRow = col - (iDiag[col] - iDiag[col - 1]) + 1;
-    for (int row = minColRow; row <= col; ++row) {
-      const double aij = coliiPtr[row - col];
-      Ap(row) += aij * pj;
-      if (row != col)
-        Ap(col) += aij * p(row);
-    }
-  }
-}
-
-} // namespace
-
-
 int
 DistributedProfileSPDLinSOE::formAp(const Vector &p, Vector &Ap)
 {
@@ -811,75 +824,30 @@ DistributedProfileSPDLinSOE::formAp(const Vector &p, Vector &Ap)
     return 0;
   }
 
-  // Serial / single process
-  if (numChannels <= 0 || theChannels == 0) {
-    profileSpMV(A, iDiagLoc, size, p, Ap);
-    return 0;
+  if (ensureMergedA() < 0) {
+    opserr << "WARNING DistributedProfileSPDLinSOE::formAp() - ensureMergedA failed\n";
+    return -1;
   }
+
+  // Serial / single process: local SpMV of unfactored profile (A or Aunfactored).
+  if (numChannels <= 0 || theChannels == 0)
+    return ProfileSPDLinSOE::formAp(p, Ap);
 
   if (processID != 0) {
     if (theChannels[0] == 0) {
       opserr << "WARNING DistributedProfileSPDLinSOE::formAp() - worker has no channel\n";
       return -1;
     }
-    Channel *theChannel = theChannels[0];
-
-    // Same gather protocol as solve: send local A when not yet merged/factored.
-    if (isAfactored == false) {
-      Vector vectA(A, (*sizeLocal)(0));
-      if (theChannel->sendVector(0, 0, vectA) < 0) {
-        opserr << "WARNING DistributedProfileSPDLinSOE::formAp() - send A failed\n";
-        return -1;
-      }
-    }
-
-    if (theChannel->recvVector(0, 0, Ap) < 0) {
+    if (theChannels[0]->recvVector(0, 0, Ap) < 0) {
       opserr << "WARNING DistributedProfileSPDLinSOE::formAp() - recv Ap failed\n";
       return -1;
     }
     return 0;
   }
 
-  // Rank 0: optionally merge worker A into a temporary buffer (do not mutate A /
-  // isAfactored — subsequent solve() still owns the permanent merge).
-  double *spmvA = A;
-  double *mergedA = 0;
-  if (isAfactored == false) {
-    mergedA = new double[profileSize];
-    for (int i = 0; i < profileSize; ++i)
-      mergedA[i] = A[i];
-
-    for (int j = 0; j < numChannels; ++j) {
-      Channel *theChannel = theChannels[j];
-      const ID &localMap = *(localCol[j]);
-      int localSize = (*sizeLocal)(j);
-      Vector vectA(workArea, localSize);
-      if (theChannel->recvVector(0, 0, vectA) < 0) {
-        opserr << "WARNING DistributedProfileSPDLinSOE::formAp() - recv A failed\n";
-        delete [] mergedA;
-        return -1;
-      }
-
-      int loc = 0;
-      for (int i = 0; i < localMap.Size(); ++i) {
-        int col = localMap(i);
-        int colSize, pos;
-        if (col == 0) {
-          colSize = 1;
-          pos = 0;
-        } else {
-          pos = iDiagLoc[col - 1];
-          colSize = iDiagLoc[col] - iDiagLoc[col - 1];
-        }
-        for (int k = 0; k < colSize; ++k)
-          mergedA[pos++] += workArea[loc++];
-      }
-    }
-    spmvA = mergedA;
-  }
-
-  profileSpMV(spmvA, iDiagLoc, size, p, Ap);
-  delete [] mergedA;
+  const int rc = ProfileSPDLinSOE::formAp(p, Ap);
+  if (rc != 0)
+    Ap.Zero();
 
   for (int j = 0; j < numChannels; ++j) {
     if (theChannels[j]->sendVector(0, 0, Ap) < 0) {
@@ -888,7 +856,7 @@ DistributedProfileSPDLinSOE::formAp(const Vector &p, Vector &Ap)
     }
   }
 
-  return 0;
+  return rc;
 }
 
 
