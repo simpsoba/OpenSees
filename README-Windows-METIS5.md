@@ -43,6 +43,10 @@ point OpenSees to its installation prefix. A convenient layout is:
 ...\metis-5.1.0\install  <- METIS5_DIR
 ```
 
+`makeWIN_Ninja.bat`, `makeWIN_VS.bat`, and `makeWIN_VS_Profiling.bat`
+auto-detect `..\metis-5.1.0\install` when `METIS5_DIR` is unset. You can also
+set the env var yourself to any install prefix.
+
 ### Obtain METIS 5.1.0
 
 Use the classic 5.1.0 release with bundled GKlib. This fork includes Windows
@@ -97,7 +101,7 @@ metis-5.1.0\install\lib\metis.lib
 
 GKlib is included in `metis.lib`; it does not require a separate link step.
 
-### Build OpenSeesMP
+### Build OpenSeesMP (dedicated)
 
 `makeOpenSeesMP_WIN.bat` defaults to the sibling directory shown above. Edit
 `METIS5_DIR` near the top of the script if METIS is installed elsewhere, then
@@ -112,6 +116,40 @@ The executable is written to:
 ```text
 build-mp\Release\OpenSeesMP.exe
 ```
+
+### Build ops-fresco (OpenSees + OpenSeesMP, dynamic tcl86t)
+
+For the OpenFresco-capable `ops-fresco` branch, use:
+
+```bat
+makeOpsFresco_WIN.bat
+```
+
+That script auto-detects `..\metis-5.1.0\install`. If METIS is elsewhere, set
+`METIS5_DIR` in its SETTINGS block. Outputs:
+
+```text
+build\Release\OpenSees.exe
+build-mp\Release\OpenSeesMP.exe
+```
+
+### Build OpenSees + OpenSeesMP (dual-tree)
+
+For the usual Conan / oneAPI dual-tree layout (`OpenSees.exe` + `OpenSeesMP.exe`
+in `build\Release`, optional SP in `build-sp`):
+
+```bat
+REM optional if not using the default sibling path:
+set METIS5_DIR=%CD%\..\metis-5.1.0\install
+
+makeWIN_Ninja.bat
+REM or: makeWIN_VS.bat
+REM or RelWithDebInfo: makeWIN_VS_Profiling.bat
+```
+
+The bat prints `METIS5_DIR=...` when the install is found. These scripts pass
+`-UOPENSEES_METIS5_LIBRARY` so a changed prefix does not keep a stale
+`find_library` path.
 
 ## Confirm METIS was detected
 
@@ -130,9 +168,9 @@ METIS 5 headers not found; OpenSeesMP partition() will remain a stub
 
 check `METIS5_DIR`, `include/metis.h`, and the library path. If the prefix was
 changed after an earlier configuration, remove the stale CMake cache entry or
-pass `-UOPENSEES_METIS5_LIBRARY`; the Windows build script already does this.
+pass `-UOPENSEES_METIS5_LIBRARY`; the Windows build scripts already do this.
 
-## Quick partition check
+## Quick partition checks
 
 From `EXAMPLES/Partition`, use a smaller mesh for a fast check:
 
@@ -146,3 +184,19 @@ mpiexec -n 4 OpenSeesMP Example.tcl samePart 4 4 20
 The gravity displacement, eigenvalues, and transient displacement should agree
 between serial, METIS, custom, and `samePart` runs up to normal floating-point
 roundoff.
+
+Larger brick-column comparison (`EXAMPLES/LargeMP`):
+
+```bat
+cd EXAMPLES\LargeMP
+..\..\build\Release\OpenSees.exe Example.tcl 4 4 20
+mpiexec -n 4 ..\..\build\Release\OpenSeesMP.exe Example.tcl 4 4 20
+python compare_tip.py
+```
+
+Orphan / equalDOF retention regression (`EXAMPLES/PartitionNodes`):
+
+```bash
+python3 check_partition_nodes.py /path/to/OpenSeesMP 2
+python3 check_partition_nodes.py /path/to/OpenSeesMP 4
+```

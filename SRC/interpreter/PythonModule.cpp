@@ -438,6 +438,18 @@ PythonModule::evalDoubleStringExpression(const char* theExpression, double& curr
 }
 
 void
+PythonModule::resetInput(int nArgs, int cArg, const char** argv) {
+    // Plugin ABI (e.g. OpenFresco loadPackage) resets the command line with a
+    // raw C-string argv, which the Python wrapper does not consume directly;
+    // it operates on PyObject* tuples instead. This mirrors the tagged
+    // ops-fresco-pre-partition-sync implementation, which is a placeholder
+    // only reached when a Tcl-style plugin ABI call is routed through a
+    // Python interpreter; it is not expected to be dereferenced as a real
+    // PyObject.
+    wrapper.resetCommandLine(nArgs, cArg, (PyObject*)argv);
+}
+
+void
 PythonModule::resetInput(int cArg) {
     wrapper.resetCommandLine(cArg);
 }

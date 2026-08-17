@@ -26,36 +26,28 @@
 ** Written: fmk
 */
 
-#include <elementAPI.h>
+#include <tcl.h>
 #include <stdlib.h>
+#include <elementAPI.h>
 #include <packages.h>
 #include <OPS_Globals.h>
 #include <Domain.h>
 #include <Node.h>
-#include <tcl.h>
 #include <TclModelBuilder.h>
-#include <WrapperElement.h>
 
 #include <map>
 #include <UniaxialMaterial.h>
+#include <LimitCurve.h>
 #include <NDMaterial.h>
 #include <SectionForceDeformation.h>
 #include <CrdTransf.h>
 #include <FrictionModel.h>
 #include <WrapperUniaxialMaterial.h>
-#include <WrapperNDMaterial.h>
-#include <LimitCurve.h>
 #include <WrapperLimitCurve.h>
+#include <WrapperNDMaterial.h>
+#include <WrapperElement.h>
 #include <ReliabilityDomain.h>
 
-#include <OPS_Globals.h>
-
-
-typedef struct elementFunction {
-    char* funcName;
-    eleFunct theFunct;
-    struct elementFunction* next;
-} ElementFunction;
 
 typedef struct materialFunction {
     char* funcName;
@@ -68,6 +60,12 @@ typedef struct limitCurveFunction {
     limCrvFunct theFunct;
     struct limitCurveFunction* next;
 } LimitCurveFunction;
+
+typedef struct elementFunction {
+    char* funcName;
+    eleFunct theFunct;
+    struct elementFunction* next;
+} ElementFunction;
 
 extern AnalysisModel* theAnalysisModel;
 extern EquiSolnAlgo* theAlgorithm;
@@ -84,9 +82,9 @@ extern TransientIntegrator* theTransientIntegrator;
 extern ConvergenceTest* theTest;
 extern bool builtModel;
 
-static ElementFunction* theElementFunctions = NULL;
-static MaterialFunction* theMaterialFunctions = NULL;
-static LimitCurveFunction* theLimitCurveFunctions = NULL;
+static MaterialFunction* theMaterialFunctions = 0;
+static LimitCurveFunction* theLimitCurveFunctions = 0;
+static ElementFunction* theElementFunctions = 0;
 
 static Tcl_Interp* theInterp = 0;
 static Domain* theDomain = 0;
@@ -100,6 +98,7 @@ static int maxArg = 0;
 
 extern const char* getInterpPWD(Tcl_Interp* interp);
 extern FE_Datastore* theDatabase;
+extern SimulationInformation* theSimulationInfoPtr;
 
 //static int uniaxialMaterialObjectCount = 0;
 
@@ -113,7 +112,6 @@ struct cmp_str {
 
 //std::map<char*, eleFunct, cmp_str>theEleFunctions;
 //std::map<char*, eleFunct, cmp_str>theUniaxialMaterialFunctions; 
-
 //std::map<int, UniaxialMaterial *>theUniaxialMaterials;           // map for UniaxialMaterial objects needed by user added ele functions'
 
 static
@@ -156,15 +154,6 @@ void OPS_InvokeMaterialObject(struct matObject* theMat, modelState* theModel, do
 }
 
 extern "C"
-int OPS_Error(char* errorMessage, int length)
-{
-    opserr << errorMessage;
-    opserr << endln;
-
-    return 0;
-}
-
-extern "C"
 int OPS_GetNumRemainingInputArgs()
 {
     return maxArg - currentArg;
@@ -188,6 +177,16 @@ void* OPS_GetVoidPtr()
 extern "C"
 int OPS_ExpandDictArgs()
 {
+    return 0;
+}
+
+extern "C"
+int OPS_ResetCommandLine(int nArgs,
+    int cArg, const char** argv)
+{
+    currentArgv = argv;
+    currentArg = cArg;
+    maxArg = nArgs;
     return 0;
 }
 
@@ -223,6 +222,15 @@ int OPS_ResetInputNoBuilder(ClientData clientData,
     currentArgv = argv;
     currentArg = cArg;
     maxArg = mArg;
+
+    return 0;
+}
+
+extern "C"
+int OPS_Error(char* errorMessage, int length)
+{
+    opserr << errorMessage;
+    opserr << endln;
 
     return 0;
 }
@@ -289,7 +297,7 @@ extern "C" int OPS_SetIntDictOutput(
     for (auto& item : data) {
         Tcl_DictObjPut(
             theInterp, dict,
-            Tcl_NewStringObj(item.first, strlen(item.first)),
+            Tcl_NewStringObj(item.first, (int)strlen(item.first)),
             Tcl_NewIntObj(item.second));
     }
 
@@ -315,7 +323,7 @@ extern "C" int OPS_SetIntDictListOutput(
 
         Tcl_DictObjPut(
             theInterp, dict,
-            Tcl_NewStringObj(item.first, strlen(item.first)), obj);
+            Tcl_NewStringObj(item.first, (int)strlen(item.first)), obj);
     }
 
     // set result
@@ -452,7 +460,7 @@ extern "C" int OPS_SetDoubleDictOutput(
     for (auto& item : data) {
         Tcl_DictObjPut(
             theInterp, dict,
-            Tcl_NewStringObj(item.first, strlen(item.first)),
+            Tcl_NewStringObj(item.first, (int)strlen(item.first)),
             Tcl_NewDoubleObj(item.second));
     }
 
@@ -478,7 +486,7 @@ extern "C" int OPS_SetDoubleDictListOutput(
 
         Tcl_DictObjPut(
             theInterp, dict,
-            Tcl_NewStringObj(item.first, strlen(item.first)), obj);
+            Tcl_NewStringObj(item.first, (int)strlen(item.first)), obj);
     }
 
     // set result
@@ -515,7 +523,7 @@ int OPS_SetString(const char* str)
     return 0;
 }
 
-int OPS_GetStringCopy(char** arrayData)
+/*int OPS_GetStringCopy(char** arrayData)
 {
     if (currentArg >= maxArg) {
         opserr << "OPS_GetStringInput -- error reading " << currentArg << endln;
@@ -527,7 +535,7 @@ int OPS_GetStringCopy(char** arrayData)
     currentArg++;
 
     return 0;
-}
+}*/
 
 extern "C" int OPS_SetStringList(std::vector<const char*>& data) {
     // a vector holds tcl objects of lists
@@ -535,7 +543,7 @@ extern "C" int OPS_SetStringList(std::vector<const char*>& data) {
 
     // for each string
     for (int i = 0; i < (int)data.size(); ++i) {
-        tclData[i] = Tcl_NewStringObj(data[i], strlen(data[i]));
+        tclData[i] = Tcl_NewStringObj(data[i], (int)strlen(data[i]));
     }
 
     // Tcl object for list of list
@@ -556,7 +564,7 @@ extern "C" int OPS_SetStringLists(
     for (int i = 0; i < (int)data.size(); ++i) {
         std::vector<Tcl_Obj*> sublist(data[i].size());
         for (int j = 0; j < (int)data[i].size(); ++j) {
-            sublist[j] = Tcl_NewStringObj(data[i][j], strlen(data[i][j]));
+            sublist[j] = Tcl_NewStringObj(data[i][j], (int)strlen(data[i][j]));
         }
         tclData[i] = Tcl_NewListObj((int)sublist.size(), &sublist[0]);
     }
@@ -579,8 +587,8 @@ extern "C" int OPS_SetStringDict(
     for (auto& item : data) {
         Tcl_DictObjPut(
             theInterp, dict,
-            Tcl_NewStringObj(item.first, strlen(item.first)),
-            Tcl_NewStringObj(item.second, strlen(item.second)));
+            Tcl_NewStringObj(item.first, (int)strlen(item.first)),
+            Tcl_NewStringObj(item.second, (int)strlen(item.second)));
     }
 
     // set result
@@ -600,13 +608,13 @@ extern "C" int OPS_SetStringDictList(
         std::vector<Tcl_Obj*> sublist(item.second.size());
         for (int j = 0; j < (int)item.second.size(); ++j) {
             sublist[j] = Tcl_NewStringObj(item.second[j],
-                                          strlen(item.second[j]));
+                                          (int)strlen(item.second[j]));
         }
         auto* obj = Tcl_NewListObj((int)sublist.size(), &sublist[0]);
 
         Tcl_DictObjPut(
             theInterp, dict,
-            Tcl_NewStringObj(item.first, strlen(item.first)), obj);
+            Tcl_NewStringObj(item.first, (int)strlen(item.first)), obj);
     }
 
     // set result
@@ -618,37 +626,37 @@ extern "C" int OPS_SetStringDictList(
 extern "C" int OPS_SetGenericDict(GenericDict& data) {
     // Create TCL dictionary
     Tcl_Obj* dict = Tcl_NewDictObj();
-    
+
     for (auto& [key, value] : data) {
         Tcl_Obj* tclValue = nullptr;
-        
+
         // Use std::visit to convert variant to TCL object
         std::visit([&](auto&& arg) {
             using T = std::decay_t<decltype(arg)>;
-            
+
             if constexpr (std::is_same_v<T, int>) {
                 tclValue = Tcl_NewIntObj(arg);
-                
+
             } else if constexpr (std::is_same_v<T, double>) {
                 tclValue = Tcl_NewDoubleObj(arg);
-                
+
             } else if constexpr (std::is_same_v<T, std::string>) {
                 tclValue = Tcl_NewStringObj(arg.c_str(), -1);
-                
+
             } else if constexpr (std::is_same_v<T, std::vector<int>>) {
                 std::vector<Tcl_Obj*> list(arg.size());
                 for (size_t i = 0; i < arg.size(); i++) {
                     list[i] = Tcl_NewIntObj(arg[i]);
                 }
                 tclValue = Tcl_NewListObj((int)list.size(), &list[0]);
-                
+
             } else if constexpr (std::is_same_v<T, std::vector<double>>) {
                 std::vector<Tcl_Obj*> list(arg.size());
                 for (size_t i = 0; i < arg.size(); i++) {
                     list[i] = Tcl_NewDoubleObj(arg[i]);
                 }
                 tclValue = Tcl_NewListObj((int)list.size(), &list[0]);
-                
+
             } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
                 std::vector<Tcl_Obj*> list(arg.size());
                 for (size_t i = 0; i < arg.size(); i++) {
@@ -657,15 +665,148 @@ extern "C" int OPS_SetGenericDict(GenericDict& data) {
                 tclValue = Tcl_NewListObj((int)list.size(), &list[0]);
             }
         }, value);
-        
+
         if (tclValue != nullptr) {
             Tcl_DictObjPut(theInterp, dict,
                           Tcl_NewStringObj(key.c_str(), -1), tclValue);
         }
     }
-    
+
     // set result
     Tcl_SetObjResult(theInterp, dict);
+
+    return 0;
+}
+
+int
+OPS_GetNDF()
+{
+    return theModelBuilder->getNDF();
+}
+
+int
+OPS_GetNDM()
+{
+    return theModelBuilder->getNDM();
+}
+
+extern "C"
+int OPS_GetNodeCrd(int* nodeTag, int* sizeCrd, double* data)
+{
+    Node* theNode = theDomain->getNode(*nodeTag);
+    if (theNode == 0) {
+        opserr << "OPS_GetNodeCrd - no node with tag " << *nodeTag << endln;
+        return -1;
+    }
+    int size = *sizeCrd;
+    const Vector& crd = theNode->getCrds();
+    if (crd.Size() != size) {
+        opserr << "OPS_GetNodeCrd - crd size mismatch\n";
+        opserr << "Actual crd size is: " << crd.Size() << endln; //MRL Add Error Detection
+        return -1;
+    }
+    for (int i = 0; i < size; i++)
+        data[i] = crd(i);
+
+    return 0;
+}
+
+extern "C"
+int OPS_GetNodeDisp(int* nodeTag, int* sizeData, double* data)
+{
+    Node* theNode = theDomain->getNode(*nodeTag);
+    if (theNode == 0) {
+        opserr << "OPS_GetNodeDisp - no node with tag " << *nodeTag << endln;
+        return -1;
+    }
+    int size = *sizeData;
+    const Vector& disp = theNode->getTrialDisp();
+    if (disp.Size() != size) {
+        opserr << "OPS_GetNodeDisp - crd size mismatch\n";
+        return -1;
+    }
+    for (int i = 0; i < size; i++)
+        data[i] = disp(i);
+
+    return 0;
+}
+
+extern "C"
+int OPS_GetNodeVel(int* nodeTag, int* sizeData, double* data)
+{
+    Node* theNode = theDomain->getNode(*nodeTag);
+    if (theNode == 0) {
+        opserr << "OPS_GetNodeVel - no node with tag " << *nodeTag << endln;
+        return -1;
+    }
+    int size = *sizeData;
+    const Vector& vel = theNode->getTrialVel();
+    if (vel.Size() != size) {
+        opserr << "OPS_GetNodeVel - crd size mismatch\n";
+        return -1;
+    }
+    for (int i = 0; i < size; i++)
+        data[i] = vel(i);
+
+    return 0;
+}
+
+extern "C"
+int OPS_GetNodeAccel(int* nodeTag, int* sizeData, double* data)
+{
+    Node* theNode = theDomain->getNode(*nodeTag);
+    if (theNode == 0) {
+        opserr << "OPS_GetNodeAccel - no node with tag " << *nodeTag << endln;
+        return -1;
+    }
+    int size = *sizeData;
+    const Vector& accel = theNode->getTrialAccel();
+    if (accel.Size() != size) {
+        opserr << "OPS_GetNodeAccel - accel size mismatch\n";
+        return -1;
+    }
+    for (int i = 0; i < size; i++)
+        data[i] = accel(i);
+
+    return 0;
+}
+
+extern "C"
+int OPS_GetNodeIncrDisp(int* nodeTag, int* sizeData, double* data)
+{
+    Node* theNode = theDomain->getNode(*nodeTag);
+    if (theNode == 0) {
+        opserr << "OPS_GetNodeIncrDisp - no node with tag " << *nodeTag << endln;
+        return -1;
+    }
+    int size = *sizeData;
+    const Vector& disp = theNode->getIncrDisp();
+    if (disp.Size() != size) {
+        opserr << "OPS_GetNodeIncrDis - crd size mismatch\n";
+        return -1;
+    }
+    for (int i = 0; i < size; i++)
+        data[i] = disp(i);
+
+    return 0;
+}
+
+extern "C"
+int OPS_GetNodeIncrDeltaDisp(int* nodeTag, int* sizeData, double* data)
+{
+    Node* theNode = theDomain->getNode(*nodeTag);
+    if (theNode == 0) {
+        opserr << "OPS_GetNodeIncrDeltaDisp - no node with tag " << *nodeTag << endln;
+        return -1;
+    }
+    int size = *sizeData;
+    const Vector& disp = theNode->getIncrDeltaDisp();
+    if (disp.Size() != size) {
+        opserr << "OPS_GetNodeIncrDis - crd size mismatch\n";
+        return -1;
+    }
+    for (int i = 0; i < size; i++)
+        data[i] = disp(i);
 
     return 0;
 }
@@ -679,8 +820,8 @@ matObj * OPS_GetMaterial(int* matTag, int* matType)
         if (theUniaxialMaterial != 0) {
 
             UniaxialMaterial* theCopy = theUniaxialMaterial->getCopy();
-            //  uniaxialMaterialObjectCount++;
-            // theUniaxialMaterials[uniaxialMaterialObjectCount] = theCopy;
+            //uniaxialMaterialObjectCount++;
+            //theUniaxialMaterials[uniaxialMaterialObjectCount] = theCopy;
 
             matObject* theMatObject = new matObject;
             theMatObject->tag = *matTag;
@@ -688,7 +829,7 @@ matObj * OPS_GetMaterial(int* matTag, int* matType)
             theMatObject->nState = 0;
 
             theMatObject->theParam = new double[1];
-            //  theMatObject->theParam[0] = uniaxialMaterialObjectCount;
+            //theMatObject->theParam[0] = uniaxialMaterialObjectCount;
             theMatObject->theParam[0] = 1; // code for uniaxial material
 
             theMatObject->tState = 0;
@@ -702,7 +843,6 @@ matObj * OPS_GetMaterial(int* matTag, int* matType)
 
         fprintf(stderr, "getMaterial - no uniaxial material exists with tag %d\n", *matTag);
         return 0;
-
     }
     else if (*matType == OPS_SECTION_TYPE) {
         fprintf(stderr, "getMaterial - not yet implemented for Section\n");
@@ -729,6 +869,56 @@ matObj * OPS_GetMaterial(int* matTag, int* matType)
     }
 
     fprintf(stderr, "getMaterial - unknown material type\n");
+    return 0;
+}
+
+extern "C"
+matObj* OPS_GetMaterialType(char* type, int sizeType)
+{
+    // try existing loaded routines
+    MaterialFunction* matFunction = theMaterialFunctions;
+    bool found = false;
+    while (matFunction != NULL && found == false) {
+        if (strcmp(type, matFunction->funcName) == 0) {
+
+            // create a new matObject, set the function ptr & return it
+            matObj* theMatObject = new matObj;
+            theMatObject->matFunctPtr = matFunction->theFunct;
+            //opserr << "matObj *OPS_GetMaterialType() - FOUND " << endln;
+            return theMatObject;
+        }
+        else
+            matFunction = matFunction->next;
+    }
+
+    // try to load new routine from dynamic library in load path
+    matFunct matFunctPtr;
+    void* libHandle;
+
+    int res = getLibraryFunction(type, type, &libHandle, (void**)&matFunctPtr);
+
+    if (res == 0) {
+
+        // add the routine to the list of possible elements
+        char* funcName = new char[strlen(type) + 1];
+        strcpy(funcName, type);
+        matFunction = new MaterialFunction;
+        matFunction->theFunct = matFunctPtr;
+        matFunction->funcName = funcName;
+        matFunction->next = theMaterialFunctions;
+        theMaterialFunctions = matFunction;
+
+        // create a new matObject, set the function ptr & return it
+        matObj* theMatObject = new matObj;
+        //eleObj *theEleObject = (eleObj *)malloc(sizeof( eleObj));;      
+
+        theMatObject->matFunctPtr = matFunction->theFunct;
+
+        //fprintf(stderr,"getMaterial Address %p\n",theMatObject);
+
+        return theMatObject;
+    }
+
     return 0;
 }
 
@@ -770,126 +960,15 @@ void OPS_GetMaterialPtr(int *matTag, matObj *theRes)
 */
 
 extern "C"
-eleObj * OPS_GetElement(int* eleTag) {
-    return 0;
-}
-
-extern "C"
-eleObj * OPS_GetElementType(char* type, int sizeType) {
-
-    // try existing loaded routines
-
-    ElementFunction* eleFunction = theElementFunctions;
-    bool found = false;
-    while (eleFunction != NULL && found == false) {
-        if (strcmp(type, eleFunction->funcName) == 0) {
-
-            // create a new eleObject, set the function ptr &  return it
-
-            eleObj* theEleObject = new eleObj;
-            theEleObject->eleFunctPtr = eleFunction->theFunct;
-            return theEleObject;
-        }
-        else
-            eleFunction = eleFunction->next;
-    }
-
-    // ty to load new routine from dynamic library in load path
-
-    eleFunct eleFunctPtr;
-    void* libHandle;
-
-    int res = getLibraryFunction(type, type, &libHandle, (void**)&eleFunctPtr);
-
-    if (res == 0) {
-
-        // add the routine to the list of possible elements
-
-        char* funcName = new char[strlen(type) + 1];
-        strcpy(funcName, type);
-        eleFunction = new ElementFunction;
-        eleFunction->theFunct = eleFunctPtr;
-        eleFunction->funcName = funcName;
-        eleFunction->next = theElementFunctions;
-        theElementFunctions = eleFunction;
-
-        // create a new eleObject, set the function ptr &  return it
-
-        eleObj* theEleObject = new eleObj;
-        //eleObj *theEleObject = (eleObj *)malloc(sizeof( eleObj));;      
-
-        theEleObject->eleFunctPtr = eleFunction->theFunct;
-
-        return theEleObject;
-    }
-
-    return 0;
-}
-
-extern "C"
-matObj * OPS_GetMaterialType(char* type, int sizeType) {
-
-    // try existing loaded routines
-    MaterialFunction* matFunction = theMaterialFunctions;
-    bool found = false;
-    while (matFunction != NULL && found == false) {
-        if (strcmp(type, matFunction->funcName) == 0) {
-
-            // create a new eleObject, set the function ptr &  return it
-
-            matObj* theMatObject = new matObj;
-            theMatObject->matFunctPtr = matFunction->theFunct;
-            /* opserr << "matObj *OPS_GetMaterialType() - FOUND " << endln;  */
-            return theMatObject;
-        }
-        else
-            matFunction = matFunction->next;
-    }
-
-    // ty to load new routine from dynamic library in load path
-    matFunct matFunctPtr;
-    void* libHandle;
-
-    int res = getLibraryFunction(type, type, &libHandle, (void**)&matFunctPtr);
-
-    if (res == 0) {
-
-        // add the routine to the list of possible elements
-
-        char* funcName = new char[strlen(type) + 1];
-        strcpy(funcName, type);
-        matFunction = new MaterialFunction;
-        matFunction->theFunct = matFunctPtr;
-        matFunction->funcName = funcName;
-        matFunction->next = theMaterialFunctions;
-        theMaterialFunctions = matFunction;
-
-        // create a new eleObject, set the function ptr &  return it
-
-        matObj* theMatObject = new matObj;
-        //eleObj *theEleObject = (eleObj *)malloc(sizeof( eleObj));;      
-
-        theMatObject->matFunctPtr = matFunction->theFunct;
-
-        //    fprintf(stderr,"getMaterial Address %p\n",theMatObject);
-
-        return theMatObject;
-    }
-
-    return 0;
-}
-
-extern "C"
-limCrvObj * OPS_GetLimitCurveType(char* type, int sizeType) {
-
+limCrvObj* OPS_GetLimitCurveType(char* type, int sizeType)
+{
     // try existing loaded routines
     LimitCurveFunction* limCrvFunction = theLimitCurveFunctions;
     bool found = false;
     while (limCrvFunction != NULL && found == false) {
         if (strcmp(type, limCrvFunction->funcName) == 0) {
 
-            // create a new eleObject, set the function ptr &  return it
-
+            // create a new limCrvObject, set the function ptr & return it
             limCrvObj* theLimCrvObject = new limCrvObj;
             theLimCrvObject->limCrvFunctPtr = limCrvFunction->theFunct;
             /* opserr << "limCrvObj *OPS_GetLimitCurveType() - FOUND " << endln;  */
@@ -915,7 +994,7 @@ limCrvObj * OPS_GetLimitCurveType(char* type, int sizeType) {
         limCrvFunction->next = theLimitCurveFunctions;
         theLimitCurveFunctions = limCrvFunction;
 
-        // create a new eleObject, set the function ptr &  return it    
+        // create a new limCrvObject, set the function ptr & return it    
         limCrvObj* theLimCrvObject = new limCrvObj;
         theLimCrvObject->limCrvFunctPtr = limCrvFunction->theFunct;
         return theLimCrvObject;
@@ -925,36 +1004,63 @@ limCrvObj * OPS_GetLimitCurveType(char* type, int sizeType) {
 }
 
 extern "C"
-int OPS_AllocateLimitCurve(limCrvObject * theLimCrv) {
+eleObj * OPS_GetElement(int* eleTag)
+{
+    return 0;
+}
 
-    /*fprintf(stderr,"allocateLimitCurve Address %p\n",theLimCrv);*/
+extern "C"
+eleObj * OPS_GetElementType(char* type, int sizeType)
+{
+    // try existing loaded routines
+    ElementFunction* eleFunction = theElementFunctions;
+    bool found = false;
+    while (eleFunction != NULL && found == false) {
+        if (strcmp(type, eleFunction->funcName) == 0) {
 
-    if (theLimCrv->nParam > 0)
-        theLimCrv->theParam = new double[theLimCrv->nParam];
+            // create a new eleObject, set the function ptr &  return it
 
-    int nState = theLimCrv->nState;
-
-    if (nState > 0) {
-        theLimCrv->cState = new double[nState];
-        theLimCrv->tState = new double[nState];
-        for (int i = 0; i < nState; i++) {
-            theLimCrv->cState[i] = 0;
-            theLimCrv->tState[i] = 0;
+            eleObj* theEleObject = new eleObj;
+            theEleObject->eleFunctPtr = eleFunction->theFunct;
+            return theEleObject;
         }
+        else
+            eleFunction = eleFunction->next;
     }
-    else {
-        theLimCrv->cState = 0;
-        theLimCrv->tState = 0;
+
+    // try to load new routine from dynamic library in load path
+    eleFunct eleFunctPtr;
+    void* libHandle;
+
+    int res = getLibraryFunction(type, type, &libHandle, (void**)&eleFunctPtr);
+
+    if (res == 0) {
+
+        // add the routine to the list of possible elements
+        char* funcName = new char[strlen(type) + 1];
+        strcpy(funcName, type);
+        eleFunction = new ElementFunction;
+        eleFunction->theFunct = eleFunctPtr;
+        eleFunction->funcName = funcName;
+        eleFunction->next = theElementFunctions;
+        theElementFunctions = eleFunction;
+
+        // create a new eleObject, set the function ptr & return it
+        eleObj* theEleObject = new eleObj;
+        //eleObj *theEleObject = (eleObj *)malloc(sizeof( eleObj));;      
+
+        theEleObject->eleFunctPtr = eleFunction->theFunct;
+
+        return theEleObject;
     }
 
     return 0;
 }
 
 extern "C"
-int OPS_AllocateMaterial(matObject * theMat) {
-
-    /*fprintf(stderr,"allocateMaterial Address %p\n",theMat);*/
-
+int OPS_AllocateMaterial(matObject * theMat)
+{
+    //fprintf(stderr,"allocateMaterial Address %p\n",theMat);
     if (theMat->nParam > 0)
         theMat->theParam = new double[theMat->nParam];
 
@@ -977,7 +1083,33 @@ int OPS_AllocateMaterial(matObject * theMat) {
 }
 
 extern "C"
-int OPS_AllocateElement(eleObject * theEle, int* matTags, int* matType) {
+int OPS_AllocateLimitCurve(limCrvObject* theLimCrv)
+{
+    //fprintf(stderr,"allocateLimitCurve Address %p\n",theLimCrv);
+    if (theLimCrv->nParam > 0)
+        theLimCrv->theParam = new double[theLimCrv->nParam];
+
+    int nState = theLimCrv->nState;
+
+    if (nState > 0) {
+        theLimCrv->cState = new double[nState];
+        theLimCrv->tState = new double[nState];
+        for (int i = 0; i < nState; i++) {
+            theLimCrv->cState[i] = 0;
+            theLimCrv->tState[i] = 0;
+        }
+    }
+    else {
+        theLimCrv->cState = 0;
+        theLimCrv->tState = 0;
+    }
+
+    return 0;
+}
+
+extern "C"
+int OPS_AllocateElement(eleObject * theEle, int* matTags, int* matType)
+{
     if (theEle->nNode > 0)
         theEle->node = new int[theEle->nNode];
 
@@ -995,10 +1127,9 @@ int OPS_AllocateElement(eleObject * theEle, int* matTags, int* matType) {
 
 
     for (int i = 0; i < numMat; i++) {
-        /*  opserr << "AllocateElement - matTag " << matTags[i] << "\n"; */
-
+        //opserr << "AllocateElement - matTag " << matTags[i] << "\n"; */
         matObject* theMat = OPS_GetMaterial(&(matTags[i]), matType);
-        //    matObject *theMat = OPS_GetMaterial(&(matTags[i]));
+        //matObject *theMat = OPS_GetMaterial(&(matTags[i]));
 
         theEle->mats[i] = theMat;
     }
@@ -1006,135 +1137,152 @@ int OPS_AllocateElement(eleObject * theEle, int* matTags, int* matType) {
     return 0;
 }
 
-extern "C"
-int OPS_GetNodeCrd(int* nodeTag, int* sizeCrd, double* data)
+extern "C" int
+OPS_InvokeMaterial(eleObject* theEle, int* mat, modelState* model, double* strain, double* stress, double* tang, int* isw)
 {
-    Node* theNode = theDomain->getNode(*nodeTag);
-    if (theNode == 0) {
-        opserr << "OPS_GetNodeCrd - no node with tag " << *nodeTag << endln;
-        return -1;
-    }
-    int size = *sizeCrd;
-    const Vector& crd = theNode->getCrds();
-    if (crd.Size() != size) {
-        opserr << "OPS_GetNodeCrd - crd size mismatch\n";
-        opserr << "Actual crd size is: " << crd.Size() << endln; //MRL Add Error Detection
-        return -1;
-    }
-    for (int i = 0; i < size; i++)
-        data[i] = crd(i);
+    int error = 0;
 
-    return 0;
+    matObject* theMat = theEle->mats[*mat];
+    //fprintf(stderr,"invokeMaterial Address %d %d %d\n",*mat, theMat, sizeof(int));
+
+    if (theMat != 0)
+        theMat->matFunctPtr(theMat, model, strain, tang, stress, isw, &error);
+    else
+        error = -1;
+
+    return error;
 }
 
-extern "C"
-int OPS_GetNodeDisp(int* nodeTag, int* sizeData, double* data)
+extern "C" int
+OPS_InvokeMaterialDirectly(matObject** theMat, modelState* model, double* strain, double* stress, double* tang, int* isw)
 {
-    Node* theNode = theDomain->getNode(*nodeTag);
+    int error = 0;
+    //fprintf(stderr,"invokeMaterialDirectly Address %d %d %d\n",theMat, sizeof(int), *theMat);
+    if (*theMat != 0)
+        (*theMat)->matFunctPtr(*theMat, model, strain, tang, stress, isw, &error);
+    else
+        error = -1;
 
-    if (theNode == 0) {
-        opserr << "OPS_GetNodeDisp - no node with tag " << *nodeTag << endln;
-        return -1;
-    }
-    int size = *sizeData;
-    const Vector& disp = theNode->getTrialDisp();
-
-    if (disp.Size() != size) {
-        opserr << "OPS_GetNodeDisp - crd size mismatch\n";
-        return -1;
-    }
-    for (int i = 0; i < size; i++)
-        data[i] = disp(i);
-
-    return 0;
+    return error;
 }
 
-extern "C"
-int OPS_GetNodeVel(int* nodeTag, int* sizeData, double* data)
+extern "C" int
+OPS_InvokeMaterialDirectly2(matObject* theMat, modelState* model, double* strain, double* stress, double* tang, int* isw)
 {
-    Node* theNode = theDomain->getNode(*nodeTag);
+    int error = 0;
+    //fprintf(stderr,"invokeMaterialDirectly Address %d %d\n",theMat, sizeof(int));
+    if (theMat != 0)
+        theMat->matFunctPtr(theMat, model, strain, tang, stress, isw, &error);
+    else
+        error = -1;
 
-    if (theNode == 0) {
-        opserr << "OPS_GetNodeVel - no node with tag " << *nodeTag << endln;
-        return -1;
-    }
-    int size = *sizeData;
-    const Vector& vel = theNode->getTrialVel();
-
-    if (vel.Size() != size) {
-        opserr << "OPS_GetNodeVel - crd size mismatch\n";
-        return -1;
-    }
-    for (int i = 0; i < size; i++)
-        data[i] = vel(i);
-
-    return 0;
+    return error;
 }
 
-extern "C"
-int OPS_GetNodeAccel(int* nodeTag, int* sizeData, double* data)
+UniaxialMaterial*
+Tcl_addWrapperUniaxialMaterial(matObj* theMat, ClientData clientData, Tcl_Interp* interp, int argc, TCL_Char** argv)
 {
-    Node* theNode = theDomain->getNode(*nodeTag);
+    theInterp = interp;
 
-    if (theNode == 0) {
-        opserr << "OPS_GetNodeAccel - no node with tag " << *nodeTag << endln;
-        return -1;
+    currentArgv = argv;
+    currentArg = 2;
+    maxArg = argc;
+
+    // get the current load factor
+    static modelState theModelState;
+    if (theDomain != 0) {
+        double time = theDomain->getCurrentTime();
+        double dt = theDomain->getCurrentTime() - time;
+        theModelState.time = time;
+        theModelState.dt = dt;
     }
-    int size = *sizeData;
-    const Vector& accel = theNode->getTrialAccel();
 
-    if (accel.Size() != size) {
-        opserr << "OPS_GetNodeAccel - accel size mismatch\n";
-        return -1;
+    // invoke the mat function with isw = 0
+    int isw = ISW_INIT;
+    int result = 0;
+    theMat->matFunctPtr(theMat, &theModelState, 0, 0, 0, &isw, &result);
+    int matType = theMat->matType; // GR added to support material
+
+    if (result != 0 || matType != OPS_UNIAXIAL_MATERIAL_TYPE) {
+        opserr << "Tcl_addWrapperUniaxialMaterial - failed in element function " << result << endln;
+        return 0;
     }
-    for (int i = 0; i < size; i++)
-        data[i] = accel(i);
 
-    return 0;
+    WrapperUniaxialMaterial* theMaterial = new WrapperUniaxialMaterial(argv[1], theMat);
+
+    return theMaterial;
 }
 
-extern "C"
-int OPS_GetNodeIncrDisp(int* nodeTag, int* sizeData, double* data)
+LimitCurve*
+Tcl_addWrapperLimitCurve(limCrvObj* theLimCrv, ClientData clientData, Tcl_Interp* interp, int argc, TCL_Char** argv)
 {
-    Node* theNode = theDomain->getNode(*nodeTag);
+    theInterp = interp;
 
-    if (theNode == 0) {
-        opserr << "OPS_GetNodeIncrDisp - no node with tag " << *nodeTag << endln;
-        return -1;
+    //  theModelBuilder = builder;
+    currentArgv = argv;
+    currentArg = 2;
+    maxArg = argc;
+
+    // get the current load factor
+    static modelState theModelState;
+    if (theDomain != 0) {
+        double time = theDomain->getCurrentTime();
+        double dt = theDomain->getCurrentTime() - time;
+        theModelState.time = time;
+        theModelState.dt = dt;
     }
-    int size = *sizeData;
-    const Vector& disp = theNode->getIncrDisp();
 
-    if (disp.Size() != size) {
-        opserr << "OPS_GetNodeIncrDis - crd size mismatch\n";
-        return -1;
+    // invoke the limit curve function with isw = 0
+    int isw = ISW_INIT;
+    int result;
+    theLimCrv->limCrvFunctPtr(theLimCrv, &theModelState, 0, 0, 0, &isw, &result);
+
+    if (result != 0) {
+        opserr << "Tcl_addWrapperLimitCurve - failed in limit curve function " << result << endln;
+        return 0;
     }
-    for (int i = 0; i < size; i++)
-        data[i] = disp(i);
 
-    return 0;
+    WrapperLimitCurve* theLimitCurve = new WrapperLimitCurve(argv[1], theLimCrv);
+
+    return theLimitCurve;
 }
 
-extern "C"
-int OPS_GetNodeIncrDeltaDisp(int* nodeTag, int* sizeData, double* data)
+NDMaterial*
+Tcl_addWrapperNDMaterial(matObj* theMat, ClientData clientData, Tcl_Interp* interp, int argc,
+    TCL_Char** argv, TclModelBuilder* builder)
 {
-    Node* theNode = theDomain->getNode(*nodeTag);
+    theInterp = interp;
 
-    if (theNode == 0) {
-        opserr << "OPS_GetNodeIncrDeltaDisp - no node with tag " << *nodeTag << endln;
-        return -1;
+    theModelBuilder = builder;
+    currentArgv = argv;
+    currentArg = 2;
+    maxArg = argc;
+
+    // get the current load factor
+    static modelState theModelState;
+    if (theDomain != 0) {
+        double time = theDomain->getCurrentTime();
+        double dt = theDomain->getCurrentTime() - time;
+        theModelState.time = time;
+        theModelState.dt = dt;
     }
-    int size = *sizeData;
-    const Vector& disp = theNode->getIncrDeltaDisp();
 
-    if (disp.Size() != size) {
-        opserr << "OPS_GetNodeIncrDis - crd size mismatch\n";
-        return -1;
+    // invoke the mat function with isw = 0
+    int isw = ISW_INIT;
+    int result = 0;
+    theMat->matFunctPtr(theMat, &theModelState, 0, 0, 0, &isw, &result);
+    int matType = theMat->matType; // GR added to support material
+
+    if (result != 0 || (matType != OPS_PLANESTRESS_TYPE &&
+        matType != OPS_PLANESTRAIN_TYPE &&
+        matType != OPS_THREEDIMENSIONAL_TYPE)) {
+        opserr << "Tcl_addWrapperNDMaterial - failed in element function " << result << endln;
+        return 0;
     }
-    for (int i = 0; i < size; i++)
-        data[i] = disp(i);
 
-    return 0;
+    WrapperNDMaterial* theMaterial = new WrapperNDMaterial(argv[1], theMat, theMat->matType);
+
+    return theMaterial;
 }
 
 int
@@ -1177,158 +1325,28 @@ Tcl_addWrapperElement(eleObj* theEle, ClientData clientData, Tcl_Interp* interp,
     return 0;
 }
 
-UniaxialMaterial*
-Tcl_addWrapperUniaxialMaterial(matObj* theMat, ClientData clientData, Tcl_Interp* interp, int argc, TCL_Char** argv)
+const char*
+OPS_GetInterpPWD()
 {
-    theInterp = interp;
-
-    currentArgv = argv;
-    currentArg = 2;
-    maxArg = argc;
-
-    // get the current load factor
-    static modelState theModelState;
-    if (theDomain != 0) {
-        double time = theDomain->getCurrentTime();
-        double dt = theDomain->getCurrentTime() - time;
-        theModelState.time = time;
-        theModelState.dt = dt;
-    }
-
-    // invoke the mat function with isw = 0
-    int isw = ISW_INIT;
-    int result = 0;
-    theMat->matFunctPtr(theMat, &theModelState, 0, 0, 0, &isw, &result);
-    int matType = theMat->matType; // GR added to support material
-
-    if (result != 0 || matType != OPS_UNIAXIAL_MATERIAL_TYPE) {
-        opserr << "Tcl_addWrapperUniaxialMaterial - failed in element function " << result << endln;
-        return 0;
-    }
-
-    WrapperUniaxialMaterial* theMaterial = new WrapperUniaxialMaterial(argv[1], theMat);
-
-    return theMaterial;
+    return getInterpPWD(theInterp);
 }
 
-NDMaterial*
-Tcl_addWrapperNDMaterial(matObj* theMat, ClientData clientData, Tcl_Interp* interp, int argc,
-    TCL_Char** argv, TclModelBuilder* builder)
+void
+TCL_OPS_setModelBuilder(TclModelBuilder* theNewBuilder)
 {
-    theInterp = interp;
-
-    theModelBuilder = builder;
-    currentArgv = argv;
-    currentArg = 2;
-    maxArg = argc;
-
-    // get the current load factor
-    static modelState theModelState;
-    if (theDomain != 0) {
-        double time = theDomain->getCurrentTime();
-        double dt = theDomain->getCurrentTime() - time;
-        theModelState.time = time;
-        theModelState.dt = dt;
-    }
-
-    // invoke the mat function with isw = 0
-    int isw = ISW_INIT;
-    int result = 0;
-    theMat->matFunctPtr(theMat, &theModelState, 0, 0, 0, &isw, &result);
-    int matType = theMat->matType; // GR added to support material
-
-    if (result != 0 || (matType != OPS_PLANESTRESS_TYPE &&
-        matType != OPS_PLANESTRAIN_TYPE &&
-        matType != OPS_THREEDIMENSIONAL_TYPE)) {
-        opserr << "Tcl_addWrapperNDMaterial - failed in element function " << result << endln;
-        return 0;
-    }
-
-    WrapperNDMaterial* theMaterial = new WrapperNDMaterial(argv[1], theMat, theMat->matType);
-
-    return theMaterial;
-}
-
-LimitCurve*
-Tcl_addWrapperLimitCurve(limCrvObj* theLimCrv, ClientData clientData, Tcl_Interp* interp, int argc, TCL_Char** argv)
-{
-    theInterp = interp;
-
-    //  theModelBuilder = builder;
-    currentArgv = argv;
-    currentArg = 2;
-    maxArg = argc;
-
-    // get the current load factor
-    static modelState theModelState;
-    if (theDomain != 0) {
-        double time = theDomain->getCurrentTime();
-        double dt = theDomain->getCurrentTime() - time;
-        theModelState.time = time;
-        theModelState.dt = dt;
-    }
-
-    // invoke the limit curve function with isw = 0
-    int isw = ISW_INIT;
-    int result;
-    theLimCrv->limCrvFunctPtr(theLimCrv, &theModelState, 0, 0, 0, &isw, &result);
-
-    if (result != 0) {
-        opserr << "Tcl_addWrapperLimitCurve - failed in limit curve function " << result << endln;
-        return 0;
-    }
-
-    WrapperLimitCurve* theLimitCurve = new WrapperLimitCurve(argv[1], theLimCrv);
-
-    return theLimitCurve;
-}
-
-extern "C" int
-OPS_InvokeMaterial(eleObject * theEle, int* mat, modelState * model, double* strain, double* stress, double* tang, int* isw)
-{
-    int error = 0;
-
-    matObject* theMat = theEle->mats[*mat];
-    /* fprintf(stderr,"invokeMaterial Address %d %d %d\n",*mat, theMat, sizeof(int)); */
-
-    if (theMat != 0)
-        theMat->matFunctPtr(theMat, model, strain, tang, stress, isw, &error);
-    else
-        error = -1;
-    
-    return error;
-}
-
-extern "C" int
-OPS_InvokeMaterialDirectly(matObject * *theMat, modelState * model, double* strain, double* stress, double* tang, int* isw)
-{
-    int error = 0;
-    //  fprintf(stderr,"invokeMaterialDirectly Address %d %d %d\n",theMat, sizeof(int), *theMat);
-    if (*theMat != 0)
-        (*theMat)->matFunctPtr(*theMat, model, strain, tang, stress, isw, &error);
-    else
-        error = -1;
-
-    return error;
-}
-
-extern "C" int
-OPS_InvokeMaterialDirectly2(matObject * theMat, modelState * model, double* strain, double* stress, double* tang, int* isw)
-{
-    int error = 0;
-    //  fprintf(stderr,"invokeMaterialDirectly Address %d %d\n",theMat, sizeof(int));
-    if (theMat != 0)
-        theMat->matFunctPtr(theMat, model, strain, tang, stress, isw, &error);
-    else
-        error = -1;
-
-    return error;
+    theModelBuilder = theNewBuilder;
 }
 
 UniaxialMaterial*
 OPS_GetUniaxialMaterial(int matTag)
 {
     return OPS_getUniaxialMaterial(matTag);
+}
+
+LimitCurve*
+OPS_GetLimitCurve(int limCrvTag)
+{
+    return OPS_getLimitCurve(limCrvTag);
 }
 
 NDMaterial*
@@ -1355,30 +1373,6 @@ OPS_GetFrictionModel(int frnTag)
     return OPS_getFrictionModel(frnTag);
 }
 
-int
-OPS_GetNDF()
-{
-    return theModelBuilder->getNDF();
-}
-
-int
-OPS_GetNDM()
-{
-    return theModelBuilder->getNDM();
-}
-
-FE_Datastore*
-OPS_GetFEDatastore()
-{
-    return theDatabase;
-}
-
-const char*
-OPS_GetInterpPWD()
-{
-    return getInterpPWD(theInterp);
-}
-
 Domain*
 OPS_GetDomain(void)
 {
@@ -1388,25 +1382,25 @@ OPS_GetDomain(void)
 ReliabilityDomain*
 OPS_GetReliabilityDomain(void)
 {
-  return theReliabilityDomain;
+    return theReliabilityDomain;
 }
 
 void
-OPS_SetReliabilityDomain(ReliabilityDomain *theDomain)
+OPS_SetReliabilityDomain(ReliabilityDomain* theDomain)
 {
-  theReliabilityDomain = theDomain;
+    theReliabilityDomain = theDomain;
 }
 
-void
-TCL_OPS_setModelBuilder(TclModelBuilder* theNewBuilder)
+FE_Datastore*
+OPS_GetFEDatastore()
 {
-    theModelBuilder = theNewBuilder;
+    return theDatabase;
 }
 
-LimitCurve*
-OPS_GetLimitCurve(int LimCrvTag)
+SimulationInformation*
+OPS_GetSimulationInfo()
 {
-    return OPS_getLimitCurve(LimCrvTag);
+    return theSimulationInfoPtr;
 }
 
 AnalysisModel**
@@ -1463,12 +1457,6 @@ OPS_GetVariableTimeStepTransientAnalysis(void)
     return &theVariableTimeStepTransientAnalysis;
 }
 
-int*
-OPS_GetNumEigen(void)
-{
-    return &numEigen;
-}
-
 StaticIntegrator**
 OPS_GetStaticIntegrator(void)
 {
@@ -1493,8 +1481,82 @@ OPS_builtModel(void)
     return &builtModel;
 }
 
+int*
+OPS_GetNumEigen(void)
+{
+    return &numEigen;
+}
+
 int
 OPS_numIter()
 {
     return 0;
 }
+
+// Unique loadPackage host bindings. OpenSeesCommands.cpp also defines the
+// OPS_* / ops_* symbols for the DL_Interpreter path; with MSVC /FORCE:MULTIPLE
+// the wrong definition can be injected into OpenFresco setGlobalPointers.
+// These OPS_Pkg_* names exist only here so packages.cpp can bind the Tcl impl.
+extern "C" int OPS_Pkg_GetNDM(void) { return OPS_GetNDM(); }
+extern "C" int OPS_Pkg_GetNDF(void) { return OPS_GetNDF(); }
+extern "C" int OPS_Pkg_Error(char* errorMessage, int length) { return OPS_Error(errorMessage, length); }
+extern "C" int OPS_Pkg_GetNumRemainingInputArgs(void) { return OPS_GetNumRemainingInputArgs(); }
+extern "C" int OPS_Pkg_ResetCurrentInputArg(int cArg) { return OPS_ResetCurrentInputArg(cArg); }
+extern "C" int OPS_Pkg_ResetCommandLine(int nArgs, int cArg, const char** argv) {
+    return OPS_ResetCommandLine(nArgs, cArg, argv);
+}
+extern "C" int OPS_Pkg_GetIntInput(int* numData, int* data) { return OPS_GetIntInput(numData, data); }
+extern "C" int OPS_Pkg_GetDoubleInput(int* numData, double* data) { return OPS_GetDoubleInput(numData, data); }
+extern "C" const char* OPS_Pkg_GetString(void) { return OPS_GetString(); }
+extern "C" int OPS_Pkg_AllocateMaterial(matObj* theMat) { return OPS_AllocateMaterial(theMat); }
+extern "C" int OPS_Pkg_AllocateElement(eleObj* theEle, int* matTags, int* matType) {
+    return OPS_AllocateElement(theEle, matTags, matType);
+}
+extern "C" int OPS_Pkg_InvokeMaterialDirectly(matObject** theMat, modelState* model,
+    double* strain, double* stress, double* tang, int* isw) {
+    return OPS_InvokeMaterialDirectly(theMat, model, strain, stress, tang, isw);
+}
+extern "C" int OPS_Pkg_GetNodeCrd(int* nodeTag, int* sizeData, double* data) {
+    return OPS_GetNodeCrd(nodeTag, sizeData, data);
+}
+extern "C" int OPS_Pkg_GetNodeDisp(int* nodeTag, int* sizeData, double* data) {
+    return OPS_GetNodeDisp(nodeTag, sizeData, data);
+}
+extern "C" int OPS_Pkg_GetNodeVel(int* nodeTag, int* sizeData, double* data) {
+    return OPS_GetNodeVel(nodeTag, sizeData, data);
+}
+extern "C" int OPS_Pkg_GetNodeAccel(int* nodeTag, int* sizeData, double* data) {
+    return OPS_GetNodeAccel(nodeTag, sizeData, data);
+}
+extern "C" int OPS_Pkg_GetNodeIncrDisp(int* nodeTag, int* sizeData, double* data) {
+    return OPS_GetNodeIncrDisp(nodeTag, sizeData, data);
+}
+extern "C" int OPS_Pkg_GetNodeIncrDeltaDisp(int* nodeTag, int* sizeData, double* data) {
+    return OPS_GetNodeIncrDeltaDisp(nodeTag, sizeData, data);
+}
+UniaxialMaterial* OPS_Pkg_GetUniaxialMaterial(int matTag) { return OPS_GetUniaxialMaterial(matTag); }
+NDMaterial* OPS_Pkg_GetNDMaterial(int matTag) { return OPS_GetNDMaterial(matTag); }
+SectionForceDeformation* OPS_Pkg_GetSectionForceDeformation(int secTag) {
+    return OPS_GetSectionForceDeformation(secTag);
+}
+CrdTransf* OPS_Pkg_GetCrdTransf(int crdTag) { return OPS_GetCrdTransf(crdTag); }
+FrictionModel* OPS_Pkg_GetFrictionModel(int frnTag) { return OPS_GetFrictionModel(frnTag); }
+Domain* OPS_Pkg_GetDomain(void) { return OPS_GetDomain(); }
+FE_Datastore* OPS_Pkg_GetFEDatastore(void) { return OPS_GetFEDatastore(); }
+SimulationInformation* OPS_Pkg_GetSimulationInfo(void) { return OPS_GetSimulationInfo(); }
+AnalysisModel** OPS_Pkg_GetAnalysisModel(void) { return OPS_GetAnalysisModel(); }
+EquiSolnAlgo** OPS_Pkg_GetAlgorithm(void) { return OPS_GetAlgorithm(); }
+ConstraintHandler** OPS_Pkg_GetHandler(void) { return OPS_GetHandler(); }
+DOF_Numberer** OPS_Pkg_GetNumberer(void) { return OPS_GetNumberer(); }
+LinearSOE** OPS_Pkg_GetSOE(void) { return OPS_GetSOE(); }
+EigenSOE** OPS_Pkg_GetEigenSOE(void) { return OPS_GetEigenSOE(); }
+StaticAnalysis** OPS_Pkg_GetStaticAnalysis(void) { return OPS_GetStaticAnalysis(); }
+DirectIntegrationAnalysis** OPS_Pkg_GetTransientAnalysis(void) { return OPS_GetTransientAnalysis(); }
+VariableTimeStepDirectIntegrationAnalysis** OPS_Pkg_GetVariableTimeStepTransientAnalysis(void) {
+    return OPS_GetVariableTimeStepTransientAnalysis();
+}
+int* OPS_Pkg_GetNumEigen(void) { return OPS_GetNumEigen(); }
+StaticIntegrator** OPS_Pkg_GetStaticIntegrator(void) { return OPS_GetStaticIntegrator(); }
+TransientIntegrator** OPS_Pkg_GetTransientIntegrator(void) { return OPS_GetTransientIntegrator(); }
+ConvergenceTest** OPS_Pkg_GetTest(void) { return OPS_GetTest(); }
+bool* OPS_Pkg_builtModel(void) { return OPS_builtModel(); }

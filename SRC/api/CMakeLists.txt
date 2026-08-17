@@ -25,6 +25,11 @@ target_sources(OPS_InterpTcl
     packages.cpp
 )
 
+target_sources(OpenSeesPy
+  PRIVATE
+    packages.cpp
+)
+
 target_sources(OPS_Api
   INTERFACE
     elementAPI.h

@@ -74,6 +74,7 @@ class DL_Interpreter
     virtual int getStringCopy(char **stringPtr);
     virtual void* getVoidPtr();
     virtual int evalDoubleStringExpression(const char* theExpression, double& current_val);
+    virtual void resetInput(int nArgs, int cArg, const char** argv);
     virtual void resetInput(int cArg);
     // Expands a dict argument into CLI-style key-value pairs (e.g., {"key": val} -> "-key", val)
     // Default implementation is a no-op and returns false.

@@ -119,6 +119,12 @@ bool DL_Interpreter::expandDictArgs()
 }
 
 void
+DL_Interpreter::resetInput(int nArgs, int cArg, const char** argv)
+{
+    // does nothing
+}
+
+void
 DL_Interpreter::resetInput(int cArg)
 {
     // does nothing

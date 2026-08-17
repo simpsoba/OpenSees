@@ -1,11 +1,14 @@
-REM rd /s /q build
-REM rd /s /q build-sp
+REM rd /s /q build-prof
+REM rd /s /q build-sp-prof
+
+REM Same as makeWIN_VS.bat, but RelWithDebInfo (Release-like + PDBs) in separate trees.
 
 cd /d "%~dp0"
 
 set CMAKE=C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe
-set BUILD_DIR=build
-set BUILD_SP_DIR=build-sp
+set BUILD_DIR=build-prof
+set BUILD_SP_DIR=build-sp-prof
+set BUILD_CFG=RelWithDebInfo
 set TOOLCHAIN=%BUILD_DIR%/build/generators/conan_toolchain.cmake
 set TOOLCHAIN_SP=%BUILD_SP_DIR%/build/generators/conan_toolchain.cmake
 for %%I in ("%~dp0..\mumps\build") do set MUMPS_DIR=%%~fI
@@ -28,7 +31,7 @@ if defined METIS5_DIR (
 
 call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 mod
 
-REM build/ -> OpenSees.exe, OpenSeesMP.exe  (PARALLEL_PROCESSING=OFF)
+REM build-prof/ -> OpenSees.exe, OpenSeesMP.exe  (PARALLEL_PROCESSING=OFF)
 conan install . -of %BUILD_DIR% -s arch=x86_64 -s compiler.runtime=static --build=missing -c tools.cmake.cmaketoolchain:generator="Visual Studio 17 2022"
 
 "%CMAKE%" -S . -B %BUILD_DIR% -G "Visual Studio 17 2022" -A x64 ^
@@ -42,9 +45,9 @@ conan install . -of %BUILD_DIR% -s arch=x86_64 -s compiler.runtime=static --buil
   -DPARALLEL_PROCESSING=OFF ^
   -DCMAKE_INSTALL_PREFIX=%USERPROFILE%\bin\OpenSees3.8.0
 
-"%CMAKE%" --build %BUILD_DIR% --config Release --target OpenSees OpenSeesMP --parallel 10
+"%CMAKE%" --build %BUILD_DIR% --config %BUILD_CFG% --target OpenSees OpenSeesMP --parallel 10
 
-REM build-sp/ -> OpenSeesSP.exe  (PARALLEL_PROCESSING=ON)
+REM build-sp-prof/ -> OpenSeesSP.exe  (PARALLEL_PROCESSING=ON)
 conan install . -of %BUILD_SP_DIR% -s arch=x86_64 -s compiler.runtime=static --build=missing -c tools.cmake.cmaketoolchain:generator="Visual Studio 17 2022"
 
 "%CMAKE%" -S . -B %BUILD_SP_DIR% -G "Visual Studio 17 2022" -A x64 ^
@@ -57,7 +60,7 @@ conan install . -of %BUILD_SP_DIR% -s arch=x86_64 -s compiler.runtime=static --b
   -DPARALLEL_PROCESSING=ON ^
   -DCMAKE_INSTALL_PREFIX=%USERPROFILE%\bin\OpenSees3.8.0
 
-"%CMAKE%" --build %BUILD_SP_DIR% --config Release --target OpenSeesSP --parallel 10
+"%CMAKE%" --build %BUILD_SP_DIR% --config %BUILD_CFG% --target OpenSeesSP --parallel 10
 
 REM Tcl runtimes: OpenSees*.exe looks for lib\tcl8.6 next to the build tree root.
 REM Must match conanfile.py tcl/8.6.11 (not an older cached tcl/8.6.10 package).

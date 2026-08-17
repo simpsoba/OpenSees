@@ -76,10 +76,6 @@ OPS_PeerMotion(void)
   double factor = 0.0; 
   int numData = 0;
 
-  char *eqMotion = 0;
-  char *station = 0;
-  char *type = 0;
-
   // get tag if provided
   if (numRemainingArgs == 5 || numRemainingArgs == 7 || numRemainingArgs == 9) {
     numData = 1;
@@ -89,21 +85,27 @@ OPS_PeerMotion(void)
     }
     numRemainingArgs -= 1;
   }
-  
-  if ((OPS_GetStringCopy(&eqMotion) != 0) || eqMotion == 0) {
+
+  // earthquake name
+  const char* eqMotion = OPS_GetString();
+  if (eqMotion == 0) {
     opserr << "WARNING invalid eqMotion for PeerMotion with tag: " << tag << endln;
     return 0;
-  }    
+  }
 
-    if ((OPS_GetStringCopy(&station) != 0) || station == 0) {
+  // station
+  const char* station = OPS_GetString();
+  if (station == 0) {
     opserr << "WARNING invalid station for PeerMotion with tag: " << tag << endln;
     return 0;
-  }    
+  }
 
-    if ((OPS_GetStringCopy(&type) != 0) || type == 0) {
-    opserr << "WARNING invalid type  for PeerMotion with tag: " << tag << endln;
+  // type
+  const char* type = OPS_GetString();
+  if (type == 0) {
+    opserr << "WARNING invalid type for PeerMotion with tag: " << tag << endln;
     return 0;
-  }    
+  }
 
 
   if (OPS_GetDouble(&numData, &factor) != 0) {

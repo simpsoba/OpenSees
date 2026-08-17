@@ -63,6 +63,7 @@ class TclInterpreter: public DL_Interpreter
     virtual int getDouble(double *, int numArgs);
     virtual const char* getString();
     virtual int getStringCopy(char **stringPtr);
+    virtual void resetInput(int nArgs, int cArg, const char** argv);
     virtual void resetInput(int cArg);
 
     // methods for interpreters to output results

@@ -191,6 +191,7 @@ extern "C" int         OPS_GetNDF();
 extern "C" int         OPS_Error(char* errorMessage, int length);
 extern "C" int         OPS_GetNumRemainingInputArgs();
 extern "C" int         OPS_ResetCurrentInputArg(int cArg);
+extern "C" int         OPS_ResetCommandLine(int nArgs, int cArg, const char** argv);
 //extern "C" int       OPS_ResetInput(ClientData clientData, Tcl_Interp * interp, int cArg, int mArg, TCL_Char * *argv, Domain * domain, TclModelBuilder * builder);
 //extern "C" int       OPS_ResetInputNoBuilder(ClientData clientData, Tcl_Interp * interp, int cArg, int mArg, TCL_Char * *argv, Domain * domain);
 extern "C" int         OPS_GetIntInput(int* numData, int* data);
@@ -216,6 +217,7 @@ extern "C" int         OPS_SetGenericDict(GenericDict& data);
 extern "C" void*       OPS_GetVoidPtr();
 extern "C" int         OPS_GetStringCopy(char** cArray); // returns a new copy
 extern "C" int         OPS_ExpandDictArgs(); // Expands dict to CLI args ({"key": val} -> "-key", val)
+
 extern "C" matObj*     OPS_GetMaterial(int* matTag, int* matType);
 extern "C" eleObj*     OPS_GetElement(int* eleTag);
 extern "C" matObj*     OPS_GetMaterialType(char* type, int sizeType);
@@ -244,6 +246,7 @@ class FrictionModel;
 class LimitCurve;
 class Domain;
 class FE_Datastore;
+class SimulationInformation;
 
 extern UniaxialMaterial* OPS_GetUniaxialMaterial(int matTag);
 extern NDMaterial* OPS_GetNDMaterial(int matTag);
@@ -254,6 +257,7 @@ extern LimitCurve* OPS_GetLimitCurve(int LimCrvTag);
 extern Domain* OPS_GetDomain(void);
 
 extern FE_Datastore* OPS_GetFEDatastore();
+extern SimulationInformation* OPS_GetSimulationInfo();
 extern "C" const char* OPS_GetInterpPWD();
 
 extern "C" AnalysisModel * *OPS_GetAnalysisModel(void);
