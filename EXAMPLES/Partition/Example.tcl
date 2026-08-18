@@ -1,6 +1,6 @@
-# OpenSeesMP partition example: serial, METIS, custom, and samePart.
+# OpenSeesMP partition example: serial, METIS, custom, samePart, keepOnRank.
 #
-# A small 3D solid pier is solved four ways. Each run prints element ownership,
+# A small 3D solid pier is solved several ways. Each run prints element ownership,
 # the first three eigenvalues, and top-node displacement after gravity and after
 # a short transient pulse. The numerical results should agree independent of
 # how the mesh is partitioned.
@@ -11,6 +11,7 @@
 #   mpiexec -n 4 OpenSeesMP Example.tcl metis
 #   mpiexec -n 4 OpenSeesMP Example.tcl custom
 #   mpiexec -n 4 OpenSeesMP Example.tcl samePart
+#   mpiexec -n 4 OpenSeesMP Example.tcl keepOnRank
 #
 # Optional smaller mesh for a quick run:
 #   OpenSees Example.tcl serial 4 4 20
@@ -34,12 +35,12 @@ if {$argc == 4} {
         }
     }
 } elseif {$argc != 1} {
-    puts "usage: Example.tcl serial|metis|custom|samePart ?nx ny nz?"
+    puts "usage: Example.tcl serial|metis|custom|samePart|keepOnRank ?nx ny nz?"
     exit 1
 }
 
-if {$mode ni {serial metis custom samepart}} {
-    puts "usage: Example.tcl serial|metis|custom|samePart ?nx ny nz?"
+if {$mode ni {serial metis custom samepart keeponrank}} {
+    puts "usage: Example.tcl serial|metis|custom|samePart|keepOnRank ?nx ny nz?"
     exit 1
 }
 if {$mode eq "serial" && $np != 1} {
@@ -97,6 +98,11 @@ if {$mode eq "metis"} {
 } elseif {$mode eq "samepart"} {
     # METIS still partitions, but first/last (nonadjacent) elements stay together.
     partition -samePart 2 1 $ne
+} elseif {$mode eq "keeponrank"} {
+    # METIS partitions, then pin the first element to rank 0 and the last to
+    # the highest rank. Count is always required (one element: count 1).
+    set lastRank [expr {$np - 1}]
+    partition -keepOnRank 0 1 1 -keepOnRank $lastRank 1 $ne
 }
 
 set localEles [lsort -integer [getEleTags]]
@@ -108,6 +114,27 @@ if {$mode eq "samepart"} {
     set hasLast [expr {[lsearch -exact $localEles $ne] >= 0}]
     if {$hasFirst != $hasLast} {
         puts "ERROR: -samePart failed: elements 1 and $ne are split on rank $pid"
+        exit 1
+    }
+}
+
+if {$mode eq "keeponrank"} {
+    set hasFirst [expr {[lsearch -exact $localEles 1] >= 0}]
+    set hasLast [expr {[lsearch -exact $localEles $ne] >= 0}]
+    if {$pid == 0 && !$hasFirst} {
+        puts "ERROR: -keepOnRank failed: element 1 missing on rank 0"
+        exit 1
+    }
+    if {$pid != 0 && $hasFirst} {
+        puts "ERROR: -keepOnRank failed: element 1 leaked onto rank $pid"
+        exit 1
+    }
+    if {$pid == ($np - 1) && !$hasLast} {
+        puts "ERROR: -keepOnRank failed: element $ne missing on rank $pid"
+        exit 1
+    }
+    if {$pid != ($np - 1) && $hasLast} {
+        puts "ERROR: -keepOnRank failed: element $ne leaked onto rank $pid"
         exit 1
     }
 }

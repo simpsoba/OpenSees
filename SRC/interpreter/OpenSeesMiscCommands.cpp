@@ -1998,6 +1998,8 @@ int OPS_partition() {
     std::map<int, idx_t> customElementParts;
     // Groups of element tags that must share a METIS part (must-link).
     std::vector<std::vector<int>> samePartGroups;
+    // Pin listed elements to a specific rank after METIS/custom/samePart.
+    std::vector<std::pair<int, std::vector<int>>> keepOnRankGroups;
     while (OPS_GetNumRemainingInputArgs() > 0) {
         int num = 1;
         auto opt = OPS_GetString();
@@ -2086,6 +2088,41 @@ int OPS_partition() {
                 return -1;
             }
             samePartGroups.push_back(std::move(tags));
+        } else if (strcmp(opt, "-keepOnRank") == 0) {
+            // Tcl: partition -keepOnRank $rankID $nEle $e1 $e2 ...  (repeatable)
+            // Always a count, including one element: -keepOnRank 0 1 $eleTag
+            // Applied after METIS/custom/samePart; then npart is rebuilt.
+            int rankID = 0;
+            int count = 0;
+            if (OPS_GetNumRemainingInputArgs() < 2 ||
+                OPS_GetIntInput(&num, &rankID) < 0) {
+                opserr << "WARNING: partition -keepOnRank requires rankID and "
+                          "a count >= 1 followed by that many element tags\n";
+                return -1;
+            }
+            num = 1;
+            if (OPS_GetIntInput(&num, &count) < 0 || count < 1) {
+                opserr << "WARNING: partition -keepOnRank requires a count >= 1 "
+                          "followed by that many element tags\n";
+                return -1;
+            }
+            if (rankID < 0 || rankID >= np) {
+                opserr << "WARNING: partition -keepOnRank rank " << rankID
+                       << " is outside [0, " << np - 1 << "]\n";
+                return -1;
+            }
+            if (OPS_GetNumRemainingInputArgs() < count) {
+                opserr << "WARNING: partition -keepOnRank expected " << count
+                       << " element tags\n";
+                return -1;
+            }
+            std::vector<int> tags(count);
+            int numTags = count;
+            if (OPS_GetIntInput(&numTags, tags.data()) < 0) {
+                opserr << "WARNING: failed to read -keepOnRank element tags\n";
+                return -1;
+            }
+            keepOnRankGroups.emplace_back(rankID, std::move(tags));
         } else {
             opserr << "WARNING: unknown partition option " << opt << endln;
             return -1;
@@ -2164,6 +2201,28 @@ int OPS_partition() {
 
     // number of elements
     idx_t ne = (idx_t)eptr.size() - 1;
+
+    // Resolve -keepOnRank tags now that the mesh index exists. Last assignment
+    // wins only when the rank matches; conflicting ranks are an error.
+    std::map<int, idx_t> keepOnRankParts;
+    for (const auto& group : keepOnRankGroups) {
+        const idx_t rank = static_cast<idx_t>(group.first);
+        for (int tag : group.second) {
+            if (eindex.find(tag) == eindex.end()) {
+                opserr << "WARNING: -keepOnRank references unknown element "
+                       << tag << endln;
+                return -1;
+            }
+            auto it = keepOnRankParts.find(tag);
+            if (it != keepOnRankParts.end() && it->second != rank) {
+                opserr << "WARNING: -keepOnRank assigns element " << tag
+                       << " to conflicting ranks " << it->second << " and "
+                       << rank << endln;
+                return -1;
+            }
+            keepOnRankParts[tag] = rank;
+        }
+    }
 
     // check if all processors have same number
     idx_t ne_max = 0;
@@ -2475,6 +2534,47 @@ int OPS_partition() {
         MPI_SUCCESS) {
         opserr << "WARNING: failed to broadcast npart\n";
         return -1;
+    }
+
+    // Pin requested elements after METIS/custom/samePart, then rebuild node
+    // ownership from the lowest adjacent element part (same rule as custom).
+    if (!keepOnRankParts.empty()) {
+        for (const auto& assignment : keepOnRankParts) {
+            epart[eindex[assignment.first]] = assignment.second;
+        }
+
+        std::fill(npart.begin(), npart.end(), static_cast<idx_t>(np));
+        for (idx_t i = 0; i < ne; ++i) {
+            for (idx_t j = eptr[static_cast<size_t>(i)];
+                 j < eptr[static_cast<size_t>(i) + 1]; ++j) {
+                const idx_t node = eind[static_cast<size_t>(j)];
+                if (epart[static_cast<size_t>(i)] <
+                    npart[static_cast<size_t>(node)]) {
+                    npart[static_cast<size_t>(node)] =
+                        epart[static_cast<size_t>(i)];
+                }
+            }
+        }
+        for (idx_t i = 0; i < nn; ++i) {
+            if (npart[static_cast<size_t>(i)] == np) {
+                npart[static_cast<size_t>(i)] = 0;
+            }
+        }
+
+        for (const auto& group : samePartGroups) {
+            idx_t part = -1;
+            for (int tag : group) {
+                const idx_t e = eindex[tag];
+                if (part < 0) {
+                    part = epart[static_cast<size_t>(e)];
+                } else if (epart[static_cast<size_t>(e)] != part) {
+                    opserr << "WARNING: -keepOnRank split a -samePart group at "
+                              "element "
+                           << tag << endln;
+                    return -1;
+                }
+            }
+        }
     }
 
     auto indexOf = [](idx_t id) -> idx_t {
