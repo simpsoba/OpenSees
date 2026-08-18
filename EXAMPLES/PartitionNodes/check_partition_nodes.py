@@ -89,6 +89,11 @@ def main() -> None:
                 f"G_{mode}: expected orphans on exactly one rank (93={h93}, 92={h92})"
             )
 
+    for case, key in (("I_keepOnRank", "has3"), ("J_keepOnRank", "has1")):
+        t = sum_key(out, case, key)
+        if t != 1:
+            errors.append(f"{case}: expected exactly 1 rank with {key}=1, got {t}")
+
     if errors:
         print("GLOBAL CHECK FAIL:")
         print("\n".join(errors))

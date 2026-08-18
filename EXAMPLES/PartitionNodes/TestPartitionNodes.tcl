@@ -257,6 +257,40 @@ if {$np <= 3} {
     check H_custom_skipped_np 1 "kinematic smoke needs np<=3 (empty ranks break Mumps)"
 }
 
+# ------------------------------------------------------------------
+# I: -keepOnRank pins element 3 to rank 0 after METIS.
+# ------------------------------------------------------------------
+buildChain
+partition -keepOnRank 0 1 3
+set localEles [getEleTags]
+set has3 [expr {[lsearch -exact $localEles 3] >= 0}]
+sumFlag "I_keepOnRank has3=[expr {$has3 ? 1 : 0}]"
+if {$pid == 0} {
+    check I_keep_on_rank0 $has3 "element 3 should stay on rank 0"
+} else {
+    check I_keep_off_other [expr {!$has3}] "element 3 leaked onto rank $pid"
+}
+
+# ------------------------------------------------------------------
+# J: -keepOnRank overrides -customPartition for a listed element.
+# ------------------------------------------------------------------
+buildChain
+set custom [dict create]
+for {set e 1} {$e <= 3} {incr e} {
+    dict set custom $e [expr {($e - 1) % $np}]
+}
+# Custom would send element 1 to rank 0; pin it to the last rank instead.
+set lastRank [expr {$np - 1}]
+partition -customPartition [dict size $custom] {*}$custom -keepOnRank $lastRank 1 1
+set localEles [getEleTags]
+set has1 [expr {[lsearch -exact $localEles 1] >= 0}]
+sumFlag "J_keepOnRank has1=[expr {$has1 ? 1 : 0}]"
+if {$pid == $lastRank} {
+    check J_keep_on_last $has1 "element 1 should stay on rank $lastRank"
+} else {
+    check J_keep_off_other [expr {!$has1}] "element 1 leaked onto rank $pid"
+}
+
 puts "SUMMARY rank=$pid fails=$fails"
 if {$fails > 0} {
     exit 1
