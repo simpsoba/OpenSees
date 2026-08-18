@@ -21,6 +21,7 @@ Everything clones under workspace folder **`RTHS-CUDA`**. Conan runs in conda en
 * [Building — OpenFresco plugin](#building--openfresco-plugin)
 * [Verify installation](#verify-installation)
 * [Built executables and usage](#built-executables-and-usage)
+* [Intel MPI runtime (Windows, single node)](#intel-mpi-runtime-windows-single-node)
 * [OpenSeesMP — Tcl runtime after build](#openseesmp--tcl-runtime-after-build)
 * [Troubleshooting](#troubleshooting)
 * [Appendix: full copy-paste script](#appendix-full-copy-paste-script)
@@ -36,7 +37,7 @@ in order. After each build step, run the matching **Verify** command to confirm 
 
 ```text
 # --- Workspace: everything clones under this folder ---
-PARENT=C:\Users\YOURNAME\source\repos\RTHS-CUDA
+PARENT=C:\Users\YOURNAME\source\repos\simpsoba\RTHS-CUDA
 
 # --- Git branches (both repos) ---
 BRANCH=RTHS-CUDA
@@ -46,7 +47,7 @@ OPENSEES_REPO=https://github.com/simpsoba/OpenSees.git
 OPENFRESCO_REPO=https://github.com/simpsoba/OpenFresco.git
 
 # --- Folder names under PARENT (OpenFresco MSBuild expects this OpenSees folder name) ---
-OPENSEES_DIR=OpenSees-RTHS-CUDA
+OPENSEES_DIR=OpenSees
 OPENFRESCO_DIR=OpenFresco
 
 # --- Installed tools (change if your paths differ) ---
@@ -72,12 +73,13 @@ JOBS=10               # parallel compile jobs
 ### Required folder layout
 
 ```text
-C:\Users\YOURNAME\source\repos\RTHS-CUDA\     <-- PARENT (workspace root)
-  OpenSees-RTHS-CUDA\                          <- OpenSees repo (this guide lives here)
-  OpenFresco\                                  <- OpenFresco repo
-  mumps\                                       <- clone OpenSees/mumps
-  mumps\build\                                 <- MUMPS_DIR (dmumps.lib + headers)
-  metis-5.1.0\install\                         <- METIS5_DIR (optional, for partition())
+C:\Users\YOURNAME\source\repos\simpsoba\RTHS-CUDA\   <-- PARENT (workspace root)
+  OpenSees\                                        <- OpenSees repo (this guide lives here)
+  OpenFresco\                                      <- OpenFresco repo
+  mumps\                                           <- clone OpenSees/mumps
+  mumps\build\                                     <- MUMPS_DIR (dmumps.lib + headers)
+  metis-5.1.0\                                     <- METIS 5 sources
+  metis-5.1.0\install\                             <- METIS5_DIR (optional, for partition())
 ```
 
 ---
@@ -119,7 +121,7 @@ If Anaconda/Miniconda lives elsewhere, adjust `CONDA_ROOT` in the Configuration 
 The `RTHS-CUDA` branches must exist on GitHub before the new PC can clone them:
 
 ```bat
-cd C:\path\to\OpenSees-RTHS-CUDA
+cd C:\path\to\OpenSees
 git push -u origin RTHS-CUDA
 
 cd C:\path\to\OpenFresco
@@ -137,7 +139,7 @@ Recovery tags (optional): `ops-cuda-pre-RTHS-CUDA`, `ops-fresco-pre-RTHS-CUDA`, 
 Use **cmd.exe** or **x64 Native Tools Command Prompt for VS 2022**.
 
 ```bat
-set PARENT=C:\Users\YOURNAME\source\repos\RTHS-CUDA
+set PARENT=C:\Users\YOURNAME\source\repos\simpsoba\RTHS-CUDA
 mkdir "%PARENT%"
 cd /d "%PARENT%"
 ```
@@ -202,7 +204,7 @@ If `git clone -b RTHS-CUDA` fails, the branch is not on the remote yet — compl
 **Verify:**
 
 ```bat
-dir "%PARENT%\OpenSees-RTHS-CUDA\CMakeLists.txt"
+dir "%PARENT%\OpenSees\CMakeLists.txt"
 dir "%PARENT%\OpenFresco\WIN64\OpenFresco.sln"
 ```
 
@@ -251,7 +253,10 @@ cmake .. -G Ninja ^
   -DCMAKE_C_COMPILER=icx ^
   -DCMAKE_C_FLAGS="/DWIN32 /D_WINDOWS /Qiopenmp" ^
   -DCMAKE_Fortran_FLAGS="/nologo /fpp /Qiopenmp" ^
-  -DCMAKE_EXE_LINKER_FLAGS="/Qiopenmp"
+  -DCMAKE_EXE_LINKER_FLAGS="/Qiopenmp" ^
+  -DCMAKE_C_FLAGS_RELEASE="/O3 /Ob2 /DNDEBUG" ^
+  -DCMAKE_Fortran_FLAGS_RELEASE="/O3 /DNDEBUG" ^
+  -DCMAKE_BUILD_TYPE=Release
 
 cmake --build . --config Release --parallel 8
 ```
@@ -263,6 +268,10 @@ This copies the **WSL MUMPS recipe**: CMake `openmp=OFF`, and OpenMP comes in th
 **FLAGS** (`-fopenmp` on Linux; `/Qiopenmp` is the ifx/icx equivalent). Do **not** also pass
 `-Dopenmp=ON` — that is a second, different embedding (`find_package(OpenMP)` on the MUMPS targets)
 and is not how the fast WSL tree was built. `-fPIC` is Linux-only; omit it on Windows.
+
+CMake **Release** on Windows `icx`/`ifx` defaults to **`/O2`** (MSVC-style). Linux Release defaults to
+**`-O3`**, which is what the fast WSL MUMPS tree used. Pass `CMAKE_*_FLAGS_RELEASE=/O3` on Windows
+so the two trees match.
 
 Confirm:
 
@@ -290,6 +299,9 @@ OpenSeesMP/SP on Windows then **link** Intel MKL ScaLAPACK with **`mkl_intel_thr
 compiled with OpenMP (the WSL OpenSeesMP tree also had no `-fopenmp` on C/C++). Mixing two OpenMP
 runtimes (MSVC `vcomp` vs Intel `libiomp5`) is the usual conflict — do not add MSVC `/openmp`
 to OpenSees. Do not mix `mkl_sequential` with `mkl_intel_thread` on the same MPI executable.
+At **run time**, pin MPI ranks and set `OMP_NUM_THREADS=1` / `MKL_NUM_THREADS=1` so those extra
+MKL/MUMPS OpenMP threads do not oversubscribe the cores — see
+[Intel MPI runtime](#intel-mpi-runtime-windows-single-node).
 
 If you copy a MUMPS tree from another machine, copy the **entire** `mumps\build` folder
 (including `_deps\`), not just the three `.lib` files.
@@ -437,7 +449,7 @@ without reconfiguring.
 Shared environment for all OpenSees steps (run once per cmd session):
 
 ```bat
-cd /d "%PARENT%\OpenSees-RTHS-CUDA"
+cd /d "%PARENT%\OpenSees"
 
 call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 mod
 
@@ -474,7 +486,7 @@ not call GPU solvers).
 #### 1. Conan dependencies
 
 ```bat
-cd /d "%PARENT%\OpenSees-RTHS-CUDA"
+cd /d "%PARENT%\OpenSees"
 
 conan install . -of build -s build_type=Release -s arch=x86_64 -s compiler.runtime=static --build=missing -c tools.cmake.cmaketoolchain:generator=Ninja
 
@@ -556,7 +568,7 @@ will get `version conflict for package "Tcl": have 8.6.16, need exactly 8.6.11`.
 Copy **ActiveTcl** scripts and DLL from `%TCL_ROOT%` (same patch as `tcl86t.dll`):
 
 ```bat
-cd /d "%PARENT%\OpenSees-RTHS-CUDA"
+cd /d "%PARENT%\OpenSees"
 
 if not exist build-mp\lib mkdir build-mp\lib
 robocopy "%TCL_ROOT%\lib\tcl8.6" "build-mp\lib\tcl8.6" /E
@@ -579,10 +591,10 @@ Re-run these copies after every OpenSeesMP rebuild or ActiveTcl upgrade.
 **Verify** (the `package require` line must match your `tcl86t.dll`):
 
 ```bat
-findstr "package require -exact Tcl" "%PARENT%\OpenSees-RTHS-CUDA\build-mp\lib\tcl8.6\init.tcl"
-dir "%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\OpenSeesMP.exe"
-dir "%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\tcl86t.dll"
-dir "%PARENT%\OpenSees-RTHS-CUDA\build-mp\lib\tcl8.6\init.tcl"
+findstr "package require -exact Tcl" "%PARENT%\OpenSees\build-mp\lib\tcl8.6\init.tcl"
+dir "%PARENT%\OpenSees\build-mp\Release\OpenSeesMP.exe"
+dir "%PARENT%\OpenSees\build-mp\Release\tcl86t.dll"
+dir "%PARENT%\OpenSees\build-mp\lib\tcl8.6\init.tcl"
 ```
 
 ---
@@ -655,9 +667,9 @@ Stage Tcl for OpenSeesMP as in [step 4 of the CPU-only section](#4-stage-tcl-run
 **Verify:**
 
 ```bat
-dir "%PARENT%\OpenSees-RTHS-CUDA\build\Release\OpenSees.exe"
-dir "%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\OpenSeesMP.exe"
-dir "%PARENT%\OpenSees-RTHS-CUDA\build-mp\lib\tcl8.6\init.tcl"
+dir "%PARENT%\OpenSees\build\Release\OpenSees.exe"
+dir "%PARENT%\OpenSees\build-mp\Release\OpenSeesMP.exe"
+dir "%PARENT%\OpenSees\build-mp\lib\tcl8.6\init.tcl"
 nvcc --version
 ```
 
@@ -669,7 +681,7 @@ OpenFresco **Release-CMake** links against static `.lib` files flattened into
 `build\lib`. Run this after **OpenSees.exe** has been built.
 
 ```bat
-cd /d "%PARENT%\OpenSees-RTHS-CUDA"
+cd /d "%PARENT%\OpenSees"
 set REL=build\Release
 set STAGE=build\lib
 set BINS=build\bin-fresco
@@ -701,18 +713,18 @@ copy /Y "build-mp\Release\OpenSeesMP.exe" "%BINS%\OpenSeesMP.exe"
 **Verify:**
 
 ```bat
-dir "%PARENT%\OpenSees-RTHS-CUDA\build\lib\ARPACK.lib"
-dir "%PARENT%\OpenSees-RTHS-CUDA\build\Release\OpenSees.exe"
-dir "%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\OpenSeesMP.exe"
+dir "%PARENT%\OpenSees\build\lib\ARPACK.lib"
+dir "%PARENT%\OpenSees\build\Release\OpenSees.exe"
+dir "%PARENT%\OpenSees\build-mp\Release\OpenSeesMP.exe"
 ```
 
 Primary build outputs (CPU or CUDA):
 
 ```text
-%PARENT%\OpenSees-RTHS-CUDA\build\Release\OpenSees.exe      <- serial / loadPackage
-%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\OpenSeesMP.exe <- MPI / partition / loadPackage
-%PARENT%\OpenSees-RTHS-CUDA\build\lib\*.lib                 <- OpenFresco Release-CMake link
-%PARENT%\OpenSees-RTHS-CUDA\build\bin-fresco\               <- optional copied runtime bundle
+%PARENT%\OpenSees\build\Release\OpenSees.exe      <- serial / loadPackage
+%PARENT%\OpenSees\build-mp\Release\OpenSeesMP.exe <- MPI / partition / loadPackage
+%PARENT%\OpenSees\build\lib\*.lib                 <- OpenFresco Release-CMake link
+%PARENT%\OpenSees\build\bin-fresco\               <- optional copied runtime bundle
 ```
 
 On the **RTHS-CUDA** branch these executables already use dynamic **`tcl86t.dll`** and work
@@ -746,14 +758,14 @@ Expected output:
 %PARENT%\%OPENFRESCO_DIR%\WIN64\bin-cmake\OpenFrescoTcl.dll
 ```
 
-If OpenSees is **not** at `%PARENT%\OpenSees-RTHS-CUDA`, override the root:
+If OpenSees is **not** at `%PARENT%\OpenSees`, override the root:
 
 ```bat
 MSBuild OpenFresco.sln ^
   /p:Configuration=Release-CMake ^
   /p:Platform=x64 ^
   /t:OpenFrescoTcl_dll ^
-  /p:OpenSeesRoot=C:\full\path\to\OpenSees-RTHS-CUDA ^
+  /p:OpenSeesRoot=C:\full\path\to\OpenSees ^
   /m
 ```
 
@@ -814,15 +826,15 @@ You should see OpenFresco version text and `loadPackage OpenFrescoTcl OK`.
 |------|----------------|
 | MUMPS | `dir %PARENT%\mumps\build\dmumps.lib` |
 | METIS 5 | `dir %PARENT%\metis-5.1.0\install\lib\metis.lib` |
-| OpenSees | `dir %PARENT%\OpenSees-RTHS-CUDA\build\Release\OpenSees.exe` |
-| OpenSeesMP | `dir %PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\OpenSeesMP.exe` |
-| OpenFresco staging | `dir %PARENT%\OpenSees-RTHS-CUDA\build\lib\ARPACK.lib` |
+| OpenSees | `dir %PARENT%\OpenSees\build\Release\OpenSees.exe` |
+| OpenSeesMP | `dir %PARENT%\OpenSees\build-mp\Release\OpenSeesMP.exe` |
+| OpenFresco staging | `dir %PARENT%\OpenSees\build\lib\ARPACK.lib` |
 | OpenFresco plugin | `loadPackage OpenFrescoTcl` probe (above) |
 
 ### ShearBuilding40 example (optional)
 
 ```bat
-cd /d "%PARENT%\OpenSees-RTHS-CUDA\EXAMPLES\ShearBuilding40SP"
+cd /d "%PARENT%\OpenSees\EXAMPLES\ShearBuilding40SP"
 set SHEAR40_MODE=local
 set TCL_LIBRARY=%TCL_ROOT%\lib\tcl8.6
 
@@ -842,8 +854,8 @@ After a full build, these are the files you run.
 
 | Program | Built path | Role |
 |---------|------------|------|
-| **`OpenSees.exe`** | `%PARENT%\OpenSees-RTHS-CUDA\build\Release\OpenSees.exe` | Serial Tcl interpreter; hybrid simulation with `loadPackage OpenFrescoTcl` |
-| **`OpenSeesMP.exe`** | `%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\OpenSeesMP.exe` | MPI parallel Tcl; needs `mpiexec`, `build-mp\lib\tcl8.6`, and matching `tcl86t.dll` |
+| **`OpenSees.exe`** | `%PARENT%\OpenSees\build\Release\OpenSees.exe` | Serial Tcl interpreter; hybrid simulation with `loadPackage OpenFrescoTcl` |
+| **`OpenSeesMP.exe`** | `%PARENT%\OpenSees\build-mp\Release\OpenSeesMP.exe` | MPI parallel Tcl; needs `mpiexec`, `build-mp\lib\tcl8.6`, and matching `tcl86t.dll` |
 | **`OpenFrescoTcl.dll`** | `%PARENT%\OpenFresco\WIN64\bin-cmake\OpenFrescoTcl.dll` | OpenFresco plugin loaded at run time |
 
 Both OpenSees executables on **RTHS-CUDA** link **`tcl86t.dll`** dynamically (not a separate
@@ -852,9 +864,9 @@ Both OpenSees executables on **RTHS-CUDA** link **`tcl86t.dll`** dynamically (no
 Optional convenience copies (if you ran [Stage OpenFresco libraries](#building--stage-openfresco-libraries)):
 
 ```text
-%PARENT%\OpenSees-RTHS-CUDA\build\bin-fresco\OpenSees.exe
-%PARENT%\OpenSees-RTHS-CUDA\build\bin-fresco\OpenSeesMP.exe
-%PARENT%\OpenSees-RTHS-CUDA\build\bin-fresco\tcl86t.dll
+%PARENT%\OpenSees\build\bin-fresco\OpenSees.exe
+%PARENT%\OpenSees\build\bin-fresco\OpenSeesMP.exe
+%PARENT%\OpenSees\build\bin-fresco\tcl86t.dll
 ```
 
 ### Runtime folder for hybrid simulation
@@ -876,7 +888,7 @@ REM Serial OpenSees / OpenFresco:
 set TCL_LIBRARY=%TCL_ROOT%\lib\tcl8.6
 
 REM OpenSeesMP (after staging — see OpenSeesMP — Tcl runtime):
-set TCL_LIBRARY=%PARENT%\OpenSees-RTHS-CUDA\build-mp\lib\tcl8.6
+set TCL_LIBRARY=%PARENT%\OpenSees\build-mp\lib\tcl8.6
 ```
 
 ### How to run
@@ -884,7 +896,7 @@ set TCL_LIBRARY=%PARENT%\OpenSees-RTHS-CUDA\build-mp\lib\tcl8.6
 **Check versions:**
 
 ```bat
-cd /d "%PARENT%\OpenSees-RTHS-CUDA\build\Release"
+cd /d "%PARENT%\OpenSees\build\Release"
 set TCL_LIBRARY=%TCL_ROOT%\lib\tcl8.6
 OpenSees.exe -version
 ```
@@ -895,8 +907,8 @@ OpenSees.exe -version
 **Serial hybrid example** (ShearBuilding40, local mode):
 
 ```bat
-cd /d "%PARENT%\OpenSees-RTHS-CUDA\EXAMPLES\ShearBuilding40SP"
-copy /Y "%PARENT%\OpenSees-RTHS-CUDA\build\Release\OpenSees.exe" .
+cd /d "%PARENT%\OpenSees\EXAMPLES\ShearBuilding40SP"
+copy /Y "%PARENT%\OpenSees\build\Release\OpenSees.exe" .
 copy /Y "%PARENT%\OpenFresco\WIN64\bin-cmake\OpenFrescoTcl.dll" .
 copy /Y "%TCL_ROOT%\bin\tcl86t.dll" .
 copy /Y "%OPENSSL_ROOT%\bin\libssl-3-x64.dll" . 2>nul
@@ -910,24 +922,31 @@ OpenSees.exe ShearBuilding40.tcl
 **MPI example** (OpenSeesMP):
 
 ```bat
-cd /d "%PARENT%\OpenSees-RTHS-CUDA\EXAMPLES\ShearBuilding40SP"
-copy /Y "%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\OpenSeesMP.exe" .
-copy /Y "%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\tcl86t.dll" .
+cd /d "%PARENT%\OpenSees\EXAMPLES\ShearBuilding40SP"
+copy /Y "%PARENT%\OpenSees\build-mp\Release\OpenSeesMP.exe" .
+copy /Y "%PARENT%\OpenSees\build-mp\Release\tcl86t.dll" .
 REM copy OpenFrescoTcl.dll, OpenSSL DLLs if needed
 
-set TCL_LIBRARY=%PARENT%\OpenSees-RTHS-CUDA\build-mp\lib\tcl8.6
+set TCL_LIBRARY=%PARENT%\OpenSees\build-mp\lib\tcl8.6
 call "%ONEAPI_SETVARS%" intel64 mod
+set I_MPI_PIN=on
+set I_MPI_PIN_CELL=core
+set I_MPI_FABRICS=shm
+set OMP_NUM_THREADS=1
+set MKL_NUM_THREADS=1
 mpiexec -n 4 OpenSeesMP.exe ShearBuilding40MP.tcl
 ```
 
-Use Intel MPI’s `mpiexec` from oneAPI. Partitioning examples live under
+Use Intel MPI’s `mpiexec` from oneAPI. For single-node MUMPS jobs, also set the
+[Intel MPI runtime](#intel-mpi-runtime-windows-single-node) knobs (`I_MPI_PIN=on`,
+`I_MPI_FABRICS=shm`, `OMP_NUM_THREADS=1`, …). Partitioning examples live under
 `EXAMPLES\Partition` and `EXAMPLES\LargeMP`.
 
 **OpenFresco local examples** (e.g. `OpenFresco\EXAMPLES\OneBayFrame\OpenSees\OneBayFrame_Local.tcl`):
 
 ```bat
 cd /d "%PARENT%\OpenFresco\EXAMPLES\OneBayFrame\OpenSees"
-copy /Y "%PARENT%\OpenSees-RTHS-CUDA\build\Release\OpenSees.exe" .
+copy /Y "%PARENT%\OpenSees\build\Release\OpenSees.exe" .
 copy /Y "%PARENT%\OpenFresco\WIN64\bin-cmake\OpenFrescoTcl.dll" .
 copy /Y "%TCL_ROOT%\bin\tcl86t.dll" .
 
@@ -936,6 +955,51 @@ OpenSees.exe OneBayFrame_Local.tcl
 ```
 
 Run from the example directory so relative data files (e.g. `elcentro.txt`) resolve.
+
+---
+
+## Intel MPI runtime (Windows, single node)
+
+OpenSeesMP + MUMPS on a **small explicit** model (frequent tiny MPI messages) is often much
+slower on native Windows than the same job in WSL. That is Intel MPI latency, not a wrong
+solver. These environment variables helped a lot on oneAPI (IPL2) with 4 ranks on one PC.
+
+Set them in the **same cmd window** as `mpiexec` (after `setvars.bat`):
+
+```bat
+set I_MPI_PIN=on
+set I_MPI_PIN_CELL=core
+set I_MPI_FABRICS=shm
+set OMP_NUM_THREADS=1
+set MKL_NUM_THREADS=1
+```
+
+| Variable | Why |
+|----------|-----|
+| `I_MPI_PIN=on` | Keep each rank on a fixed CPU |
+| `I_MPI_PIN_CELL=core` | One rank per **physical core** (not two hyperthreads on the same core) |
+| `I_MPI_FABRICS=shm` | Shared-memory only — skip OFI/TCP for intra-node messages |
+| `OMP_NUM_THREADS=1` | OpenSeesMP links threaded MKL + MUMPS `/Qiopenmp`; extra OpenMP threads steal cores from other ranks |
+| `MKL_NUM_THREADS=1` | Same, for MKL |
+
+Do **not** use `set I_MPI_PIN=1` or `I_MPI_PIN_DOMAIN=core` on this oneAPI. Newer Intel MPI
+treats `I_MPI_PIN=1` as an affinity list and prints `IPL2 Error: ... error parsing affinity list`
+once per rank, then runs **without** pinning.
+
+You can pass the same knobs on the `mpiexec` line:
+
+```bat
+mpiexec -genv I_MPI_PIN on -genv I_MPI_PIN_CELL core -genv I_MPI_FABRICS shm ^
+  -genv OMP_NUM_THREADS 1 -genv MKL_NUM_THREADS 1 ^
+  -n 4 "%PARENT%\OpenSees\build-mp\Release\OpenSeesMP.exe" RunParallel.tcl
+```
+
+**Optional:** `I_MPI_SPIN_COUNT=20000` makes ranks busy-wait longer for the next MPI message
+(lower latency, hotter idle CPU). Default is already ~2000 when you are not oversubscribed.
+Try it only after the table above; it will not match the shm/pin/threads=1 gains. Do **not**
+set `I_MPI_WAIT_MODE=1` (that is the oversubscription/yield path and is slower here).
+
+Confirm shm with `set I_MPI_DEBUG=2` once (startup lines should mention `shm`), then unset it.
 
 ---
 
@@ -952,7 +1016,7 @@ OpenSeesMP needs **`tcl86t.dll`** and **`lib\tcl8.6\`** at run time. Both must c
 **Stage after every OpenSeesMP build** (or when Tcl errors appear):
 
 ```bat
-cd /d "%PARENT%\OpenSees-RTHS-CUDA"
+cd /d "%PARENT%\OpenSees"
 
 if not exist build-mp\lib mkdir build-mp\lib
 robocopy "%TCL_ROOT%\lib\tcl8.6" "build-mp\lib\tcl8.6" /E
@@ -965,7 +1029,7 @@ copy /Y "%TCL_ROOT%\bin\tcl86t.dll" "build-mp\Release\"
 **Run** from the **model directory**. Point `mpiexec` at `build-mp\Release\OpenSeesMP.exe` (do **not** copy the exe into the model folder). `tcl86t.dll` loads from that same `Release` folder. Set `TCL_LIBRARY` to the staged scripts:
 
 ```bat
-set TCL_LIBRARY=%PARENT%\OpenSees-RTHS-CUDA\build-mp\lib\tcl8.6
+set TCL_LIBRARY=%PARENT%\OpenSees\build-mp\lib\tcl8.6
 ```
 
 **MPI runs:** use a **local Windows path** (`cd /d C:\...`), not `\\wsl.localhost\...`.
@@ -975,9 +1039,16 @@ set TCL_LIBRARY=%PARENT%\OpenSees-RTHS-CUDA\build-mp\lib\tcl8.6
 ```bat
 call "%ONEAPI_SETVARS%" intel64 mod
 cd /d C:\Users\YOURNAME\OpenSees_Runs\OSU_SSI_Bridge
-set TCL_LIBRARY=%PARENT%\OpenSees-RTHS-CUDA\build-mp\lib\tcl8.6
-mpiexec -n 6 "%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\OpenSeesMP.exe" RunParallel.tcl
+set TCL_LIBRARY=%PARENT%\OpenSees\build-mp\lib\tcl8.6
+set I_MPI_PIN=on
+set I_MPI_PIN_CELL=core
+set I_MPI_FABRICS=shm
+set OMP_NUM_THREADS=1
+set MKL_NUM_THREADS=1
+mpiexec -n 6 "%PARENT%\OpenSees\build-mp\Release\OpenSeesMP.exe" RunParallel.tcl
 ```
+
+See [Intel MPI runtime](#intel-mpi-runtime-windows-single-node) for what these do.
 
 ---
 
@@ -998,7 +1069,9 @@ mpiexec -n 6 "%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\OpenSeesMP.exe" RunPa
 | Stale CMake cache (`/home/...` in `CMakeCache.txt`) | Delete `build-mp\Release` (or `build\Release`) and reconfigure on Windows |
 | Conan not found | Create conda env **`RTHS-CUDA`**, `pip install conan`, add `%CONDA_ENV%\Scripts` to PATH |
 | CUDA configure fails / `cudadevrt.lib` missing | Set `CUDAToolkit_ROOT=%CUDA_ROOT%`, add `%CUDA_ROOT%\bin` to PATH, re-run cmake configure on both trees |
-| Wrong OpenSees folder name | Clone OpenSees into **`OpenSees-RTHS-CUDA`** under `%PARENT%`, or pass `/p:OpenSeesRoot=...` to MSBuild |
+| Wrong OpenSees folder name | Clone OpenSees into **`OpenSees`** under `%PARENT%`, or pass `/p:OpenSeesRoot=...` to MSBuild |
+| `IPL2 Error: ... error parsing affinity list` | Do not set `I_MPI_PIN=1`. Use `I_MPI_PIN=on` and `I_MPI_PIN_CELL=core`, or clear `I_MPI_PIN` / `I_MPI_PIN_DOMAIN` — see [Intel MPI runtime](#intel-mpi-runtime-windows-single-node) |
+| OpenSeesMP + MUMPS much slower than WSL (small explicit model) | Set `I_MPI_PIN=on`, `I_MPI_PIN_CELL=core`, `I_MPI_FABRICS=shm`, `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`. Pinning alone will not match WSL on a tiny mesh |
 
 ---
 
@@ -1010,7 +1083,7 @@ the CUDA block — not both on the same build tree unless you reconfigure cleanl
 ### Shared setup (MUMPS + METIS + clones)
 
 ```bat
-set PARENT=C:\Users\YOURNAME\source\repos\RTHS-CUDA
+set PARENT=C:\Users\YOURNAME\source\repos\simpsoba\RTHS-CUDA
 set CONDA_ROOT=C:\Users\YOURNAME\AppData\Local\anaconda3
 set CONDA_ENV=%CONDA_ROOT%\envs\RTHS-CUDA
 
@@ -1022,14 +1095,14 @@ set CUDA_ROOT=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9
 mkdir "%PARENT%"
 cd /d "%PARENT%"
 
-git clone -b RTHS-CUDA https://github.com/simpsoba/OpenSees.git OpenSees-RTHS-CUDA
+git clone -b RTHS-CUDA https://github.com/simpsoba/OpenSees.git OpenSees
 git clone -b RTHS-CUDA https://github.com/simpsoba/OpenFresco.git OpenFresco
 
 git clone https://github.com/OpenSees/mumps.git mumps
 cd mumps
 if not exist build mkdir build
 cd build
-cmake .. -G Ninja -Darith=d -Dopenmp=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DBUILD_TESTING=OFF -DCMAKE_Fortran_COMPILER=ifx -DCMAKE_C_COMPILER=icx -DCMAKE_C_FLAGS="/DWIN32 /D_WINDOWS /Qiopenmp" -DCMAKE_Fortran_FLAGS="/nologo /fpp /Qiopenmp" -DCMAKE_EXE_LINKER_FLAGS="/Qiopenmp"
+cmake .. -G Ninja -Darith=d -Dopenmp=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DBUILD_TESTING=OFF -DCMAKE_Fortran_COMPILER=ifx -DCMAKE_C_COMPILER=icx -DCMAKE_C_FLAGS="/DWIN32 /D_WINDOWS /Qiopenmp" -DCMAKE_Fortran_FLAGS="/nologo /fpp /Qiopenmp" -DCMAKE_EXE_LINKER_FLAGS="/Qiopenmp" -DCMAKE_C_FLAGS_RELEASE="/O3 /Ob2 /DNDEBUG" -DCMAKE_Fortran_FLAGS_RELEASE="/O3 /DNDEBUG" -DCMAKE_BUILD_TYPE=Release
 cmake --build . --config Release --parallel 8
 cd ..\..
 
@@ -1048,7 +1121,7 @@ cd ..
 ### OpenSees and OpenSeesMP — **without CUDA**
 
 ```bat
-cd /d "%PARENT%\OpenSees-RTHS-CUDA"
+cd /d "%PARENT%\OpenSees"
 
 conan install . -of build -s build_type=Release -s arch=x86_64 -s compiler.runtime=static --build=missing -c tools.cmake.cmaketoolchain:generator=Ninja
 conan install . -of build-mp -s build_type=Release -s arch=x86_64 -s compiler.runtime=static --build=missing -c tools.cmake.cmaketoolchain:generator=Ninja

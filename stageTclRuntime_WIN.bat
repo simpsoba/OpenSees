@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableDelayedExpansion
 REM Sync ActiveTcl tcl86t.dll + lib\tcl8.6 to OpenSeesMP runtime paths.
-REM Run from OpenSees-RTHS-CUDA repo root after building OpenSeesMP.
+REM Run from OpenSees repo root after building OpenSeesMP.
 REM Fixes: "package require -exact Tcl 8.6.11" vs tcl86t.dll 8.6.16 mismatch.
 
 if not defined BUILD_DIR set "BUILD_DIR=build-mp"
