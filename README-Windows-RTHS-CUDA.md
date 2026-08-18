@@ -244,16 +244,25 @@ cd build
 
 cmake .. -G Ninja ^
   -Darith=d ^
+  -Dopenmp=OFF ^
   -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded ^
   -DBUILD_TESTING=OFF ^
   -DCMAKE_Fortran_COMPILER=ifx ^
-  -DCMAKE_C_COMPILER=icx
+  -DCMAKE_C_COMPILER=icx ^
+  -DCMAKE_C_FLAGS="/DWIN32 /D_WINDOWS /Qiopenmp" ^
+  -DCMAKE_Fortran_FLAGS="/nologo /fpp /Qiopenmp" ^
+  -DCMAKE_EXE_LINKER_FLAGS="/Qiopenmp"
 
 cmake --build . --config Release --parallel 8
 ```
 
 `-Darith=d` builds **double-precision only** (`dmumps.lib`), which is what OpenSees links.
 Parallel MPI MUMPS is the default (`parallel=ON`); oneAPI MKL/MPI satisfy LAPACK and ScaLAPACK.
+
+This copies the **WSL MUMPS recipe**: CMake `openmp=OFF`, and OpenMP comes in through compiler/linker
+**FLAGS** (`-fopenmp` on Linux; `/Qiopenmp` is the ifx/icx equivalent). Do **not** also pass
+`-Dopenmp=ON` — that is a second, different embedding (`find_package(OpenMP)` on the MUMPS targets)
+and is not how the fast WSL tree was built. `-fPIC` is Linux-only; omit it on Windows.
 
 Confirm:
 
@@ -275,6 +284,12 @@ set MUMPS_DIR=%PARENT%\mumps\build
 ```
 
 CMake flag: `-DMUMPS_DIR="%MUMPS_DIR%"`.
+
+OpenSeesMP/SP on Windows then **link** Intel MKL ScaLAPACK with **`mkl_intel_thread` + `libiomp5md`**
+(same role as WSL `mkl_gnu_thread` + `libgomp`). That is link-time only: OpenSees C++ is **not**
+compiled with OpenMP (the WSL OpenSeesMP tree also had no `-fopenmp` on C/C++). Mixing two OpenMP
+runtimes (MSVC `vcomp` vs Intel `libiomp5`) is the usual conflict — do not add MSVC `/openmp`
+to OpenSees. Do not mix `mkl_sequential` with `mkl_intel_thread` on the same MPI executable.
 
 If you copy a MUMPS tree from another machine, copy the **entire** `mumps\build` folder
 (including `_deps\`), not just the three `.lib` files.
@@ -1014,7 +1029,7 @@ git clone https://github.com/OpenSees/mumps.git mumps
 cd mumps
 if not exist build mkdir build
 cd build
-cmake .. -G Ninja -Darith=d -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DBUILD_TESTING=OFF -DCMAKE_Fortran_COMPILER=ifx -DCMAKE_C_COMPILER=icx
+cmake .. -G Ninja -Darith=d -Dopenmp=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DBUILD_TESTING=OFF -DCMAKE_Fortran_COMPILER=ifx -DCMAKE_C_COMPILER=icx -DCMAKE_C_FLAGS="/DWIN32 /D_WINDOWS /Qiopenmp" -DCMAKE_Fortran_FLAGS="/nologo /fpp /Qiopenmp" -DCMAKE_EXE_LINKER_FLAGS="/Qiopenmp"
 cmake --build . --config Release --parallel 8
 cd ..\..
 

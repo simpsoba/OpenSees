@@ -588,7 +588,11 @@ if(MKL_FOUND)
      set (SCALAPACK_LIBRARIES ${MKL_LIBRARIES})
   endif()
   if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    if(EXISTS "${MKL_ROOT}/lib/intel64/mkl_scalapack_lp64.lib")
+    # Prefer lib/ (oneAPI 2024+) over lib/intel64. The intel64 tree can still
+    # contain sequential ScaLAPACK leftovers without mkl_intel_thread.lib.
+    if(EXISTS "${MKL_ROOT}/lib/mkl_intel_thread.lib" AND EXISTS "${MKL_ROOT}/lib/mkl_scalapack_lp64.lib")
+      set(MKL_LPATH "${MKL_ROOT}/lib")
+    elseif(EXISTS "${MKL_ROOT}/lib/intel64/mkl_scalapack_lp64.lib")
       set(MKL_LPATH "${MKL_ROOT}/lib/intel64")
     elseif(EXISTS "${MKL_ROOT}/lib/mkl_scalapack_lp64.lib")
       set(MKL_LPATH "${MKL_ROOT}/lib")
@@ -596,7 +600,21 @@ if(MKL_FOUND)
       message(FATAL_ERROR "MKL lp64 ScaLAPACK libraries not found under ${MKL_ROOT}")
     endif()
 
-    set (SCALAPACK_LIBRARIES "${MKL_LPATH}/mkl_scalapack_lp64.lib;${MKL_LPATH}/mkl_intel_lp64.lib;${MKL_LPATH}/mkl_sequential.lib;${MKL_LPATH}/mkl_core.lib;${MKL_LPATH}/mkl_blacs_intelmpi_lp64.lib")
+    # Link-time only (do not compile OpenSees C++ with /openmp). WSL OpenSeesMP
+    # used mkl_gnu_thread + libgomp the same way; sequential MKL here mixed with
+    # OPS_Numerics' mkl_intel_thread. One OpenMP runtime: libiomp5md.
+    set(_iomp5md "")
+    if(OMP_LIBRARY)
+      set(_iomp5md "${OMP_LIBRARY}")
+    elseif(DEFINED ENV{CMPLR_ROOT} AND EXISTS "$ENV{CMPLR_ROOT}/lib/libiomp5md.lib")
+      set(_iomp5md "$ENV{CMPLR_ROOT}/lib/libiomp5md.lib")
+    elseif(DEFINED ENV{ONEAPI_ROOT} AND EXISTS "$ENV{ONEAPI_ROOT}/compiler/latest/lib/libiomp5md.lib")
+      set(_iomp5md "$ENV{ONEAPI_ROOT}/compiler/latest/lib/libiomp5md.lib")
+    else()
+      message(FATAL_ERROR
+        "libiomp5md.lib not found. Load Intel oneAPI (setvars.bat) so CMPLR_ROOT is set.")
+    endif()
+    set (SCALAPACK_LIBRARIES "${MKL_LPATH}/mkl_scalapack_lp64.lib;${MKL_LPATH}/mkl_intel_lp64.lib;${MKL_LPATH}/mkl_intel_thread.lib;${_iomp5md};${MKL_LPATH}/mkl_core.lib;${MKL_LPATH}/mkl_blacs_intelmpi_lp64.lib")
   endif()
 
 else()
