@@ -97,34 +97,39 @@ cmake -S . -B "!BUILD_DIR!\Release" -G Ninja ^
   !CUDA_CMAKE_ARGS! ^
   -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON ^
   -DCMAKE_C_USE_RESPONSE_FILE_FOR_OBJECTS=ON ^
-  -DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=ON
+  -DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=ON ^
+  -DCMAKE_Fortran_USE_RESPONSE_FILE_FOR_OBJECTS=ON
 if errorlevel 1 exit /b 1
 
 cmake --build "!BUILD_DIR!\Release" --target OpenSeesMP --parallel !JOBS!
 if errorlevel 1 exit /b 1
 
-REM OpenSeesMP.exe looks for Tcl's init.tcl under build-mp\lib at runtime.
-REM Must match conanfile.py tcl/8.6.11 (not an older cached tcl/8.6.10 package).
-set "TCL_VERSION=8.6.11"
-set "TCL_PKG_LIB="
-for /d %%d in ("%USERPROFILE%\.conan2\p\b\tcl*") do (
-  if exist "%%d\p\lib\tcl8.6\init.tcl" (
-    findstr /C:"package require -exact Tcl !TCL_VERSION!" "%%d\p\lib\tcl8.6\init.tcl" >nul 2>&1 && (
-      set "TCL_PKG_LIB=%%d\p\lib"
-      goto tcl_found
-    )
-  )
+REM OpenSeesMP.exe loads tcl86t.dll from Release\ (ActiveTcl). Tcl scripts under
+REM build-mp\lib\tcl8.6 MUST match that DLL patch level (not Conan tcl/8.6.11 alone).
+if not defined TCL_ROOT set "TCL_ROOT=C:\Program Files\Tcl"
+if not exist "!TCL_ROOT!\bin\tcl86t.dll" (
+  echo ERROR: ActiveTcl tcl86t.dll not found:
+  echo   !TCL_ROOT!\bin\tcl86t.dll
+  echo Set TCL_ROOT to your ActiveTcl install.
+  exit /b 1
 )
-echo ERROR: Conan Tcl !TCL_VERSION! not found under %USERPROFILE%\.conan2\p\b.
-exit /b 1
-
-:tcl_found
+if not exist "!TCL_ROOT!\lib\tcl8.6\init.tcl" (
+  echo ERROR: !TCL_ROOT!\lib\tcl8.6\init.tcl not found
+  exit /b 1
+)
 if not exist "!BUILD_DIR!\lib" mkdir "!BUILD_DIR!\lib"
-robocopy "!TCL_PKG_LIB!\tcl8.6" "!BUILD_DIR!\lib\tcl8.6" /E /NFL /NDL /NJH /NJS /NC /NS >nul
+robocopy "!TCL_ROOT!\lib\tcl8.6" "!BUILD_DIR!\lib\tcl8.6" /E /NFL /NDL /NJH /NJS /NC /NS >nul
 if errorlevel 8 exit /b 1
-robocopy "!TCL_PKG_LIB!\tcl8" "!BUILD_DIR!\lib\tcl8" /E /NFL /NDL /NJH /NJS /NC /NS >nul
+if exist "!TCL_ROOT!\lib\tcl8" (
+  robocopy "!TCL_ROOT!\lib\tcl8" "!BUILD_DIR!\lib\tcl8" /E /NFL /NDL /NJH /NJS /NC /NS >nul
+  if errorlevel 8 exit /b 1
+)
+if not exist "lib" mkdir "lib"
+robocopy "!TCL_ROOT!\lib\tcl8.6" "lib\tcl8.6" /E /NFL /NDL /NJH /NJS /NC /NS >nul
 if errorlevel 8 exit /b 1
-echo Tcl !TCL_VERSION! copied to !BUILD_DIR!\lib\
+copy /Y "!TCL_ROOT!\bin\tcl86t.dll" "!BUILD_DIR!\Release\" >nul
+echo Tcl scripts copied from !TCL_ROOT!\lib to !BUILD_DIR!\lib\ and lib\tcl8.6\
+echo tcl86t.dll copied to !BUILD_DIR!\Release\
 
 echo.
 echo OpenSeesMP built successfully:

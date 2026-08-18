@@ -21,6 +21,7 @@ Everything clones under workspace folder **`RTHS-CUDA`**. Conan runs in conda en
 * [Building — OpenFresco plugin](#building--openfresco-plugin)
 * [Verify installation](#verify-installation)
 * [Built executables and usage](#built-executables-and-usage)
+* [OpenSeesMP — Tcl runtime after build](#openseesmp--tcl-runtime-after-build)
 * [Troubleshooting](#troubleshooting)
 * [Appendix: full copy-paste script](#appendix-full-copy-paste-script)
 
@@ -90,11 +91,11 @@ Install on the new machine (versions should match your working box when possible
 | **Git** | https://git-scm.com/ |
 | **Visual Studio 2022** | Desktop development with C++ |
 | **Intel oneAPI Base + HPC Toolkits** | Fortran (`ifx`), MKL, MPI — `setvars.bat` at `ONEAPI_SETVARS` |
-| **ActiveTcl 8.6** | Must provide `tcl86t.lib` and `tcl86t.dll` under `TCL_ROOT` |
+| **ActiveTcl 8.6** | Must provide `tcl86t.lib` and `tcl86t.dll` under `TCL_ROOT`. For **OpenSeesMP**, the DLL patch level must match the Tcl **script** tree you point `TCL_LIBRARY` at (see [OpenSeesMP — Tcl runtime](#openseesmp--tcl-runtime-after-build)) |
 | **OpenSSL 3 (Win64, /MT)** | Headers: `%OPENSSL_ROOT%\include\openssl\ssl.h` |
 | | Static libs: `%OPENSSL_ROOT%\lib\VC\x64\MT\libssl.lib`, `libcrypto.lib` |
 | **Conan 2.x** | Inside conda env **`RTHS-CUDA`** — see **Create the conda env** below |
-| **CMake + Ninja** | Bundled with VS 2022; bat scripts add them to PATH |
+| **CMake + Ninja** | Bundled with VS 2022; add to `PATH` in the [build shell](#building--prepare-the-build-shell) |
 | **MUMPS** | Build from source — [Building — MUMPS](#building--mumps) |
 | **METIS 5.1.0** | Build from source — [Building — METIS 5](#building--metis-5) |
 | **CUDA 12.x** (optional) | Required only for [Building — OpenSees and OpenSeesMP (with CUDA)](#building--opensees-and-openseesmp-with-cuda) |
@@ -441,11 +442,19 @@ OpenSees and OpenSeesMP use **separate** Conan/CMake trees: `build\Release` and
 `build-mp\Release`. Both link dynamic **`tcl86t.dll`** on Windows (for OpenFresco
 `loadPackage`).
 
+**Reconfigure on Windows:** If `build-mp\Release\CMakeCache.txt` was created on Linux/WSL
+(paths like `/home/...`), delete `build-mp\Release` and configure again on Windows.
+
 ---
 
 ### OpenSees and OpenSeesMP (CPU-only)
 
 No CUDA toolkit required. Do **not** pass `-DCUDAToolkit_ROOT=...`.
+
+**Important:** CMake still enables CUDA if `nvcc` is on `PATH`, even when you omit
+`-DCUDAToolkit_ROOT`. For a CPU-only tree, temporarily remove `%CUDA_ROOT%\bin` from `PATH`
+before configuring, or accept a CUDA-enabled binary (still fine for MPI/MUMPS runs that do
+not call GPU solvers).
 
 #### 1. Conan dependencies
 
@@ -487,7 +496,8 @@ if not exist "%TOOLCHAIN_MP%" set TOOLCHAIN_MP=%CD%\build-mp\build\Release\gener
   -DPARALLEL_PROCESSING=OFF ^
   -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON ^
   -DCMAKE_C_USE_RESPONSE_FILE_FOR_OBJECTS=ON ^
-  -DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=ON
+  -DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=ON ^
+  -DCMAKE_Fortran_USE_RESPONSE_FILE_FOR_OBJECTS=ON
 
 "%CMAKE%" --build build\Release --target OpenSees --parallel %JOBS%
 ```
@@ -514,16 +524,50 @@ METIS 5 must exist before this step (`%METIS5_DIR%\include\metis.h`).
   -DPARALLEL_PROCESSING=OFF ^
   -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON ^
   -DCMAKE_C_USE_RESPONSE_FILE_FOR_OBJECTS=ON ^
-  -DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=ON
+  -DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=ON ^
+  -DCMAKE_Fortran_USE_RESPONSE_FILE_FOR_OBJECTS=ON
 
 "%CMAKE%" --build build-mp\Release --target OpenSeesMP --parallel %JOBS%
 ```
 
-**Verify:**
+#### 4. Stage Tcl runtime for OpenSeesMP (required for `mpiexec`)
+
+OpenSeesMP loads **`tcl86t.dll`** from ActiveTcl (`%TCL_ROOT%\bin\`, copied next to the exe at
+link time). The **`init.tcl`** script tree must be the **same Tcl patch** as that DLL.
+
+Do **not** copy only Conan’s `tcl/8.6.11` scripts while the exe ships ActiveTcl **8.6.16** — you
+will get `version conflict for package "Tcl": have 8.6.16, need exactly 8.6.11`.
+
+Copy **ActiveTcl** scripts and DLL from `%TCL_ROOT%` (same patch as `tcl86t.dll`):
 
 ```bat
-dir "%PARENT%\OpenSees-RTHS-CUDA\build\Release\OpenSees.exe"
+cd /d "%PARENT%\OpenSees-RTHS-CUDA"
+
+if not exist build-mp\lib mkdir build-mp\lib
+robocopy "%TCL_ROOT%\lib\tcl8.6" "build-mp\lib\tcl8.6" /E
+if exist "%TCL_ROOT%\lib\tcl8" robocopy "%TCL_ROOT%\lib\tcl8" "build-mp\lib\tcl8" /E
+
+if not exist lib mkdir lib
+robocopy "%TCL_ROOT%\lib\tcl8.6" "lib\tcl8.6" /E
+
+copy /Y "%TCL_ROOT%\bin\tcl86t.dll" "build-mp\Release\"
+```
+
+This populates:
+
+- `build-mp\lib\tcl8.6\` — primary runtime path for OpenSeesMP
+- `lib\tcl8.6\` — also searched when running from the repo tree
+- `build-mp\Release\tcl86t.dll` — refreshed to match `init.tcl`
+
+Re-run these copies after every OpenSeesMP rebuild or ActiveTcl upgrade.
+
+**Verify** (the `package require` line must match your `tcl86t.dll`):
+
+```bat
+findstr "package require -exact Tcl" "%PARENT%\OpenSees-RTHS-CUDA\build-mp\lib\tcl8.6\init.tcl"
 dir "%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\OpenSeesMP.exe"
+dir "%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\tcl86t.dll"
+dir "%PARENT%\OpenSees-RTHS-CUDA\build-mp\lib\tcl8.6\init.tcl"
 ```
 
 ---
@@ -562,7 +606,8 @@ extra CUDA flags appended:
   %CUDA_CMAKE_ARGS% ^
   -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON ^
   -DCMAKE_C_USE_RESPONSE_FILE_FOR_OBJECTS=ON ^
-  -DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=ON
+  -DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=ON ^
+  -DCMAKE_Fortran_USE_RESPONSE_FILE_FOR_OBJECTS=ON
 
 "%CMAKE%" --build build\Release --target OpenSees --parallel %JOBS%
 
@@ -584,16 +629,20 @@ extra CUDA flags appended:
   %CUDA_CMAKE_ARGS% ^
   -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON ^
   -DCMAKE_C_USE_RESPONSE_FILE_FOR_OBJECTS=ON ^
-  -DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=ON
+  -DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=ON ^
+  -DCMAKE_Fortran_USE_RESPONSE_FILE_FOR_OBJECTS=ON
 
 "%CMAKE%" --build build-mp\Release --target OpenSeesMP --parallel %JOBS%
 ```
+
+Stage Tcl for OpenSeesMP as in [step 4 of the CPU-only section](#4-stage-tcl-runtime-for-openseesmp-required-for-mpiexec).
 
 **Verify:**
 
 ```bat
 dir "%PARENT%\OpenSees-RTHS-CUDA\build\Release\OpenSees.exe"
 dir "%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\OpenSeesMP.exe"
+dir "%PARENT%\OpenSees-RTHS-CUDA\build-mp\lib\tcl8.6\init.tcl"
 nvcc --version
 ```
 
@@ -779,7 +828,7 @@ After a full build, these are the files you run.
 | Program | Built path | Role |
 |---------|------------|------|
 | **`OpenSees.exe`** | `%PARENT%\OpenSees-RTHS-CUDA\build\Release\OpenSees.exe` | Serial Tcl interpreter; hybrid simulation with `loadPackage OpenFrescoTcl` |
-| **`OpenSeesMP.exe`** | `%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\OpenSeesMP.exe` | MPI parallel Tcl; needs `mpiexec`; METIS `partition()` when METIS 5 is linked |
+| **`OpenSeesMP.exe`** | `%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\OpenSeesMP.exe` | MPI parallel Tcl; needs `mpiexec`, `build-mp\lib\tcl8.6`, and matching `tcl86t.dll` |
 | **`OpenFrescoTcl.dll`** | `%PARENT%\OpenFresco\WIN64\bin-cmake\OpenFrescoTcl.dll` | OpenFresco plugin loaded at run time |
 
 Both OpenSees executables on **RTHS-CUDA** link **`tcl86t.dll`** dynamically (not a separate
@@ -801,13 +850,18 @@ For any example or test folder, put these files **in the same directory** (or on
 |------|----------------|
 | `OpenSees.exe` (or `OpenSeesMP.exe`) | `build\Release\` or `build-mp\Release\` |
 | `OpenFrescoTcl.dll` | `OpenFresco\WIN64\bin-cmake\` |
-| `tcl86t.dll` | `%TCL_ROOT%\bin\` |
+| `tcl86t.dll` | `%TCL_ROOT%\bin\` (serial) or `build-mp\Release\` (MPI) |
+| `lib\tcl8.6\` (OpenSeesMP only) | `build-mp\lib\tcl8.6\` — set `TCL_LIBRARY` to this folder |
 | `libssl-3-x64.dll`, `libcrypto-3-x64.dll` | `%OPENSSL_ROOT%\bin\` (if needed at run time) |
 
 Set Tcl scripts for the interpreter:
 
 ```bat
+REM Serial OpenSees / OpenFresco:
 set TCL_LIBRARY=%TCL_ROOT%\lib\tcl8.6
+
+REM OpenSeesMP (after staging — see OpenSeesMP — Tcl runtime):
+set TCL_LIBRARY=%PARENT%\OpenSees-RTHS-CUDA\build-mp\lib\tcl8.6
 ```
 
 ### How to run
@@ -843,9 +897,11 @@ OpenSees.exe ShearBuilding40.tcl
 ```bat
 cd /d "%PARENT%\OpenSees-RTHS-CUDA\EXAMPLES\ShearBuilding40SP"
 copy /Y "%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\OpenSeesMP.exe" .
-REM copy OpenFrescoTcl.dll, tcl86t.dll, OpenSSL DLLs as above
+copy /Y "%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\tcl86t.dll" .
+REM copy OpenFrescoTcl.dll, OpenSSL DLLs if needed
 
-set TCL_LIBRARY=%TCL_ROOT%\lib\tcl8.6
+set TCL_LIBRARY=%PARENT%\OpenSees-RTHS-CUDA\build-mp\lib\tcl8.6
+call "%ONEAPI_SETVARS%" intel64 mod
 mpiexec -n 4 OpenSeesMP.exe ShearBuilding40MP.tcl
 ```
 
@@ -868,6 +924,48 @@ Run from the example directory so relative data files (e.g. `elcentro.txt`) reso
 
 ---
 
+## OpenSeesMP — Tcl runtime after build
+
+OpenSeesMP needs **`tcl86t.dll`** and **`lib\tcl8.6\`** at run time. Both must come from the
+**same ActiveTcl install** (`%TCL_ROOT%`, default `C:\Program Files\Tcl`).
+
+| Piece | Location | Source |
+|-------|----------|--------|
+| **`tcl86t.dll`** | `build-mp\Release\` (beside `OpenSeesMP.exe`) | `%TCL_ROOT%\bin\` (post-build copy) |
+| **Tcl scripts** | `build-mp\lib\tcl8.6\` and repo `lib\tcl8.6\` | `%TCL_ROOT%\lib\tcl8.6\` — see [step 4](#4-stage-tcl-runtime-for-openseesmp-required-for-mpiexec) |
+
+**Stage after every OpenSeesMP build** (or when Tcl errors appear):
+
+```bat
+cd /d "%PARENT%\OpenSees-RTHS-CUDA"
+
+if not exist build-mp\lib mkdir build-mp\lib
+robocopy "%TCL_ROOT%\lib\tcl8.6" "build-mp\lib\tcl8.6" /E
+if exist "%TCL_ROOT%\lib\tcl8" robocopy "%TCL_ROOT%\lib\tcl8" "build-mp\lib\tcl8" /E
+if not exist lib mkdir lib
+robocopy "%TCL_ROOT%\lib\tcl8.6" "lib\tcl8.6" /E
+copy /Y "%TCL_ROOT%\bin\tcl86t.dll" "build-mp\Release\"
+```
+
+**Run** from the **model directory**. Point `mpiexec` at `build-mp\Release\OpenSeesMP.exe` (do **not** copy the exe into the model folder). `tcl86t.dll` loads from that same `Release` folder. Set `TCL_LIBRARY` to the staged scripts:
+
+```bat
+set TCL_LIBRARY=%PARENT%\OpenSees-RTHS-CUDA\build-mp\lib\tcl8.6
+```
+
+**MPI runs:** use a **local Windows path** (`cd /d C:\...`), not `\\wsl.localhost\...`.
+
+**Example — OSU SSI Bridge:**
+
+```bat
+call "%ONEAPI_SETVARS%" intel64 mod
+cd /d C:\Users\YOURNAME\OpenSees_Runs\OSU_SSI_Bridge
+set TCL_LIBRARY=%PARENT%\OpenSees-RTHS-CUDA\build-mp\lib\tcl8.6
+mpiexec -n 6 "%PARENT%\OpenSees-RTHS-CUDA\build-mp\Release\OpenSeesMP.exe" RunParallel.tcl
+```
+
+---
+
 ## Troubleshooting
 
 | Symptom | Likely fix |
@@ -877,8 +975,12 @@ Run from the example directory so relative data files (e.g. `elcentro.txt`) reso
 | `cannot open input file 'cudadevrt.lib'` | Pull latest `RTHS-CUDA` OpenSees; rebuild after CUDA `/LIBPATH` fix |
 | `cannot open input file 'ARPACK.lib'` (OpenFresco) | Complete [Stage OpenFresco libraries](#building--stage-openfresco-libraries); build **Release-CMake**, not Release |
 | `openssl/ssl.h` not found | Install OpenSSL at `%OPENSSL_ROOT%`; OpenFresco branch must have `OpenSSL\include` paths |
-| `Can't find init.tcl` | Set `TCL_LIBRARY=C:\Program Files\Tcl\lib\tcl8.6` or copy Tcl script tree |
+| `Can't find init.tcl` | Set `TCL_LIBRARY` to a folder containing `init.tcl`. OpenSeesMP: use `build-mp\lib\tcl8.6` after [step 4](#4-stage-tcl-runtime-for-openseesmp-required-for-mpiexec) |
+| `package require -exact Tcl` version error | Re-run [step 4](#4-stage-tcl-runtime-for-openseesmp-required-for-mpiexec): copy `%TCL_ROOT%\lib\tcl8.6` to `build-mp\lib`, not Conan 8.6.11 scripts alone |
+| `The command line is too long` (Fortran / ifx) | Add `-DCMAKE_Fortran_USE_RESPONSE_FILE_FOR_OBJECTS=ON` to CMake configure (with the other `RESPONSE_FILE` flags) |
 | `partition` stub in OpenSeesMP | Build METIS 5 — see [Building — METIS 5](#building--metis-5) |
+| `mpiexec` / `OpenSeesMP.exe` not found on UNC path | Run from `cd /d C:\...` (local path), not `\\wsl.localhost\...` |
+| Stale CMake cache (`/home/...` in `CMakeCache.txt`) | Delete `build-mp\Release` (or `build\Release`) and reconfigure on Windows |
 | Conan not found | Create conda env **`RTHS-CUDA`**, `pip install conan`, add `%CONDA_ENV%\Scripts` to PATH |
 | CUDA configure fails / `cudadevrt.lib` missing | Set `CUDAToolkit_ROOT=%CUDA_ROOT%`, add `%CUDA_ROOT%\bin` to PATH, re-run cmake configure on both trees |
 | Wrong OpenSees folder name | Clone OpenSees into **`OpenSees-RTHS-CUDA`** under `%PARENT%`, or pass `/p:OpenSeesRoot=...` to MSBuild |
@@ -938,16 +1040,24 @@ conan install . -of build-mp -s build_type=Release -s arch=x86_64 -s compiler.ru
 
 set MUMPS_DIR=%PARENT%\mumps\build
 set METIS5_DIR=%PARENT%\metis-5.1.0\install
+set TCL_ROOT=C:\Program Files\Tcl
 set TOOLCHAIN_OP=%CD%\build\Release\generators\conan_toolchain.cmake
 if not exist "%TOOLCHAIN_OP%" set TOOLCHAIN_OP=%CD%\build\build\Release\generators\conan_toolchain.cmake
 set TOOLCHAIN_MP=%CD%\build-mp\Release\generators\conan_toolchain.cmake
 if not exist "%TOOLCHAIN_MP%" set TOOLCHAIN_MP=%CD%\build-mp\build\Release\generators\conan_toolchain.cmake
 
-"%CMAKE%" -S . -B build\Release -G Ninja -DCMAKE_TOOLCHAIN_FILE="%TOOLCHAIN_OP%" -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DCMAKE_EXE_LINKER_FLAGS="/FORCE:MULTIPLE" -DCMAKE_SHARED_LINKER_FLAGS="/FORCE:MULTIPLE" -DCMAKE_Fortran_COMPILER=ifx -DBLA_STATIC=ON -DMKL_LINK=static -DMKL_INTERFACE_FULL=intel_lp64 -DMUMPS_DIR="%MUMPS_DIR%" -DMETIS5_DIR="%METIS5_DIR%" -UOPENSEES_METIS5_LIBRARY -UOPENMPI -DPARALLEL_PROCESSING=OFF -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON -DCMAKE_C_USE_RESPONSE_FILE_FOR_OBJECTS=ON -DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=ON
+"%CMAKE%" -S . -B build\Release -G Ninja -DCMAKE_TOOLCHAIN_FILE="%TOOLCHAIN_OP%" -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DCMAKE_EXE_LINKER_FLAGS="/FORCE:MULTIPLE" -DCMAKE_SHARED_LINKER_FLAGS="/FORCE:MULTIPLE" -DCMAKE_Fortran_COMPILER=ifx -DBLA_STATIC=ON -DMKL_LINK=static -DMKL_INTERFACE_FULL=intel_lp64 -DMUMPS_DIR="%MUMPS_DIR%" -DMETIS5_DIR="%METIS5_DIR%" -UOPENSEES_METIS5_LIBRARY -UOPENMPI -DPARALLEL_PROCESSING=OFF -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON -DCMAKE_C_USE_RESPONSE_FILE_FOR_OBJECTS=ON -DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=ON -DCMAKE_Fortran_USE_RESPONSE_FILE_FOR_OBJECTS=ON
 "%CMAKE%" --build build\Release --target OpenSees --parallel 10
 
-"%CMAKE%" -S . -B build-mp\Release -G Ninja -DCMAKE_TOOLCHAIN_FILE="%TOOLCHAIN_MP%" -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DCMAKE_EXE_LINKER_FLAGS="/FORCE:MULTIPLE" -DCMAKE_SHARED_LINKER_FLAGS="/FORCE:MULTIPLE" -DCMAKE_Fortran_COMPILER=ifx -DBLA_STATIC=ON -DMKL_LINK=static -DMKL_INTERFACE_FULL=intel_lp64 -DMUMPS_DIR="%MUMPS_DIR%" -DMETIS5_DIR="%METIS5_DIR%" -UOPENSEES_METIS5_LIBRARY -UOPENMPI -DPARALLEL_PROCESSING=OFF -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON -DCMAKE_C_USE_RESPONSE_FILE_FOR_OBJECTS=ON -DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=ON
+"%CMAKE%" -S . -B build-mp\Release -G Ninja -DCMAKE_TOOLCHAIN_FILE="%TOOLCHAIN_MP%" -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DCMAKE_EXE_LINKER_FLAGS="/FORCE:MULTIPLE" -DCMAKE_SHARED_LINKER_FLAGS="/FORCE:MULTIPLE" -DCMAKE_Fortran_COMPILER=ifx -DBLA_STATIC=ON -DMKL_LINK=static -DMKL_INTERFACE_FULL=intel_lp64 -DMUMPS_DIR="%MUMPS_DIR%" -DMETIS5_DIR="%METIS5_DIR%" -UOPENSEES_METIS5_LIBRARY -UOPENMPI -DPARALLEL_PROCESSING=OFF -DCMAKE_NINJA_FORCE_RESPONSE_FILE=ON -DCMAKE_C_USE_RESPONSE_FILE_FOR_OBJECTS=ON -DCMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS=ON -DCMAKE_Fortran_USE_RESPONSE_FILE_FOR_OBJECTS=ON
 "%CMAKE%" --build build-mp\Release --target OpenSeesMP --parallel 10
+
+if not exist build-mp\lib mkdir build-mp\lib
+robocopy "%TCL_ROOT%\lib\tcl8.6" "build-mp\lib\tcl8.6" /E
+if exist "%TCL_ROOT%\lib\tcl8" robocopy "%TCL_ROOT%\lib\tcl8" "build-mp\lib\tcl8" /E
+if not exist lib mkdir lib
+robocopy "%TCL_ROOT%\lib\tcl8.6" "lib\tcl8.6" /E
+copy /Y "%TCL_ROOT%\bin\tcl86t.dll" "build-mp\Release\"
 ```
 
 ### OpenSees and OpenSeesMP — **with CUDA**
