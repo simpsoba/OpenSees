@@ -162,6 +162,7 @@ if not exist "%CFG_TOOLCHAIN%" (
   -DMKL_INTERFACE_FULL=intel_lp64 ^
   -DMUMPS_DIR="%MUMPS_DIR%" ^
   -DCUDAToolkit_ROOT="%CUDAToolkit_ROOT%" ^
+  -DCMAKE_CUDA_ARCHITECTURES=native ^
   %CFG_PARALLEL_FLAG% ^
   -Ucudss_DIR -Ucudss_INCLUDE_DIR -Ucudss_LIBRARY_DIR -Ucudss_BINARY_DIR ^
   -UAMGX_NO_MPI_DIR ^

@@ -66,7 +66,8 @@ METIS5_DIR=%PARENT%\metis-5.1.0\install
 
 # --- OpenSees build (see Building — OpenSees and OpenSeesMP) ---
 # CPU-only: omit -DCUDAToolkit_ROOT=... from cmake configure
-# With CUDA: pass -DCUDAToolkit_ROOT=%CUDA_ROOT% on both build trees
+# With CUDA: pass -DCUDAToolkit_ROOT=%CUDA_ROOT% and
+#   -DCMAKE_CUDA_ARCHITECTURES=native on both build trees
 JOBS=10               # parallel compile jobs
 ```
 
@@ -602,13 +603,17 @@ dir "%PARENT%\OpenSees\build-mp\lib\tcl8.6\init.tcl"
 ### OpenSees and OpenSeesMP (with CUDA)
 
 Install CUDA 12.x first. Add `nvcc` to `PATH` and pass `-DCUDAToolkit_ROOT=...` on **both**
-configure lines below.
+configure lines below. Also pass `-DCMAKE_CUDA_ARCHITECTURES=native` so nvcc targets this
+machine's GPU. Without it, CMake defaults to **`sm_52`** (Maxwell) and only JIT-compiles
+that PTX for a newer card. Pin an arch instead of `native` if you need a portable binary
+(for example `86` for Ampere). Reconfigure an existing tree — a rebuild alone will not
+change the cached arch.
 
 ```bat
 set CUDAToolkit_ROOT=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9
 set PATH=%CUDAToolkit_ROOT%\bin;%PATH%
 
-set CUDA_CMAKE_ARGS=-DCUDAToolkit_ROOT="%CUDAToolkit_ROOT%" -Ucudss_DIR -Ucudss_INCLUDE_DIR -Ucudss_LIBRARY_DIR -Ucudss_BINARY_DIR -UAMGX_NO_MPI_DIR
+set CUDA_CMAKE_ARGS=-DCUDAToolkit_ROOT="%CUDAToolkit_ROOT%" -DCMAKE_CUDA_ARCHITECTURES=native -Ucudss_DIR -Ucudss_INCLUDE_DIR -Ucudss_LIBRARY_DIR -Ucudss_BINARY_DIR -UAMGX_NO_MPI_DIR
 ```
 
 Run the **Conan** step from the CPU-only section (once per tree), then configure with the
@@ -1069,6 +1074,7 @@ See [Intel MPI runtime](#intel-mpi-runtime-windows-single-node) for what these d
 | Stale CMake cache (`/home/...` in `CMakeCache.txt`) | Delete `build-mp\Release` (or `build\Release`) and reconfigure on Windows |
 | Conan not found | Create conda env **`RTHS-CUDA`**, `pip install conan`, add `%CONDA_ENV%\Scripts` to PATH |
 | CUDA configure fails / `cudadevrt.lib` missing | Set `CUDAToolkit_ROOT=%CUDA_ROOT%`, add `%CUDA_ROOT%\bin` to PATH, re-run cmake configure on both trees |
+| nvcc flags show `sm_52` / `compute_52` | Pass `-DCMAKE_CUDA_ARCHITECTURES=native` (or pin e.g. `86`) and reconfigure; CMake defaults to 52 |
 | Wrong OpenSees folder name | Clone OpenSees into **`OpenSees`** under `%PARENT%`, or pass `/p:OpenSeesRoot=...` to MSBuild |
 | `IPL2 Error: ... error parsing affinity list` | Do not set `I_MPI_PIN=1`. Use `I_MPI_PIN=on` and `I_MPI_PIN_CELL=core`, or clear `I_MPI_PIN` / `I_MPI_PIN_DOMAIN` — see [Intel MPI runtime](#intel-mpi-runtime-windows-single-node) |
 | OpenSeesMP + MUMPS much slower than WSL (small explicit model) | Set `I_MPI_PIN=on`, `I_MPI_PIN_CELL=core`, `I_MPI_FABRICS=shm`, `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`. Pinning alone will not match WSL on a tiny mesh |
@@ -1150,7 +1156,7 @@ copy /Y "%TCL_ROOT%\bin\tcl86t.dll" "build-mp\Release\"
 
 ### OpenSees and OpenSeesMP — **with CUDA**
 
-Append `-DCUDAToolkit_ROOT="%CUDA_ROOT%" -Ucudss_DIR -Ucudss_INCLUDE_DIR -Ucudss_LIBRARY_DIR -Ucudss_BINARY_DIR -UAMGX_NO_MPI_DIR` to both `"%CMAKE%" -S . -B ...` configure lines above, and set `PATH=%CUDA_ROOT%\bin;%PATH%` before configuring.
+Append `-DCUDAToolkit_ROOT="%CUDA_ROOT%" -DCMAKE_CUDA_ARCHITECTURES=native -Ucudss_DIR -Ucudss_INCLUDE_DIR -Ucudss_LIBRARY_DIR -Ucudss_BINARY_DIR -UAMGX_NO_MPI_DIR` to both `"%CMAKE%" -S . -B ...` configure lines above, and set `PATH=%CUDA_ROOT%\bin;%PATH%` before configuring.
 
 ### Stage OpenFresco libraries
 

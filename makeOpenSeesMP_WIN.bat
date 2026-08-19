@@ -76,7 +76,7 @@ if not exist "!TOOLCHAIN!" (
 
 set "CUDA_CMAKE_ARGS=-UCUDToolkit_ROOT"
 if "!WITH_CUDA!"=="1" (
-  set CUDA_CMAKE_ARGS=-DCUDAToolkit_ROOT="!CUDAToolkit_ROOT!" -Ucudss_DIR -Ucudss_INCLUDE_DIR -Ucudss_LIBRARY_DIR -Ucudss_BINARY_DIR -UAMGX_NO_MPI_DIR
+  set CUDA_CMAKE_ARGS=-DCUDAToolkit_ROOT="!CUDAToolkit_ROOT!" -DCMAKE_CUDA_ARCHITECTURES=native -Ucudss_DIR -Ucudss_INCLUDE_DIR -Ucudss_LIBRARY_DIR -Ucudss_BINARY_DIR -UAMGX_NO_MPI_DIR
 )
 
 cmake -S . -B "!BUILD_DIR!\Release" -G Ninja ^
