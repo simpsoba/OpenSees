@@ -344,6 +344,7 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
     int applyM(const T *x, T *y) { return matM->spmv(x, y); }
 
     // Build/refactor GPU operators used by newStepPredictor() and formUnbalanceFromPut().
+    // Finish all collective assemble/merges before GPU factorize (see CudaExplicitAlpha).
     int formOperators(CudaExplicitAlpha_TP *integrator, CudaBcsrLinSOE *cudaSOE) override
     {
         const double bdt2 = integrator->beta * integrator->deltaT * integrator->deltaT;
@@ -377,7 +378,7 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
             return -2;
         }
 
-        // --- alpha = beta*dt^2*K + gamma*dt*C + M (predictor + RHS transform) ---
+        // --- alpha (snapshot only; factorize after all merges) ---
         if (integrator->formTangentIntoSOE(INITIAL_TANGENT, bdt2, gdt, 1.0) != 0) {
             return -3;
         }
@@ -386,6 +387,22 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
             return -4;
         }
 
+        // --- A / Ã ---
+        if (areClose) {
+            if (integrator->formTangentIntoSOE(INITIAL_TANGENT, 0.0, 0.0, integrator->alphaM) != 0) {
+                return -5;
+            }
+        } else if (integrator->formTangentIntoSOE(INITIAL_TANGENT, integrator->alphaF * bdt2,
+                                                   integrator->alphaF * gdt, integrator->alphaM) != 0) {
+            return -5;
+        }
+        cudaSOE->syncAValuesToDevice();
+        if (matA->copyValues(cudaSOE->getDeviceAValues()) != 0) {
+            opserr << "ERROR CudaExplicitAlpha_TP::formOperators - matA->copyValues failed\n";
+            return -5;
+        }
+
+        // --- GPU factorize AFTER all MPI merges are complete ---
         if (!matAlpha->isFactored()) {
             if (matAlpha->factorize(rhsAlpha, solAlpha1, numRhs, nullptr) != 0) {
                 return -4;
@@ -400,18 +417,6 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         } else if (matM->refactorize(rhsM, solM) != 0) {
             return -2;
         }
-
-        // --- A on primary SOE (SpMV for alpha_3 when alphaM != alphaF) ---
-        if (areClose) {
-            if (integrator->formTangentIntoSOE(INITIAL_TANGENT, 0.0, 0.0, integrator->alphaM) != 0) {
-                return -5;
-            }
-        } else if (integrator->formTangentIntoSOE(INITIAL_TANGENT, integrator->alphaF * bdt2,
-                                                   integrator->alphaF * gdt, integrator->alphaM) != 0) {
-            return -5;
-        }
-        cudaSOE->syncAValuesToDevice();
-        matA->bindValues(cudaSOE->getDeviceAValues());
         return 0;
     }
 
@@ -876,6 +881,9 @@ int CudaExplicitAlpha_TP::formTangentIntoSOE(int statFlag, double c1v, double c2
         if (dist->ensureMergedA() != 0) {
             return -1;
         }
+        if (CudaBcsrLinSOE *cuda = dist->getCudaBcsrLinSOE()) {
+            cuda->setAValuesPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
+        }
     }
     return 0;
 }
@@ -1027,6 +1035,16 @@ int CudaExplicitAlpha_TP::newStep(double _deltaT)
         return -2;
     }
 
+    // Same gather as CudaExplicitAlpha: P0 needs full motion before GPU work / broadcast.
+    if (distSOE != nullptr) {
+        if (distSOE->gatherOwnedToRoot(*U) < 0 ||
+            distSOE->gatherOwnedToRoot(*Udot) < 0 ||
+            distSOE->gatherOwnedToRoot(*Udotdot) < 0) {
+            opserr << "ERROR CudaExplicitAlpha_TP::newStep() - motion gather to root failed\n";
+            return -5;
+        }
+    }
+
     *Ut = *U;
     *Utdot = *Udot;
     *Utdotdot = *Udotdot;
@@ -1054,12 +1072,14 @@ int CudaExplicitAlpha_TP::newStep(double _deltaT)
         return -6;
     }
     if (distSOE != nullptr) {
-        if (distSOE->mergeBToRoot() < 0)
-            return -6;
+        (void)distSOE->getB();
         if (distSOE->getProcessID() != 0)
             distSOE->zeroB();
-        else if (m_impl->capturePutFromDeviceB(cudaSOE) != 0)
-            return -6;
+        else {
+            cudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
+            if (m_impl->capturePutFromDeviceB(cudaSOE) != 0)
+                return -6;
+        }
     } else if (m_impl->capturePutFromDeviceB(cudaSOE) != 0) {
         return -6;
     }
@@ -1094,12 +1114,13 @@ int CudaExplicitAlpha_TP::newStep(double _deltaT)
     }
 
     if (distSOE != nullptr) {
-        if (distSOE->mergeBToRoot() < 0)
-            return -9;
+        (void)distSOE->getB();
         if (distSOE->getProcessID() != 0)
             distSOE->zeroB();
-        else
+        else {
+            cudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
             m_impl->blendPutFromHostB(cudaSOE, 1.0 - alphaF, alphaF);
+        }
     } else {
         m_impl->blendPutFromHostB(cudaSOE, 1.0 - alphaF, alphaF);
     }
