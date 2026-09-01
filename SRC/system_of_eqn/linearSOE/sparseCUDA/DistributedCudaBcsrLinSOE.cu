@@ -911,6 +911,34 @@ DistributedCudaBcsrLinSOE::broadcastFromRoot(Vector &v)
 }
 
 int
+DistributedCudaBcsrLinSOE::gatherOwnedToRoot(Vector &v)
+{
+    if (numChannels <= 0 || theChannels == 0)
+        return 0;
+
+    if (processID != 0) {
+        if (theChannels[0] == 0)
+            return -1;
+        return theChannels[0]->sendVector(0, 0, v);
+    }
+
+    ensureWorkArea(v.Size());
+    Vector remote(workArea, v.Size());
+    for (int j = 0; j < numChannels; ++j) {
+        if (theChannels[j]->recvVector(0, 0, remote) < 0)
+            return -1;
+        // Each rank seeds only its AnalysisModel DOFs after domainChanged; other
+        // entries stay 0. Fill P0 holes from workers so the GPU predictor sees the
+        // full global motion before broadcastFromRoot.
+        for (int i = 0; i < v.Size(); ++i) {
+            if (v(i) == 0.0 && remote(i) != 0.0)
+                v(i) = remote(i);
+        }
+    }
+    return 0;
+}
+
+int
 DistributedCudaBcsrLinSOE::mergeBToRoot(void)
 {
     if (theCudaSOE == nullptr)

@@ -75,6 +75,12 @@ public:
     /** Collective: P0 sends \a v, workers overwrite \a v with the received values. */
     int broadcastFromRoot(Vector &v);
 
+    /** Collective: fill rank-0 entries of \a v that are still 0 with non-zero values
+     *  from workers. Used so the GPU predictor on P0 sees the full committed motion
+     *  after domainChanged (each rank only seeds its local DOFs into the integrator
+     *  vectors). Workers' \a v is unchanged. */
+    int gatherOwnedToRoot(Vector &v);
+
     /** Collective merge of local myB into rank-0 host B (same protocol as getB/solve). */
     int mergeBToRoot(void);
 

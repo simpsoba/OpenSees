@@ -353,16 +353,16 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
     int formOperators(CudaExplicitAlpha *integrator, CudaBcsrLinSOE *cudaSOE) override
     {
         // Build/refactor GPU operators used by newStepPredictor() and formUnbalance().
-        // Always finish all three collective formTangentIntoSOE calls even if GPU work
-        // fails, so OpenSeesMP workers do not hang in ensureMergedA.
+        // Critical MPI ordering: finish ALL three collective formTangentIntoSOE /
+        // ensureMergedA exchanges BEFORE any long GPU factorize. Factorizing between
+        // merges leaves worker triplet messages buffered in the MPI layer; with
+        // np>=4 (several large Auto/penalty triplet payloads) that has produced
+        // silently wrong operators and an exploding predictor. MultiSOE avoids this
+        // by merging once per workspace SOE inside solve/formAp, not around GPU work.
         const double bdt2 = integrator->beta * integrator->deltaT * integrator->deltaT;
         const double gdt = integrator->gamma * integrator->deltaT;
         const bool areClose = integrator->areAlphaMFClose();
         int gpuRc = 0;
-
-        // --- Mass operator M ---
-        if (integrator->formTangentIntoSOE(INITIAL_TANGENT, 0.0, 0.0, 1.0) != 0)
-            return -1;
 
         const int numRhs = areClose ? 1 : 2;
         ensureAlphaBuffers(numRhs);
@@ -371,6 +371,10 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         void *solM = thrust::raw_pointer_cast(d_w2.data());
         void *rhsAlpha = rhsM;
         void *solAlpha1 = thrust::raw_pointer_cast(d_alphaSol.data());
+
+        // --- Mass operator M (collective assemble+merge, then fast D2D snapshot) ---
+        if (integrator->formTangentIntoSOE(INITIAL_TANGENT, 0.0, 0.0, 1.0) != 0)
+            return -1;
 
         if (gpuRc == 0 && bindStream(cudaSOE) != 0) {
             opserr << "ERROR CudaExplicitAlpha::formOperators - bindStream failed\n";
@@ -391,7 +395,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
             }
         }
 
-        // --- A_alpha ---
+        // --- A_alpha (collective; snapshot only — factorize later) ---
         if (integrator->formTangentIntoSOE(INITIAL_TANGENT, bdt2, gdt, 1.0) != 0)
             return -3;
         if (gpuRc == 0) {
@@ -401,6 +405,24 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
                 gpuRc = -4;
             }
         }
+
+        // --- A / Ã (collective; snapshot only) ---
+        if (areClose) {
+            if (integrator->formTangentIntoSOE(INITIAL_TANGENT, 0.0, 0.0, integrator->alphaM) != 0)
+                return -5;
+        } else if (integrator->formTangentIntoSOE(INITIAL_TANGENT, integrator->alphaF * bdt2,
+                                                  integrator->alphaF * gdt, integrator->alphaM) != 0) {
+            return -5;
+        }
+        if (gpuRc == 0) {
+            cudaSOE->syncAValuesToDevice();
+            if (matA->copyValues(cudaSOE->getDeviceAValues()) != 0) {
+                opserr << "ERROR CudaExplicitAlpha::formOperators - matA->copyValues failed\n";
+                gpuRc = -5;
+            }
+        }
+
+        // --- GPU factorize AFTER all MPI merges are complete ---
         if (gpuRc == 0) {
             if (!matAlpha->isFactored()) {
                 if (matAlpha->factorize(rhsAlpha, solAlpha1, numRhs, nullptr) != 0) {
@@ -412,9 +434,12 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
                 gpuRc = -4;
             }
         }
+        // Factorize M independently. Sharing alpha's symbolic factorization has
+        // been observed to produce huge M^{-1} amplification under Auto penalties
+        // at np>=4 even when ||M|| matches the working np=3 assemble.
         if (gpuRc == 0) {
             if (!matM->isFactored()) {
-                if (matM->factorize(rhsM, solM, 1, matAlpha) != 0) {
+                if (matM->factorize(rhsM, solM, 1, nullptr) != 0) {
                     opserr << "ERROR CudaExplicitAlpha::formOperators - matM->factorize failed\n";
                     gpuRc = -2;
                 }
@@ -422,19 +447,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
                 opserr << "ERROR CudaExplicitAlpha::formOperators - matM->refactorize failed\n";
                 gpuRc = -2;
             }
-        }
-
-        // --- A ---
-        if (areClose) {
-            if (integrator->formTangentIntoSOE(INITIAL_TANGENT, 0.0, 0.0, integrator->alphaM) != 0)
-                return -5;
-        } else if (integrator->formTangentIntoSOE(INITIAL_TANGENT, integrator->alphaF * bdt2,
-                                                  integrator->alphaF * gdt, integrator->alphaM) != 0) {
-            return -5;
-        }
-        if (gpuRc == 0) {
-            cudaSOE->syncAValuesToDevice();
-            matA->bindValues(cudaSOE->getDeviceAValues());
         }
         return gpuRc;
     }
@@ -829,6 +841,11 @@ int CudaExplicitAlpha::formTangentIntoSOE(int statFlag, double c1v, double c2v, 
         if (dist->ensureMergedA() != 0) {
             return -1;
         }
+        // Merged coefficients live on host; force Host authority so the next
+        // syncAValuesToDevice cannot skip a stale Both/device snapshot.
+        if (CudaBcsrLinSOE *cuda = dist->getCudaBcsrLinSOE()) {
+            cuda->setAValuesPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
+        }
     }
     return 0;
 }
@@ -963,6 +980,21 @@ int CudaExplicitAlpha::newStep(double _deltaT)
         return -2;
     }
 
+    auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE());
+
+    // P0's integrator vectors only contain locally seeded DOFs after domainChanged.
+    // Gather worker-owned entries before copying to Ut / running the GPU predictor;
+    // otherwise broadcastFromRoot would send zeros for remote DOFs and Auto penalty
+    // residuals on workers explode (seen as ~1000x Phat at np>=4).
+    if (distSOE != nullptr) {
+        if (distSOE->gatherOwnedToRoot(*U) < 0 ||
+            distSOE->gatherOwnedToRoot(*Udot) < 0 ||
+            distSOE->gatherOwnedToRoot(*Udotdot) < 0) {
+            opserr << "ERROR CudaExplicitAlpha::newStep() - motion gather to root failed\n";
+            return -5;
+        }
+    }
+
     *Ut = *U;
     *Utdot = *Udot;
     *Utdotdot = *Udotdot;
@@ -981,8 +1013,6 @@ int CudaExplicitAlpha::newStep(double _deltaT)
         }
         operatorsBuilt = true;
     }
-
-    auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE());
 
     if (deviceOn) {
         if (m_impl->newStepPredictor(this) != 0) {
@@ -1009,6 +1039,11 @@ int CudaExplicitAlpha::newStep(double _deltaT)
 
     theModel->setResponse(*Ualpha, *Ualphadot, *Ualphadotdot);
     if (theModel->updateDomain(theModel->getCurrentDomainTime() + alphaF * deltaT, deltaT) < 0) {
+        opserr << "ERROR CudaExplicitAlpha::newStep() - updateDomain failed at t="
+               << theModel->getCurrentDomainTime()
+               << " (alphaF*dt trial), |Ualpha|=" << Ualpha->Norm()
+               << " |Ualphadot|=" << Ualphadot->Norm()
+               << " |Ualphadotdot|=" << Ualphadotdot->Norm() << "\n";
         return -6;
     }
     return 0;
@@ -1029,22 +1064,25 @@ int CudaExplicitAlpha::formUnbalance()
 
     auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE());
     if (distSOE != nullptr) {
-        // Merge assembled residual onto rank 0, then GPU-transform only there.
-        if (distSOE->mergeBToRoot() < 0)
-            return -2;
+        // Match ExplicitAlphaMultiSOE::formUnbalance with DistCuDSS:
+        //   Phat = getB()          (collective gather+broadcast)
+        //   zeroB() on all ranks   (clear local myB before installing global RHS)
+        //   transform only on P0; setB only on P0 (gather-add solve must not
+        //   re-sum a global residual that lives on every rank).
+        (void)distSOE->getB();
+        distSOE->zeroB();
         if (distSOE->getProcessID() != 0) {
-            // Avoid double-counting the original residual in the subsequent gather-add solve.
-            distSOE->zeroB();
             return 0;
         }
         if (m_impl == nullptr || !cudaSOE->isCudaDeviceEnabled()) {
             opserr << "ERROR CudaExplicitAlpha::formUnbalance() - rank 0 has no CUDA device\n";
             return -2;
         }
+        // getB() left the merged Phat in host B; make that the device source of truth.
+        cudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
         const int rc = m_impl->formUnbalance(cudaSOE);
         if (rc != 0)
             return rc;
-        // Reinstall transformed RHS into myB so Distributed::solve gather sees it once.
         cudaSOE->syncBToHost();
         if (distSOE->setB(cudaSOE->getHostBVector()) < 0)
             return -2;
@@ -1060,6 +1098,8 @@ int CudaExplicitAlpha::update(const Vector &aiPlusOne)
 {
     updateCount++;
     if (updateCount > 1) {
+        opserr << "ERROR CudaExplicitAlpha::update() - called " << updateCount
+               << " times in one step (Linear algorithm only)\n";
         return -1;  // linear algorithm only
     }
     AnalysisModel *theModel = this->getAnalysisModel();
@@ -1087,6 +1127,11 @@ int CudaExplicitAlpha::update(const Vector &aiPlusOne)
     theModel->setVel(*Udot);
     theModel->setAccel(*Udotdot);
     if (theModel->updateDomain() < 0) {
+        opserr << "ERROR CudaExplicitAlpha::update() - updateDomain failed"
+               << " |U|=" << U->Norm()
+               << " |Udot|=" << Udot->Norm()
+               << " |Udotdot|=" << Udotdot->Norm()
+               << " updateCount=" << updateCount << "\n";
         return -3;
     }
     theModel->setDisp(*U);
