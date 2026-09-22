@@ -8,8 +8,11 @@
 
 namespace OpsCudaStepTiming {
 
-/** True when OPS_CUDA_STEP_TIMING is set to a non-empty, non-"0" value. */
+/** True when OPS_CUDA_STEP_TIMING is set and this rank is the CSV writer (GPU root). */
 bool enabled();
+
+/** Rank-0 GPU process should call with true once so CSV I/O is single-writer. */
+void setWriter(bool isWriter);
 
 /** Start a new step (rank 0 only should call; resets phase buckets). */
 void beginStep();
