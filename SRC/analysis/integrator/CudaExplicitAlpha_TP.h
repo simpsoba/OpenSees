@@ -107,6 +107,7 @@ protected:
     double residP;
 
     bool operatorsBuilt;  // GPU M / alpha / A factorized for current domain and deltaT
+    bool motionNeedsGather;  // DistCuDSS: gather U/Udot/Uddot to root once after domainChanged
 
     static constexpr double toleranceAlphaMF = 1.0e-8;
     bool areAlphaMFClose() const;
