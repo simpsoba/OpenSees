@@ -63,6 +63,7 @@ namespace {
 struct State {
     bool checked = false;
     bool on = false;
+    bool writer = false;  // rank-0 GPU process only writes CSV
     int step = 0;
     double gather = 0.0;
     double predictor = 0.0;
@@ -88,7 +89,12 @@ void ensureInit()
     s.checked = true;
     const char *env = std::getenv("OPS_CUDA_STEP_TIMING");
     s.on = (env != nullptr && env[0] != '\0' && !(env[0] == '0' && env[1] == '\0'));
-    if (!s.on)
+}
+
+void ensureFile()
+{
+    State &s = state();
+    if (!s.on || !s.writer || s.fp != nullptr)
         return;
     const char *path = std::getenv("OPS_CUDA_STEP_TIMING_FILE");
     if (path == nullptr || path[0] == '\0')
@@ -109,7 +115,15 @@ void ensureInit()
 bool enabled()
 {
     ensureInit();
-    return state().on;
+    return state().on && state().writer;
+}
+
+void setWriter(bool isWriter)
+{
+    ensureInit();
+    state().writer = isWriter;
+    if (isWriter)
+        ensureFile();
 }
 
 void beginStep()
@@ -147,6 +161,7 @@ void endStep()
 {
     if (!enabled())
         return;
+    ensureFile();
     State &s = state();
     if (s.fp != nullptr) {
         std::fprintf(s.fp, "%d,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g\n",
@@ -1068,6 +1083,7 @@ int CudaExplicitAlpha::domainChanged()
 int CudaExplicitAlpha::newStep(double _deltaT)
 {
     updateCount = 0;
+    OpsCudaStepTiming::setWriter(false);
     OpsCudaStepTiming::beginStep();
     if (alphaF < 0.5 || alphaF > 1.0 || beta <= 0.0 || gamma <= 0.0 || _deltaT <= 0.0) {
         return -1;
@@ -1083,6 +1099,8 @@ int CudaExplicitAlpha::newStep(double _deltaT)
     }
     const bool deviceOn = cudaSOE->isCudaDeviceEnabled();
     if (deviceOn) {
+        OpsCudaStepTiming::setWriter(true);
+        OpsCudaStepTiming::beginStep();
         ensureDeviceImpl(cudaSOE);
         if (m_impl == nullptr) {
             opserr << "ERROR CudaExplicitAlpha::newStep() - GPU state not initialized; "

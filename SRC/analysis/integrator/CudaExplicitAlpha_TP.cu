@@ -1018,6 +1018,7 @@ int CudaExplicitAlpha_TP::domainChanged()
 int CudaExplicitAlpha_TP::newStep(double _deltaT)
 {
     updateCount = 0;
+    OpsCudaStepTiming::setWriter(false);
     OpsCudaStepTiming::beginStep();
     if (alphaF < 0.5 || alphaF > 1.0 || beta <= 0.0 || gamma <= 0.0 || _deltaT <= 0.0) {
         return -1;
@@ -1034,6 +1035,8 @@ int CudaExplicitAlpha_TP::newStep(double _deltaT)
     auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE());
     const bool deviceOn = cudaSOE->isCudaDeviceEnabled();
     if (deviceOn) {
+        OpsCudaStepTiming::setWriter(true);
+        OpsCudaStepTiming::beginStep();
         ensureDeviceImpl(cudaSOE);
         if (m_impl == nullptr) {
             opserr << "ERROR CudaExplicitAlpha_TP::newStep() - GPU state not initialized; "
