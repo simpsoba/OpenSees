@@ -12,6 +12,7 @@
 #include <DistributedCudaBcsrLinSOE.h>
 #include <CudaBcsrLinSOE.h>
 #include <CudaBcsrLinSolver.h>
+#include "CudaStepTiming.h"
 #include <Matrix.h>
 #include <Graph.h>
 #include <Vertex.h>
@@ -23,6 +24,7 @@
 #include <OPS_Globals.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <vector>
 
@@ -526,6 +528,8 @@ int
 DistributedCudaBcsrLinSOE::solve(void)
 {
     static ID result(1);
+    const bool timeSolve = (processID == 0 && OpsCudaStepTiming::enabled());
+    const auto tSolve0 = std::chrono::steady_clock::now();
 
     if (theCudaSOE == nullptr) {
         opserr << "WARNING DistributedCudaBcsrLinSOE::solve() - no CudaBcsrLinSOE\n";
@@ -625,6 +629,11 @@ DistributedCudaBcsrLinSOE::solve(void)
         theChannel->sendID(0, 0, result);
     }
 
+    if (timeSolve) {
+        OpsCudaStepTiming::add(
+            "solve",
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - tSolve0).count());
+    }
     return result(0);
 }
 
