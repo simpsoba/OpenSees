@@ -21,7 +21,6 @@
 #include <CudaExplicitAlpha.h>
 #include <CudaBcsrLinSOE.h>
 #include <DistributedCudaBcsrLinSOE.h>
-#include "CudaStepTiming.h"
 #include <AnalysisModel.h>
 #include <Channel.h>
 #include <DOF_Group.h>
@@ -41,9 +40,6 @@
 #include <Element.h>
 #include <Node.h>
 #include <cstring>
-#include <chrono>
-#include <cstdio>
-#include <cstdlib>
 
 #include "CudaCsrMatrix.h"
 #include "CudaUtils.h"
@@ -57,129 +53,7 @@ using thrust::raw_pointer_cast;
 
 using namespace CudaUtils;
 
-namespace OpsCudaStepTiming {
-namespace {
 
-struct State {
-    bool checked = false;
-    bool on = false;
-    bool writer = false;  // rank-0 GPU process only writes CSV
-    int step = 0;
-    double gather = 0.0;
-    double predictor = 0.0;
-    double broadcast = 0.0;
-    double formUnbalance_mpi = 0.0;
-    double formUnbalance_gpu = 0.0;
-    double solve = 0.0;
-    double update = 0.0;
-    FILE *fp = nullptr;
-};
-
-State &state()
-{
-    static State s;
-    return s;
-}
-
-void ensureInit()
-{
-    State &s = state();
-    if (s.checked)
-        return;
-    s.checked = true;
-    const char *env = std::getenv("OPS_CUDA_STEP_TIMING");
-    s.on = (env != nullptr && env[0] != '\0' && !(env[0] == '0' && env[1] == '\0'));
-}
-
-void ensureFile()
-{
-    State &s = state();
-    if (!s.on || !s.writer || s.fp != nullptr)
-        return;
-    const char *path = std::getenv("OPS_CUDA_STEP_TIMING_FILE");
-    if (path == nullptr || path[0] == '\0')
-        path = "ops_cuda_step_timing.csv";
-    s.fp = std::fopen(path, "a");
-    if (s.fp != nullptr) {
-        std::fseek(s.fp, 0, SEEK_END);
-        if (std::ftell(s.fp) == 0) {
-            std::fputs("step,gather,predictor,broadcast,formUnbalance_mpi,formUnbalance_gpu,solve,update\n",
-                       s.fp);
-            std::fflush(s.fp);
-        }
-    }
-}
-
-} // namespace
-
-bool enabled()
-{
-    ensureInit();
-    return state().on && state().writer;
-}
-
-void setWriter(bool isWriter)
-{
-    ensureInit();
-    state().writer = isWriter;
-    if (isWriter)
-        ensureFile();
-}
-
-void beginStep()
-{
-    if (!enabled())
-        return;
-    State &s = state();
-    s.gather = s.predictor = s.broadcast = 0.0;
-    s.formUnbalance_mpi = s.formUnbalance_gpu = 0.0;
-    s.solve = s.update = 0.0;
-}
-
-void add(const char *phase, double seconds)
-{
-    if (!enabled() || phase == nullptr)
-        return;
-    State &s = state();
-    if (std::strcmp(phase, "gather") == 0)
-        s.gather += seconds;
-    else if (std::strcmp(phase, "predictor") == 0)
-        s.predictor += seconds;
-    else if (std::strcmp(phase, "broadcast") == 0)
-        s.broadcast += seconds;
-    else if (std::strcmp(phase, "formUnbalance_mpi") == 0)
-        s.formUnbalance_mpi += seconds;
-    else if (std::strcmp(phase, "formUnbalance_gpu") == 0)
-        s.formUnbalance_gpu += seconds;
-    else if (std::strcmp(phase, "solve") == 0)
-        s.solve += seconds;
-    else if (std::strcmp(phase, "update") == 0)
-        s.update += seconds;
-}
-
-void endStep()
-{
-    if (!enabled())
-        return;
-    ensureFile();
-    State &s = state();
-    if (s.fp != nullptr) {
-        std::fprintf(s.fp, "%d,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g\n",
-                     s.step, s.gather, s.predictor, s.broadcast,
-                     s.formUnbalance_mpi, s.formUnbalance_gpu, s.solve, s.update);
-        std::fflush(s.fp);
-    }
-    ++s.step;
-}
-
-} // namespace OpsCudaStepTiming
-
-namespace {
-inline double wallSecondsSince(const std::chrono::steady_clock::time_point &t0)
-{
-    return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-}
-} // namespace
 
 // Kolay-Ricles midpoint-rule integrator on GPU (CudaBcsrLinSOE + cuDSS).
 // Per step: GPU predictor -> equilibrium at t + alphaF*dt -> Linear solve -> update.
@@ -1083,8 +957,6 @@ int CudaExplicitAlpha::domainChanged()
 int CudaExplicitAlpha::newStep(double _deltaT)
 {
     updateCount = 0;
-    OpsCudaStepTiming::setWriter(false);
-    OpsCudaStepTiming::beginStep();
     if (alphaF < 0.5 || alphaF > 1.0 || beta <= 0.0 || gamma <= 0.0 || _deltaT <= 0.0) {
         return -1;
     }
@@ -1099,8 +971,6 @@ int CudaExplicitAlpha::newStep(double _deltaT)
     }
     const bool deviceOn = cudaSOE->isCudaDeviceEnabled();
     if (deviceOn) {
-        OpsCudaStepTiming::setWriter(true);
-        OpsCudaStepTiming::beginStep();
         ensureDeviceImpl(cudaSOE);
         if (m_impl == nullptr) {
             opserr << "ERROR CudaExplicitAlpha::newStep() - GPU state not initialized; "
@@ -1119,14 +989,12 @@ int CudaExplicitAlpha::newStep(double _deltaT)
     // P0's integrator vectors only contain locally seeded DOFs after domainChanged.
     // Gather once, then skip on steady EQ steps (P0 already owns global GPU kinematics).
     if (distSOE != nullptr && motionNeedsGather) {
-        const auto t0 = std::chrono::steady_clock::now();
         if (distSOE->gatherOwnedToRoot(*U) < 0 ||
             distSOE->gatherOwnedToRoot(*Udot) < 0 ||
             distSOE->gatherOwnedToRoot(*Udotdot) < 0) {
             opserr << "ERROR CudaExplicitAlpha::newStep() - motion gather to root failed\n";
             return -5;
         }
-        OpsCudaStepTiming::add("gather", wallSecondsSince(t0));
         motionNeedsGather = false;
     }
 
@@ -1150,17 +1018,14 @@ int CudaExplicitAlpha::newStep(double _deltaT)
     }
 
     if (deviceOn) {
-        const auto t0 = std::chrono::steady_clock::now();
         if (m_impl->newStepPredictor(this) != 0) {
             opserr << "ERROR CudaExplicitAlpha::newStep() - newStepPredictor failed\n";
             return -5;
         }
-        OpsCudaStepTiming::add("predictor", wallSecondsSince(t0));
     }
     // Broadcast predicted kinematics so workers share P0's GPU predictor result.
     // On failure paths above, workers may already be waiting here — keep success path collective.
     if (distSOE != nullptr) {
-        const auto t0 = std::chrono::steady_clock::now();
         if (distSOE->broadcastFromRoot(*U) < 0 ||
             distSOE->broadcastFromRoot(*Udot) < 0 ||
             distSOE->broadcastFromRoot(*Udotdot) < 0 ||
@@ -1170,7 +1035,6 @@ int CudaExplicitAlpha::newStep(double _deltaT)
             opserr << "ERROR CudaExplicitAlpha::newStep() - motion broadcast failed\n";
             return -5;
         }
-        OpsCudaStepTiming::add("broadcast", wallSecondsSince(t0));
     } else if (!deviceOn) {
         opserr << "ERROR CudaExplicitAlpha::newStep() - GPU device disabled without DistributedCuDSS\n";
         return -5;
@@ -1205,12 +1069,8 @@ int CudaExplicitAlpha::formUnbalance()
     if (distSOE != nullptr) {
         // Same anti-double-count protocol as getB()+zeroB()+P0-only setB, but without
         // broadcasting the merged RHS back to workers (mergeBToRoot only).
-        {
-            const auto t0 = std::chrono::steady_clock::now();
-            if (distSOE->mergeBToRoot() < 0)
-                return -2;
-            OpsCudaStepTiming::add("formUnbalance_mpi", wallSecondsSince(t0));
-        }
+        if (distSOE->mergeBToRoot() < 0)
+            return -2;
         distSOE->zeroB();
         if (distSOE->getProcessID() != 0) {
             return 0;
@@ -1220,9 +1080,7 @@ int CudaExplicitAlpha::formUnbalance()
             return -2;
         }
         cudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
-        const auto t0 = std::chrono::steady_clock::now();
         const int rc = m_impl->formUnbalance(cudaSOE);
-        OpsCudaStepTiming::add("formUnbalance_gpu", wallSecondsSince(t0));
         if (rc != 0)
             return rc;
         cudaSOE->syncBToHost();
@@ -1253,7 +1111,6 @@ int CudaExplicitAlpha::update(const Vector &aiPlusOne)
         return -4;
     }
 
-    const auto t0 = std::chrono::steady_clock::now();
     if (cudaSOE->isCudaDeviceEnabled()) {
         if (m_impl == nullptr || m_impl->updateState(cudaSOE, incrementalAccel) != 0) {
             return -4;
@@ -1278,10 +1135,7 @@ int CudaExplicitAlpha::update(const Vector &aiPlusOne)
         return -3;
     }
     theModel->setDisp(*U);
-    OpsCudaStepTiming::add("update", wallSecondsSince(t0));
-    // Flush CSV on rank 0 only (workers never enable meaningful GPU timing).
     if (cudaSOE->isCudaDeviceEnabled())
-        OpsCudaStepTiming::endStep();
     return 0;
 }
 

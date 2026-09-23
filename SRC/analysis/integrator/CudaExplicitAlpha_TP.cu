@@ -33,7 +33,6 @@
 #include <CudaExplicitAlpha_TP.h>
 #include <CudaBcsrLinSOE.h>
 #include <DistributedCudaBcsrLinSOE.h>
-#include "CudaStepTiming.h"
 #include <AnalysisModel.h>
 #include <Channel.h>
 #include <DOF_Group.h>
@@ -46,7 +45,6 @@
 #include <elementAPI.h>
 #include <cmath>
 #include <cstring>
-#include <chrono>
 
 #include "CudaCsrMatrix.h"
 #include "CudaUtils.h"
@@ -59,12 +57,6 @@ using thrust::raw_pointer_cast;
 
 using namespace CudaUtils;
 
-namespace {
-inline double wallSecondsSince(const std::chrono::steady_clock::time_point &t0)
-{
-    return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-}
-} // namespace
 
 // Kolay-Ricles trapezoidal-rule (TP) integrator on GPU (CudaBcsrLinSOE + cuDSS).
 // Unlike the midpoint CUDA path, TP uses two residual passes per step and a blended Put vector.
@@ -1018,8 +1010,6 @@ int CudaExplicitAlpha_TP::domainChanged()
 int CudaExplicitAlpha_TP::newStep(double _deltaT)
 {
     updateCount = 0;
-    OpsCudaStepTiming::setWriter(false);
-    OpsCudaStepTiming::beginStep();
     if (alphaF < 0.5 || alphaF > 1.0 || beta <= 0.0 || gamma <= 0.0 || _deltaT <= 0.0) {
         return -1;
     }
@@ -1035,8 +1025,6 @@ int CudaExplicitAlpha_TP::newStep(double _deltaT)
     auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE());
     const bool deviceOn = cudaSOE->isCudaDeviceEnabled();
     if (deviceOn) {
-        OpsCudaStepTiming::setWriter(true);
-        OpsCudaStepTiming::beginStep();
         ensureDeviceImpl(cudaSOE);
         if (m_impl == nullptr) {
             opserr << "ERROR CudaExplicitAlpha_TP::newStep() - GPU state not initialized; "
@@ -1052,14 +1040,12 @@ int CudaExplicitAlpha_TP::newStep(double _deltaT)
 
     // Same gather as CudaExplicitAlpha: P0 needs full motion before GPU work / broadcast.
     if (distSOE != nullptr && motionNeedsGather) {
-        const auto t0 = std::chrono::steady_clock::now();
         if (distSOE->gatherOwnedToRoot(*U) < 0 ||
             distSOE->gatherOwnedToRoot(*Udot) < 0 ||
             distSOE->gatherOwnedToRoot(*Udotdot) < 0) {
             opserr << "ERROR CudaExplicitAlpha_TP::newStep() - motion gather to root failed\n";
             return -5;
         }
-        OpsCudaStepTiming::add("gather", wallSecondsSince(t0));
         motionNeedsGather = false;
     }
 
@@ -1091,40 +1077,32 @@ int CudaExplicitAlpha_TP::newStep(double _deltaT)
     }
     if (distSOE != nullptr) {
         {
-            const auto t0 = std::chrono::steady_clock::now();
             if (distSOE->mergeBToRoot() < 0)
                 return -6;
-            OpsCudaStepTiming::add("formUnbalance_mpi", wallSecondsSince(t0));
         }
         distSOE->zeroB();
         if (distSOE->getProcessID() != 0)
             ; // workers: merged B lives on P0 only
         else {
             cudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
-            const auto t0 = std::chrono::steady_clock::now();
             if (m_impl->capturePutFromDeviceB(cudaSOE) != 0)
                 return -6;
-            OpsCudaStepTiming::add("formUnbalance_gpu", wallSecondsSince(t0));
         }
     } else if (m_impl->capturePutFromDeviceB(cudaSOE) != 0) {
         return -6;
     }
 
     if (deviceOn) {
-        const auto t0 = std::chrono::steady_clock::now();
         if (m_impl->newStepPredictor(this) != 0) {
             return -7;
         }
-        OpsCudaStepTiming::add("predictor", wallSecondsSince(t0));
     }
     if (distSOE != nullptr) {
-        const auto t0 = std::chrono::steady_clock::now();
         if (distSOE->broadcastFromRoot(*U) < 0 ||
             distSOE->broadcastFromRoot(*Udot) < 0 ||
             distSOE->broadcastFromRoot(*Udotdot) < 0) {
             return -7;
         }
-        OpsCudaStepTiming::add("broadcast", wallSecondsSince(t0));
     } else if (!deviceOn) {
         return -7;
     }
@@ -1145,19 +1123,15 @@ int CudaExplicitAlpha_TP::newStep(double _deltaT)
 
     if (distSOE != nullptr) {
         {
-            const auto t0 = std::chrono::steady_clock::now();
             if (distSOE->mergeBToRoot() < 0)
                 return -9;
-            OpsCudaStepTiming::add("formUnbalance_mpi", wallSecondsSince(t0));
         }
         distSOE->zeroB();
         if (distSOE->getProcessID() != 0)
             ;
         else {
             cudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
-            const auto t0 = std::chrono::steady_clock::now();
             m_impl->blendPutFromHostB(cudaSOE, 1.0 - alphaF, alphaF);
-            OpsCudaStepTiming::add("formUnbalance_gpu", wallSecondsSince(t0));
         }
     } else {
         m_impl->blendPutFromHostB(cudaSOE, 1.0 - alphaF, alphaF);
@@ -1206,7 +1180,6 @@ int CudaExplicitAlpha_TP::update(const Vector &aiPlusOne)
     if (validateCudaSOE(cudaSOE) != 0) {
         return -4;
     }
-    const auto t0 = std::chrono::steady_clock::now();
     if (cudaSOE->isCudaDeviceEnabled()) {
         if (m_impl == nullptr || m_impl->updateState(cudaSOE, incrementalAccel, alphaF) != 0) {
             return -4;
@@ -1223,9 +1196,7 @@ int CudaExplicitAlpha_TP::update(const Vector &aiPlusOne)
     if (theModel->updateDomain() < 0) {
         return -3;
     }
-    OpsCudaStepTiming::add("update", wallSecondsSince(t0));
     if (cudaSOE->isCudaDeviceEnabled())
-        OpsCudaStepTiming::endStep();
     return 0;
 }
 
