@@ -84,6 +84,14 @@ public:
     /** Collective merge of local myB into rank-0 host B (same protocol as getB/solve). */
     int mergeBToRoot(void);
 
+    /** Mark that rank 0 already holds the global RHS on the GPU device.
+     *  When set on all ranks before solve(), DistCuDSS skips the host myB gather
+     *  and the post-solve B broadcast (CudaMKR-style). Default Newton path leaves
+     *  this false. Cleared at the end of solve(), at the start of CudaMKR newStep,
+     *  and on formUnbalance failure (all ranks must agree before the next solve). */
+    void setGlobalRhsOnDevice(bool ready) { globalRhsOnDevice = ready; }
+    bool isGlobalRhsOnDevice(void) const { return globalRhsOnDevice; }
+
 protected:
 
 private:
@@ -119,6 +127,8 @@ private:
 
     /** Rank 0: (row,col) -> flat offset into host A values; rebuilt in setSize. */
     std::unordered_map<uint64_t, int> mergeIndexMap;
+
+    bool globalRhsOnDevice;
 };
 
 #endif

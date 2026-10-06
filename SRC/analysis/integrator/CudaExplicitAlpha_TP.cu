@@ -140,7 +140,7 @@ struct CudaExplicitAlpha_TP::ImplBase {
 template<typename T>
 struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
     int size = 0;
-    int alphaNumRhs = 2;  // 1 when alphaM ~= alphaF shortcut applies
+    int alphaNumRhs = 2;  // 1 when alphaM ~= alphaF, or when incrementalAccel (alpha_3 unused)
 
     thrust::device_vector<T> d_state_cur;    // [U | Udot | Uddot]
     thrust::device_vector<T> d_state_prev;   // [Ut | Utdot | Utdotdot] step-start backup
@@ -351,8 +351,9 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         const double bdt2 = integrator->beta * integrator->deltaT * integrator->deltaT;
         const double gdt = integrator->gamma * integrator->deltaT;
         const bool areClose = integrator->areAlphaMFClose();
-
-        const int numRhs = areClose ? 1 : 2;
+        // alpha_3 column is only consumed by the non-incremental predictor kernel.
+        // Match ExplicitAlpha_TP::newStep, which skips alpha3 under -incrementalAccel.
+        const int numRhs = (areClose || integrator->incrementalAccel) ? 1 : 2;
         ensureAlphaBuffers(numRhs);
 
         if (bindStream(cudaSOE) != 0) {
@@ -425,8 +426,15 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
     int newStepPredictor(CudaExplicitAlpha_TP *integrator) override
     {
         if (size > 0) {
-            d_state_cur = h_state_cur;
-            d_state_prev = h_state_prev;
+            if (integrator->deviceMotionStale) {
+                d_state_cur = h_state_cur;
+                d_state_prev = h_state_prev;
+                integrator->deviceMotionStale = false;
+            } else {
+                // Committed state already on device from last updateState; step-start
+                // backup is that same state (host *Ut=*U already mirrored).
+                d_state_prev = d_state_cur;
+            }
         }
 
         const T *dUt = raw_pointer_cast(d_state_prev.data());
@@ -446,19 +454,11 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         const T alphaMT = static_cast<T>(integrator->alphaM);
         const bool alphaClose = integrator->areAlphaMFClose();
         const int incAccel = integrator->incrementalAccel ? 1 : 0;
+        // Need alpha_3 = I - alpha^{-1} A only for non-incremental trial accel when alphaM != alphaF.
+        const bool needAlpha3 = (incAccel == 0) && !alphaClose;
 
-        if (alphaClose) {
-            // alpha_1 = alpha^{-1} M Uddot_n
-            applyM(dUtdotdot, dAlphaRhs);
-            if (matAlpha->solve(dAlphaRhs, dAlphaSol1, 1) != 0) {
-                return -5;
-            }
-            kernelNewStepTP<<<gridBlocks(size), 256, 0, stream>>>(
-                size, dt, gammaT, alphaFT, alphaMT, dAlphaSol1, static_cast<const T *>(nullptr), dUt, dUtdot,
-                dUtdotdot, dU, dUdot, dUddot, incAccel, 1);
-        } else {
-            // Second RHS column: A * Uddot_n for alpha_3 when alphaM != alphaF
-            applyM(dUtdotdot, dAlphaRhs);
+        applyM(dUtdotdot, dAlphaRhs);
+        if (needAlpha3) {
             matA->spmv(dUtdotdot, dAlphaRhs + size);
             if (matAlpha->solve(dAlphaRhs, dAlphaSol1, alphaNumRhs) != 0) {
                 return -5;
@@ -466,6 +466,13 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
             kernelNewStepTP<<<gridBlocks(size), 256, 0, stream>>>(size, dt, gammaT, alphaFT, alphaMT, dAlphaSol1,
                                                                   dAlphaSol3, dUt, dUtdot, dUtdotdot, dU, dUdot, dUddot,
                                                                   incAccel, 0);
+        } else {
+            if (matAlpha->solve(dAlphaRhs, dAlphaSol1, 1) != 0) {
+                return -5;
+            }
+            kernelNewStepTP<<<gridBlocks(size), 256, 0, stream>>>(
+                size, dt, gammaT, alphaFT, alphaMT, dAlphaSol1, static_cast<const T *>(nullptr), dUt, dUtdot,
+                dUtdotdot, dU, dUdot, dUddot, incAccel, alphaClose ? 1 : 0);
         }
         cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync before host read");
         h_state_cur = d_state_cur;
@@ -554,7 +561,18 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
             cudaMemcpyAsync(dUddot, dX, static_cast<std::size_t>(size) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
         }
         cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync before host read");
-        h_state_cur = d_state_cur;
+
+        double *hUddot = raw_pointer_cast(h_state_cur.data()) + 2 * size;
+        if (incrementalAccel) {
+            // Pull only accel so host matches GPU accumulation (incl. float SOE).
+            thrust::copy(d_state_cur.begin() + 2 * size, d_state_cur.begin() + 3 * size,
+                         h_state_cur.begin() + 2 * size);
+        } else {
+            cudaSOE->syncXToHost();
+            const Vector &x = cudaSOE->getHostXVector();
+            for (int i = 0; i < size; ++i)
+                hUddot[i] = x(i);
+        }
         return 0;
     }
 
@@ -812,6 +830,7 @@ CudaExplicitAlpha_TP::CudaExplicitAlpha_TP(int classTag, double _alphaF, double 
       residP(_alphaF),
       operatorsBuilt(false),
       motionNeedsGather(true),
+      deviceMotionStale(true),
       m_impl(nullptr)
 {
 }
@@ -959,7 +978,7 @@ int CudaExplicitAlpha_TP::domainChanged()
         ensureDeviceImpl(cudaSOE);
         cudaSOE->setXSyncMode(false);
         m_impl->destroySolvers();
-        m_impl->allocate(size, areAlphaMFClose() ? 1 : 2);
+        m_impl->allocate(size, (areAlphaMFClose() || incrementalAccel) ? 1 : 2);
         const ImplBase::HostMotionPtrs buf = m_impl->ensureHostMotionBuffers(size);
         Ut->setData(buf.Ut, size);
         Utdot->setData(buf.Utdot, size);
@@ -999,6 +1018,7 @@ int CudaExplicitAlpha_TP::domainChanged()
     *Utdot = *Udot;
     *Utdotdot = *Udotdot;
     motionNeedsGather = true;
+    deviceMotionStale = true;
     return 0;
 }
 
@@ -1023,6 +1043,10 @@ int CudaExplicitAlpha_TP::newStep(double _deltaT)
         return -3;
     }
     auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE());
+    // Drop any leftover B-skip flag from a prior formUnbalance that never reached solve().
+    if (distSOE != nullptr)
+        distSOE->setGlobalRhsOnDevice(false);
+
     const bool deviceOn = cudaSOE->isCudaDeviceEnabled();
     if (deviceOn) {
         ensureDeviceImpl(cudaSOE);
@@ -1047,6 +1071,7 @@ int CudaExplicitAlpha_TP::newStep(double _deltaT)
             return -5;
         }
         motionNeedsGather = false;
+        deviceMotionStale = true;  // host motion may have gained remote DOFs
     }
 
     *Ut = *U;
@@ -1147,19 +1172,31 @@ int CudaExplicitAlpha_TP::formUnbalance()
     }
     auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE());
     if (distSOE != nullptr) {
+        distSOE->setGlobalRhsOnDevice(false);
+        distSOE->zeroB();
+
+        // Status broadcast keeps every rank's globalRhsOnDevice flag matched so
+        // DistCuDSS::solve collectives cannot diverge on a root-only GPU failure.
+        Vector status(1);
         if (distSOE->getProcessID() != 0) {
-            distSOE->zeroB();
+            if (distSOE->broadcastFromRoot(status) < 0)
+                return -2;
+            if (status(0) < 0.0)
+                return -2;
+            distSOE->setGlobalRhsOnDevice(true);
             return 0;
         }
-        if (m_impl == nullptr || !cudaSOE->isCudaDeviceEnabled())
-            return -1;
-        const int rc = m_impl->formUnbalanceFromPut(cudaSOE, areAlphaMFClose());
-        if (rc != 0)
-            return rc;
-        cudaSOE->syncBToHost();
-        if (distSOE->setB(cudaSOE->getHostBVector()) < 0)
+
+        int rc = -1;
+        if (m_impl != nullptr && cudaSOE->isCudaDeviceEnabled())
+            rc = m_impl->formUnbalanceFromPut(cudaSOE, areAlphaMFClose());
+
+        status(0) = (rc == 0) ? 1.0 : -1.0;
+        if (distSOE->broadcastFromRoot(status) < 0)
             return -2;
-        return 0;
+        if (rc == 0)
+            distSOE->setGlobalRhsOnDevice(true);
+        return rc;
     }
     if (m_impl == nullptr)
         return -1;
@@ -1196,7 +1233,6 @@ int CudaExplicitAlpha_TP::update(const Vector &aiPlusOne)
     if (theModel->updateDomain() < 0) {
         return -3;
     }
-    if (cudaSOE->isCudaDeviceEnabled())
     return 0;
 }
 
@@ -1222,6 +1258,7 @@ int CudaExplicitAlpha_TP::revertToLastStep()
         *Udotdot = *Utdotdot;
     }
     motionNeedsGather = true;
+    deviceMotionStale = true;
     return 0;
 }
 
@@ -1286,5 +1323,6 @@ int CudaExplicitAlpha_TP::revertToStart()
             m_impl->zeroState();
         }
     }
+    deviceMotionStale = true;
     return 0;
 }

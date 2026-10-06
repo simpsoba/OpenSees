@@ -108,6 +108,9 @@ protected:
 
     bool operatorsBuilt;  // GPU M / alpha / A factorized for current domain and deltaT
     bool motionNeedsGather;  // DistCuDSS: gather U/Udot/Uddot to root once after domainChanged
+    /** True when host U/Udot/Uddot were written without updating the GPU mirror
+     *  (domainChanged, revert, gather). Cleared after newStepPredictor H2D. */
+    bool deviceMotionStale;
 
     static constexpr double toleranceAlphaMF = 1.0e-8;
     bool areAlphaMFClose() const;
