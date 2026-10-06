@@ -238,9 +238,17 @@ switch -exact $integratorMethod {
         set algo Linear
         set linearSOE Mumps
     }
+    Newmark {
+        # Implicit CAA Newmark + Newton — exercises DistCuDSS host-B merge each iteration.
+        set integratorParams [list 0.5 0.25]
+        set maxIter 25
+        set pFlag 0
+        set algo Newton
+        set linearSOE DistributedCuDSS
+    }
     default {
         puts stderr "Unknown / unsupported integrator for MP sandbox: $integratorMethod"
-        puts stderr "Use: KRAlphaExplicitMultiSOE | MKRAlphaExplicitMultiSOE | KRAlphaExplicitMultiSOE_TP | MKRAlphaExplicitMultiSOE_TP | CudaKRAlpha | CudaMKRAlpha | CudaKRAlpha_TP | CudaMKRAlpha_TP"
+        puts stderr "Use: KRAlphaExplicitMultiSOE | MKRAlphaExplicitMultiSOE | KRAlphaExplicitMultiSOE_TP | MKRAlphaExplicitMultiSOE_TP | CudaKRAlpha | CudaMKRAlpha | CudaKRAlpha_TP | CudaMKRAlpha_TP | Newmark"
         exit 1
     }
 }

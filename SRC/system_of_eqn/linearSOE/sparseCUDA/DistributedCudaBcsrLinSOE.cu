@@ -38,7 +38,8 @@ DistributedCudaBcsrLinSOE::DistributedCudaBcsrLinSOE(CudaBcsrLinSOE *theSOE)
       theCudaSOE(theSOE),
       processID(0), numChannels(0), theChannels(0),
       workArea(0), sizeWork(0),
-      myB(0), myVectB(0), myBsize(0)
+      myB(0), myVectB(0), myBsize(0),
+      globalRhsOnDevice(false)
 {
     if (theCudaSOE == nullptr) {
         opserr << "FATAL DistributedCudaBcsrLinSOE - null CudaBcsrLinSOE\n";
@@ -50,7 +51,8 @@ DistributedCudaBcsrLinSOE::DistributedCudaBcsrLinSOE()
       theCudaSOE(0),
       processID(0), numChannels(0), theChannels(0),
       workArea(0), sizeWork(0),
-      myB(0), myVectB(0), myBsize(0)
+      myB(0), myVectB(0), myBsize(0),
+      globalRhsOnDevice(false)
 {
 }
 
@@ -533,12 +535,16 @@ DistributedCudaBcsrLinSOE::solve(void)
     }
 
     const bool sendA = needsMatrixTransfer();
+    // CudaMKR (etc.) may already hold the transformed global RHS on the GPU.
+    // All ranks must agree (setGlobalRhsOnDevice) so B send/recv stay matched.
+    const bool skipBMerge = globalRhsOnDevice;
     Vector &vectX = theCudaSOE->getHostXVector();
     Vector &vectB = theCudaSOE->getHostBVector();
 
     if (processID != 0) {
         Channel *theChannel = theChannels[0];
-        theChannel->sendVector(0, 0, *myVectB);
+        if (!skipBMerge)
+            theChannel->sendVector(0, 0, *myVectB);
 
         if (sendA) {
             const int nTrip = static_cast<int>(tripletMap.size());
@@ -564,29 +570,36 @@ DistributedCudaBcsrLinSOE::solve(void)
         }
 
         theChannel->recvVector(0, 0, vectX);
-        theChannel->recvVector(0, 0, vectB);
+        if (!skipBMerge)
+            theChannel->recvVector(0, 0, vectB);
         theChannel->recvID(0, 0, result);
 
         theCudaSOE->setXPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
-        theCudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
+        if (!skipBMerge)
+            theCudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
         if (result(0) == 0)
             theCudaSOE->setMatrixStatus(CudaBcsrLinSOE::MatrixStatus::UNCHANGED);
 
+        globalRhsOnDevice = false;
         return result(0);
     }
 
-    // Rank 0: merge RHS and (if needed) triplets, then GPU solve
-    vectB = *myVectB;
-    theCudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
+    // Rank 0: merge RHS (unless already on device) and (if needed) triplets, then GPU solve
     result(0) = 0;
+    if (!skipBMerge) {
+        vectB = *myVectB;
+        theCudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
+    }
 
     ensureWorkArea(myBsize);
     Vector remoteB(myBsize);
 
     for (int j = 0; j < numChannels; ++j) {
         Channel *theChannel = theChannels[j];
-        theChannel->recvVector(0, 0, remoteB);
-        vectB += remoteB;
+        if (!skipBMerge) {
+            theChannel->recvVector(0, 0, remoteB);
+            vectB += remoteB;
+        }
 
         if (sendA) {
             ID nTripID(1);
@@ -617,13 +630,18 @@ DistributedCudaBcsrLinSOE::solve(void)
 
     // Force host X current before channel broadcast (integrators may leave xSyncMode=false).
     theCudaSOE->syncXToHost();
+    if (!skipBMerge)
+        theCudaSOE->syncBToHost();
 
     for (int j = 0; j < numChannels; ++j) {
         Channel *theChannel = theChannels[j];
         theChannel->sendVector(0, 0, vectX);
-        theChannel->sendVector(0, 0, vectB);
+        if (!skipBMerge)
+            theChannel->sendVector(0, 0, vectB);
         theChannel->sendID(0, 0, result);
     }
+
+    globalRhsOnDevice = false;
 
     return result(0);
 }
