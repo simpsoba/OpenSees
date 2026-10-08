@@ -952,16 +952,26 @@ int CudaExplicitAlpha::domainChanged()
     DOF_Group *dofPtr;
     while ((dofPtr = theDOFs()) != nullptr) {
         const ID &id = dofPtr->getID();
+        const int idSize = id.Size();
+        // Copy each vector before the next getter. TransformationDOF_Group
+        // writes disp, vel, and accel into the same modUnbalance buffer.
         const Vector &disp = dofPtr->getCommittedDisp();
-        const Vector &vel = dofPtr->getCommittedVel();
-        const Vector &accel = dofPtr->getCommittedAccel();
-        for (int i = 0; i < id.Size(); ++i) {
+        for (int i = 0; i < idSize; ++i) {
             const int loc = id(i);
-            if (loc >= 0) {
+            if (loc >= 0)
                 (*U)(loc) = disp(i);
+        }
+        const Vector &vel = dofPtr->getCommittedVel();
+        for (int i = 0; i < idSize; ++i) {
+            const int loc = id(i);
+            if (loc >= 0)
                 (*Udot)(loc) = vel(i);
+        }
+        const Vector &accel = dofPtr->getCommittedAccel();
+        for (int i = 0; i < idSize; ++i) {
+            const int loc = id(i);
+            if (loc >= 0)
                 (*Udotdot)(loc) = accel(i);
-            }
         }
     }
     *Ut = *U;
